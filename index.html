@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Architex Axis Management Suite</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+      :root {
+        --color-primary: #4A8379; /* Prominent teal from logo */
+        --color-primary-hover: #3B6B5F; /* Darker teal for hover */
+        --color-primary-light: #A6C4BD; /* Lighter teal/grey */
+        --color-primary-extralight: #E0E7E9; /* Very light teal/grey */
+        --color-secondary: #2A5B53; /* Darker green/teal from logo */
+        --color-accent: #C0DAD4; /* Accent - another light shade */
+        --color-text-light: #F0F4F8;
+        --color-text-dark: #1A202C;
+        --color-bg-light: #FFFFFF;
+        --color-bg-dark-sidebar: #2D3748; /* slate-800 */
+        --color-bg-dark-sidebar-hover: #4A5568; /* slate-600 */
+      }
+
+      body {
+        background-color: var(--color-bg-light);
+        background-image:
+          linear-gradient(to right, rgba(166, 196, 189, 0.2) 1px, transparent 1px), /* var(--color-primary-light) with opacity */
+          linear-gradient(to bottom, rgba(166, 196, 189, 0.2) 1px, transparent 1px);
+        background-size: 25px 25px; /* Size of the checks */
+        font-family: 'Inter', sans-serif; /* A more modern sans-serif font */
+      }
+      
+      @keyframes spin-slow {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .animate-spin-slow {
+        animation: spin-slow 3s linear infinite;
+      }
+
+      /* Custom scrollbar for webkit browsers */
+      ::-webkit-scrollbar {
+        width: 8px;
+        height: 8px;
+      }
+      ::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 10px;
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--color-primary-light);
+        border-radius: 10px;
+      }
+      ::-webkit-scrollbar-thumb:hover {
+        background: var(--color-primary);
+      }
+      .font-logo {
+        font-family: 'Orbitron', sans-serif;
+      }
+
+      /* Global styles for form elements for readability */
+      input[type="text"],
+      input[type="email"],
+      input[type="password"],
+      input[type="number"],
+      input[type="tel"],
+      input[type="date"],
+      input[type="time"],
+      textarea,
+      select {
+        background-color: var(--color-bg-light, #FFFFFF);
+        color: var(--color-text-dark, #1A202C);
+        border: 1px solid #D1D5DB; /* Default Tailwind gray-300 for consistency */
+      }
+
+      input::placeholder,
+      textarea::placeholder {
+        color: #9CA3AF; /* Tailwind gray-400 */
+        opacity: 1; /* Ensure placeholder is not transparent */
+      }
+      
+      /* Retain focus styles from Tailwind components if possible, or add a default */
+      input:focus,
+      textarea:focus,
+      select:focus {
+        border-color: var(--color-primary, #4A8379);
+        box-shadow: 0 0 0 1px var(--color-primary, #4A8379);
+        outline: none;
+      }
+
+      @keyframes flash-red-border {
+        0%, 100% { border-color: red; }
+        50% { border-color: transparent; }
+      }
+      .flashing-timer-border {
+        animation: flash-red-border 1s infinite;
+      }
+
+    </style>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: 'var(--color-primary)',
+              'primary-hover': 'var(--color-primary-hover)',
+              'primary-light': 'var(--color-primary-light)',
+              'primary-extralight': 'var(--color-primary-extralight)',
+              secondary: 'var(--color-secondary)',
+              accent: 'var(--color-accent)',
+              'text-light': 'var(--color-text-light)',
+              'text-dark': 'var(--color-text-dark)',
+              'bg-dark-sidebar': 'var(--color-bg-dark-sidebar)',
+              'bg-dark-sidebar-hover': 'var(--color-bg-dark-sidebar-hover)',
+            }
+          }
+        }
+      }
+    </script>
+  <script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.1.0",
+    "react-dom/": "https://esm.sh/react-dom@^19.1.0/",
+    "react/": "https://esm.sh/react@^19.1.0/",
+    "react-router-dom": "https://esm.sh/react-router-dom@^7.6.2"
+  }
+}
+</script>
+<link rel="stylesheet" href="/index.css">
+</head>
+  <body class="text-text-dark">
+    <noscript>You need to enable JavaScript to run this app.</noscript>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+  </body>
+</html>
