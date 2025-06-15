@@ -1,7 +1,7 @@
 import { User, Project, Application, JobCard, TimeLog, ManagedFile, Conversation, Message, UserRole, ProjectStatus, JobCardStatus, MessageStatus } from './types';
 
 // const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api'; // Example if using build-time env vars
-const API_BASE_URL = '/api'; // Using relative path for API calls
+const API_BASE_URL = '/backend'; // Using relative path for API calls
 
 interface ApiErrorData {
   message?: string;
@@ -83,25 +83,96 @@ export const fetchUserApplicationsAPI = (userId: string): Promise<Application[]>
 
 // --- Project Service ---
 export const fetchProjectsAPI = (params?: { status?: ProjectStatus, clientId?: string, freelancerId?: string }): Promise<Project[]> => {
-  const query = new URLSearchParams(params as any).toString();
-  return apiFetch<Project[]>(`/projects${query ? `?${query}` : ''}`);
+  // The new PHP backend (api.php?action=get_projects) does not currently support these filters.
+  // This can be an enhancement later in the PHP script.
+  // For now, we ignore the params for the URL construction.
+  // const query = new URLSearchParams(params as any).toString(); // Original query logic
+  return apiFetch<Project[]>(`/api.php?action=get_projects`);
 };
-export const fetchProjectDetailsAPI = (projectId: string): Promise<Project> => apiFetch<Project>(`/projects/${projectId}`);
-export const createProjectAPI = (projectData: Omit<Project, 'id' | 'createdAt' | 'clientName' | 'status' | 'adminCreatorId' | 'isArchived' | 'assignedFreelancerName' | 'jobCards'>): Promise<Project> => {
-  return apiFetch<Project>('/projects', { method: 'POST', body: JSON.stringify(projectData) });
+
+export const fetchProjectDetailsAPI = (projectId: string): Promise<Project> => {
+  // TODO: This endpoint needs to be implemented in the PHP backend.
+  // For now, it might point to a non-existent route or reuse get_projects with an ID.
+  // Assuming the PHP backend might be extended: /api.php?action=get_project_details&id=${projectId}
+  // Or, if get_projects can filter by ID (not implemented yet): /api.php?action=get_projects&id=${projectId}
+  // Placeholder:
+  console.warn("fetchProjectDetailsAPI is not fully implemented for the new PHP backend");
+  return apiFetch<Project>(`/projects/${projectId}`); // Keeping old for now, needs backend update
+}
+
+// Definition for data expected by PHP backend for project creation
+export interface CreateProjectPHPData {
+  title: string;
+  description: string;
+  client_id: number; // Ensure this matches PHP's expected 'client_id'
+  freelancer_id?: number;
+  status?: string;
+}
+
+// Definition for the response from PHP backend after project creation
+export interface CreateProjectPHPResponse {
+  message: string;
+  project_id: number;
+}
+
+export const createProjectAPI = (projectData: CreateProjectPHPData): Promise<CreateProjectPHPResponse> => {
+  // Note: The Project type from './types' might differ from what the PHP backend expects.
+  // The backend expects: title, description, client_id. Optional: freelancer_id, status.
+  // The backend returns: { message: string; project_id: number }
+  return apiFetch<CreateProjectPHPResponse>(`/api.php?action=create_project`, {
+    method: 'POST',
+    body: JSON.stringify(projectData),
+  });
 };
-export const updateProjectAPI = (projectId: string, projectData: Partial<Project>): Promise<Project> => {
-    return apiFetch<Project>(`/projects/${projectId}`, { method: 'PATCH', body: JSON.stringify(projectData) });
+
+// Definition for data expected by PHP backend for project update
+// PHP expects specific fields: title, description, freelancer_id, status
+export interface UpdateProjectPHPData {
+  title?: string;
+  description?: string;
+  freelancer_id?: number; // Ensure this matches PHP's expected 'freelancer_id'
+  status?: string;
+}
+
+export interface UpdateProjectPHPResponse {
+    message: string;
+}
+
+export const updateProjectAPI = (projectId: string, projectData: UpdateProjectPHPData): Promise<UpdateProjectPHPResponse> => {
+    // The PHP backend for update_project expects specific fields: title, description, freelancer_id, status.
+    // It also expects freelancer_id as an integer.
+    // The endpoint is api.php?action=update_project&id=${projectId}
+    // Ensure projectData conforms to UpdateProjectPHPData, especially if using data from existing Project type.
+    // e.g. if projectData contains 'clientId', it needs to be mapped to 'client_id' if that were a field for update (it's not for this backend).
+    return apiFetch<UpdateProjectPHPResponse>(`/api.php?action=update_project&id=${projectId}`, {
+        method: 'PUT', // PHP script uses PUT for update
+        body: JSON.stringify(projectData)
+    });
 };
-export const deleteProjectAPI = (projectId: string): Promise<void> => {
-  return apiFetch<void>(`/projects/${projectId}`, { method: 'DELETE' });
+
+export interface DeleteProjectPHPResponse {
+    message: string;
+}
+
+export const deleteProjectAPI = (projectId: string): Promise<DeleteProjectPHPResponse> => {
+  // PHP backend returns { message: string }
+  return apiFetch<DeleteProjectPHPResponse>(`/api.php?action=delete_project&id=${projectId}`, { method: 'DELETE' });
 };
-export const updateProjectStatusAPI = (projectId: string, status: ProjectStatus): Promise<Project> => {
-  return apiFetch<Project>(`/projects/${projectId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
-};
-export const toggleProjectArchiveStatusAPI = (projectId: string): Promise<Project> => {
-    return apiFetch<Project>(`/projects/${projectId}/archive-toggle`, { method: 'PATCH' });
-};
+
+// export const updateProjectStatusAPI = (projectId: string, status: ProjectStatus): Promise<Project> => {
+//   // TODO: This functionality needs to be mapped to the new PHP backend if required.
+//   // The current PHP backend's updateProjectAPI can handle status changes.
+//   // This might involve calling updateProjectAPI with { status: status }.
+//   console.warn("updateProjectStatusAPI is commented out and needs review for PHP backend integration.");
+//   return apiFetch<Project>(`/projects/${projectId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
+// };
+
+// export const toggleProjectArchiveStatusAPI = (projectId: string): Promise<Project> => {
+//     // TODO: This functionality needs to be mapped to the new PHP backend if required.
+//     // The concept of 'isArchived' is not in the current PHP project schema.
+//     console.warn("toggleProjectArchiveStatusAPI is commented out and needs review for PHP backend integration.");
+//     return apiFetch<Project>(`/projects/${projectId}/archive-toggle`, { method: 'PATCH' });
+// };
 
 // --- Application Service ---
 export const fetchApplicationsForProjectAPI = (projectId: string): Promise<Application[]> => apiFetch<Application[]>(`/projects/${projectId}/applications`);

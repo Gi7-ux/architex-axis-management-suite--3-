@@ -1,0 +1,102 @@
+<?php
+/*
+================================================================================
+DATABASE CREDENTIALS CONFIGURATION
+================================================================================
+
+**IMPORTANT:** You need to update the database credentials below to connect
+to your MySQL database.
+
+Open this file (`backend/db_connect.php`) and replace the placeholder values
+for `DB_SERVER`, `DB_USERNAME`, `DB_PASSWORD`, and `DB_NAME` with your
+actual database connection details.
+
+Example:
+If your cPanel MySQL database details are:
+- Host: localhost
+- Database User: myuser_app
+- Database Password: myStrongPassword123
+- Database Name: myuser_mydatabase
+
+You would change the defines to:
+define('DB_SERVER', 'localhost');
+define('DB_USERNAME', 'myuser_app');
+define('DB_PASSWORD', 'myStrongPassword123');
+define('DB_NAME', 'myuser_mydatabase');
+
+**Security Note:**
+In a shared hosting environment like cPanel without terminal access, ensure
+this file has appropriate permissions if possible, though options might be
+limited. Avoid committing actual credentials to a public version control
+repository. Consider using environment variables or a configuration file
+outside the web root if your hosting setup allows, though this script
+currently uses constants defined directly in the file for simplicity given
+the constraints.
+
+================================================================================
+*/
+
+/*
+Database Schema:
+
+Users Table:
+- id: INT, Primary Key, Auto Increment
+- username: VARCHAR(255), Unique, Not Null
+- password: VARCHAR(255), Not Null (should be hashed)
+- email: VARCHAR(255), Unique, Not Null
+- role: VARCHAR(50) (e.g., 'admin', 'client', 'freelancer')
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+
+Projects Table:
+- id: INT, Primary Key, Auto Increment
+- title: VARCHAR(255), Not Null
+- description: TEXT
+- client_id: INT, Foreign Key (references users.id)
+- freelancer_id: INT, Foreign Key (references users.id), Nullable
+- status: VARCHAR(50) (e.g., 'open', 'in_progress', 'completed', 'cancelled')
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+*/
+
+// --- Database Connection ---
+// Replace with your actual database credentials
+define('DB_SERVER', 'your_db_host'); // e.g., 'localhost' or IP address
+define('DB_USERNAME', 'your_db_username');
+define('DB_PASSWORD', 'your_db_password');
+define('DB_NAME', 'your_db_name');
+
+// Attempt to connect to MySQL database
+$conn = new mysqli(DB_SERVER, DB_USERNAME, DB_PASSWORD, DB_NAME);
+
+// Check connection
+if ($conn->connect_error) {
+    // Log error to a file or use a more robust error handling mechanism
+    // For now, we'll just output a generic error message
+    // In a production environment, you should not display detailed error messages to the user
+    header('Content-Type: application/json');
+    http_response_code(500); // Internal Server Error
+    echo json_encode(['error' => 'Database connection failed. Please try again later.']);
+    // It's crucial to stop script execution if the connection fails
+    exit;
+}
+
+// Set character set to utf8mb4 for better Unicode support
+if (!$conn->set_charset("utf8mb4")) {
+    // Log error or handle as appropriate
+    // For now, we'll output an error if it fails
+    // error_log("Error loading character set utf8mb4: %s
+", $conn->error);
+    // Depending on your requirements, you might want to exit if this fails
+}
+
+// --- Connection Successful ---
+// The $conn object can now be used to perform database operations
+// For example: $result = $conn->query("SELECT * FROM users");
+
+// It's good practice to close the connection when it's no longer needed.
+// However, in a typical web application, the connection might be closed
+// at the end of the script execution automatically.
+// If you have long-running scripts or specific needs, you might close it explicitly:
+// $conn->close();
+
+?>

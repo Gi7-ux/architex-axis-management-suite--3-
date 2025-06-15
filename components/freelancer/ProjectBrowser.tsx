@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Project, ProjectStatus, Application, User, UserRole } from '../../types';
+import { Project, ProjectStatus, Application, UserRole } from '../../types'; // Removed User as it's not directly used here, UserRole is for user.role check
 import { fetchProjectsAPI, submitApplicationAPI, fetchAllSkillsAPI, fetchUserApplicationsAPI } from '../../apiService';
 import ProjectCard from '../shared/ProjectCard';
 import Modal from '../shared/Modal';
@@ -23,27 +23,92 @@ const ProjectBrowser: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Define the raw project data type from PHP
+    interface RawPhpProject {
+      id: number;
+      title: string;
+      description: string;
+      client_id: number;
+      freelancer_id: number | null;
+      status: string;
+      created_at: string;
+      updated_at: string;
+      // budget, skillsRequired etc. are not in the basic PHP response yet
+    }
+
     const loadInitialData = async () => {
       setIsLoading(true);
       setError(null);
-      try {
-        const [openProjects, fetchedSkills] = await Promise.all([
-            fetchProjectsAPI({ status: ProjectStatus.OPEN }),
-            fetchAllSkillsAPI()
-        ]);
-        setProjects(openProjects);
-        setAllSkills(fetchedSkills.sort());
+      let errorMessages: string[] = [];
 
-        if (user && user.role === UserRole.FREELANCER) {
+      try {
+        // Fetch projects - no status filter for now, new API doesn't support it yet
+        const rawProjects: RawPhpProject[] = await fetchProjectsAPI();
+
+        // Map rawProjects to the frontend Project type
+        const mappedProjects: Project[] = rawProjects.map((rawProject): Project => ({
+          id: String(rawProject.id), // Convert number to string
+          title: rawProject.title,
+          description: rawProject.description,
+          clientId: String(rawProject.client_id), // Convert number to string and camelCase
+          freelancerId: rawProject.freelancer_id ? String(rawProject.freelancer_id) : undefined,
+          status: rawProject.status as ProjectStatus, // Assume status string matches ProjectStatus enum values
+          createdAt: rawProject.created_at,
+          updatedAt: rawProject.updated_at,
+          // Provide default/placeholder values for other fields expected by Project type
+          clientName: `Client ${rawProject.client_id}`, // Placeholder
+          budget: 0, // Placeholder - not in PHP response
+          currency: 'USD', // Placeholder
+          skillsRequired: [], // Placeholder - not in PHP response
+          paymentType: 'fixed', // Placeholder
+          experienceLevel: 'intermediate', // Placeholder
+          duration: 'unknown', // Placeholder
+          isFeatured: false, // Placeholder
+          jobCards: [], // Placeholder
+          adminCreatorId: undefined, // Placeholder
+          isArchived: false, // Placeholder
+          assignedFreelancerName: rawProject.freelancer_id ? `Freelancer ${rawProject.freelancer_id}` : undefined, // Placeholder
+        }));
+        setProjects(mappedProjects);
+
+      } catch (projError: any) {
+        console.error("Failed to load projects:", projError);
+        errorMessages.push(projError.message || "Could not load projects.");
+        setProjects([]); // Clear projects on error
+      }
+
+      // Fetch all skills
+      try {
+        const fetchedSkills = await fetchAllSkillsAPI();
+        setAllSkills(fetchedSkills.sort());
+      } catch (skillError: any) {
+        console.warn("fetchAllSkillsAPI failed, using empty skills list:", skillError);
+        // errorMessages.push("Could not load skills filter."); // Optionally inform user
+        setAllSkills([]); // Default to empty list
+      }
+
+      // Fetch user applications if freelancer
+      if (user && user.role === UserRole.FREELANCER) {
+        try {
           const userApplications = await fetchUserApplicationsAPI(user.id);
           setAppliedProjectIds(new Set(userApplications.map(app => app.projectId)));
+        } catch (appError: any) {
+          console.warn("fetchUserApplicationsAPI failed:", appError);
+          // errorMessages.push("Could not load your application statuses."); // Optionally inform user
+          setAppliedProjectIds(new Set()); // Default to empty set
         }
-      } catch (err: any) {
-        console.error("Failed to load project browser data:", err);
-        setError(err.message || "Could not load projects. Please try again later.");
-      } finally {
-        setIsLoading(false);
       }
+
+      if (errorMessages.length > 0) {
+        setError(errorMessages.join(' '));
+      }
+
+    } catch (err: any) { // Catch any unexpected errors from the overall process
+        console.error("Unexpected error in loadInitialData:", err);
+        setError(err.message || "An unexpected error occurred.");
+    } finally {
+      setIsLoading(false);
+    }
     };
     loadInitialData();
   }, [user]);
