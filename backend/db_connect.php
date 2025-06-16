@@ -60,10 +60,10 @@ Projects Table:
 
 // --- Database Connection ---
 // Replace with your actual database credentials
-define('DB_SERVER', 'your_db_host'); // e.g., 'localhost' or IP address
-define('DB_USERNAME', 'your_db_username');
-define('DB_PASSWORD', 'your_db_password');
-define('DB_NAME', 'your_db_name');
+define('DB_SERVER', '169.239.218.60'); // e.g., 'localhost' or IP address
+define('DB_USERNAME', 'architex_jules');
+define('DB_PASSWORD', 'xxh02ss5iwrc');
+define('DB_NAME', 'architex_jules');
 
 // Attempt to connect to MySQL database
 $conn = new mysqli(DB_SERVER, DB_USERNAME, DB_PASSWORD, DB_NAME);
