@@ -44,6 +44,7 @@ export interface AdminUserView { // Or extend AuthUser if more fields are needed
   email: string;
   role: UserRole;
   created_at: string; // PHP returns this
+  is_active: boolean; // Added for Phase 6a
 }
 
 // Payload for updating a user's role
@@ -155,6 +156,61 @@ export const fetchUserProfileAPI = (): Promise<UserProfileResponse> => {
 // --- Admin Service ---
 // (Could also be placed in User Service, but Admin Service makes it distinct)
 
+// Payload for Admin to create a new user
+export interface AdminCreateUserPayload {
+  username: string;
+  email: string;
+  password: string;
+  role: UserRole;
+  name?: string;
+  phoneNumber?: string | null;
+  company?: string | null;
+  experience?: string | null;
+  hourlyRate?: number | null; // Relevant if role is freelancer
+  avatarUrl?: string | null;
+  // is_active is typically defaulted to true by backend on creation
+}
+export interface AdminCreateUserResponse extends AdminActionResponse {
+  user_id: number; // ID of the newly created user
+}
+
+// For fetching full details of a user for admin editing
+// Matches the expanded `users` table schema (excluding sensitive fields)
+export interface AdminUserDetailsResponse {
+  id: number;
+  username: string;
+  email: string;
+  role: UserRole;
+  name: string | null;
+  phone_number: string | null;
+  company: string | null;
+  experience: string | null;
+  hourly_rate: number | null;
+  avatar_url: string | null;
+  is_active: boolean; // Backend sends 0/1, converted to boolean
+  created_at: string;
+  updated_at: string;
+}
+
+// Payload for Admin to update user details
+// All fields are optional. Backend handles which ones are actually updated.
+export interface AdminUpdateUserDetailsPayload {
+  username?: string;
+  email?: string;
+  role?: UserRole;
+  name?: string | null;
+  phone_number?: string | null;
+  company?: string | null;
+  experience?: string | null;
+  hourly_rate?: number | null; // Send null to clear, or number to set/update
+  avatar_url?: string | null;
+  is_active?: boolean;
+  // Password changes should be separate, more secure endpoint
+}
+// AdminUpdateUserRolePayload already exists for just role changes.
+// AdminActionResponse can be used for update and delete responses.
+
+
 // Fetches all users - for Admin
 export const adminFetchAllUsersAPI = (): Promise<AdminUserView[]> => {
   return apiFetch<AdminUserView[]>(`/api.php?action=get_all_users`, {
@@ -170,13 +226,36 @@ export const adminUpdateUserRoleAPI = (payload: AdminUpdateUserRolePayload): Pro
   }, true); // Requires Admin Auth
 };
 
-// Placeholder for adminDeleteUserAPI if it were to be implemented now
-// export const adminDeleteUserAPI = (userId: string): Promise<AdminActionResponse> => {
-//   return apiFetch<AdminActionResponse>(`/api.php?action=delete_user`, { // Assuming endpoint
-//     method: 'POST', // Or 'DELETE'
-//     body: JSON.stringify({ user_id: userId }),
-//   }, true); // Requires Admin Auth
-// };
+// Create a new user - for Admin
+export const adminCreateUserAPI = (payload: AdminCreateUserPayload): Promise<AdminCreateUserResponse> => {
+  return apiFetch<AdminCreateUserResponse>(`/api.php?action=admin_create_user`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, true); // Requires Admin Auth
+};
+
+// Fetch full details of a specific user - for Admin
+export const adminFetchUserDetailsAPI = (userId: number | string): Promise<AdminUserDetailsResponse> => {
+  return apiFetch<AdminUserDetailsResponse>(`/api.php?action=admin_get_user_details&user_id=${userId}`, {
+    method: 'GET',
+  }, true); // Requires Admin Auth
+};
+
+// Update details of a specific user - for Admin
+export const adminUpdateUserDetailsAPI = (userId: number | string, payload: AdminUpdateUserDetailsPayload): Promise<AdminActionResponse> => {
+  return apiFetch<AdminActionResponse>(`/api.php?action=admin_update_user_details&user_id=${userId}`, {
+    method: 'POST', // Or 'PUT' as per backend
+    body: JSON.stringify(payload),
+  }, true); // Requires Admin Auth
+};
+
+// Soft delete (deactivate) a user - for Admin
+export const adminDeleteUserAPI = (userId: number | string): Promise<AdminActionResponse> => {
+  return apiFetch<AdminActionResponse>(`/api.php?action=admin_delete_user&user_id=${userId}`, {
+    // Backend allows user_id in GET for DELETE, or payload for POST
+    method: 'DELETE',
+  }, true); // Requires Admin Auth
+};
 
 // --- User Service ---
 export const fetchUsersAPI = (role?: UserRole): Promise<User[]> => {
@@ -208,40 +287,48 @@ export const fetchUserApplicationsAPI = (userId: string): Promise<Application[]>
 
 
 // --- Project Service ---
-export const fetchProjectsAPI = (params?: { status?: ProjectStatus | 'all', clientId?: string, freelancerId?: string }): Promise<Project[]> => {
+
+// This represents a project object as returned by PHP backend, including usernames
+export interface ProjectPHPResponse extends Omit<Project, 'id' | 'clientId' | 'freelancerId' | 'clientName' | 'assignedFreelancerName' | 'jobCards' | 'skillsRequired' > {
+  id: number;
+  client_id: number;
+  freelancer_id: number | null;
+  client_username?: string | null;      // Added by backend
+  freelancer_username?: string | null;  // Added by backend
+  // Other fields like title, description, status, budget, deadline, createdAt, updatedAt are assumed compatible
+  // jobCards and skillsRequired would be populated by separate calls or if backend includes them
+}
+
+export const fetchProjectsAPI = (params?: { status?: ProjectStatus | 'all' }): Promise<ProjectPHPResponse[]> => {
   let endpoint = "/api.php?action=get_projects";
   const queryParams = new URLSearchParams();
   if (params?.status) {
     queryParams.append('status', params.status);
   }
-  // Note: clientId and freelancerId filters are not currently supported by the general get_projects PHP endpoint.
-  // They are used by fetchClientProjectsAPI and will be by fetchFreelancerAssignedProjectsAPI.
-  // If these were to be added to get_projects, backend would need update.
+  // Removed clientId and freelancerId filters from here as they are not on general get_projects
   const queryString = queryParams.toString();
   if (queryString) {
-    endpoint += `&${queryString}`; // Changed from ? to & as action is already in endpoint
+    endpoint += `&${queryString}`;
   }
-  // This endpoint is public, so requiresAuth is false.
-  return apiFetch<Project[]>(endpoint, { method: 'GET' }, false);
+  return apiFetch<ProjectPHPResponse[]>(endpoint, { method: 'GET' }, false);
 };
 
-export const fetchProjectDetailsAPI = (projectId: string): Promise<Project> => {
-  // TODO: This endpoint needs to be implemented in the PHP backend.
-  // For now, it might point to a non-existent route or reuse get_projects with an ID.
-  // Assuming the PHP backend might be extended: /api.php?action=get_project_details&id=${projectId}
-  // Or, if get_projects can filter by ID (not implemented yet): /api.php?action=get_projects&id=${projectId}
-  // Placeholder:
-  console.warn("fetchProjectDetailsAPI is not fully implemented for the new PHP backend");
-  return apiFetch<Project>(`/projects/${projectId}`); // Keeping old for now, needs backend update
-}
+// Update fetchProjectDetailsAPI to use the get_projects?id=X backend logic
+// This will now return ProjectPHPResponse, which components will map to the full Project type
+export const fetchProjectDetailsAPI = (projectId: number | string): Promise<ProjectPHPResponse> => {
+  console.log("fetchProjectDetailsAPI now uses get_projects with ID for PHP backend.");
+  return apiFetch<ProjectPHPResponse>(`/api.php?action=get_projects&id=${projectId}`, {
+      method: 'GET'
+  }, false); // Assuming public access for now, or true if details need auth
+};
 
 // Definition for data expected by PHP backend for project creation
 export interface CreateProjectPHPData {
   title: string;
   description: string;
-  // client_id is removed as backend sets it from authenticated user
-  freelancer_id?: number; // Keep as optional
-  status?: string;        // Keep as optional
+  freelancer_id?: number | null; // Allow null for unassigning
+  status?: string;
+  client_id?: number; // Optional: For admin creating project for a specific client
 }
 
 // Definition for the response from PHP backend after project creation
@@ -266,8 +353,9 @@ export const createProjectAPI = (projectData: CreateProjectPHPData): Promise<Cre
 export interface UpdateProjectPHPData {
   title?: string;
   description?: string;
-  freelancer_id?: number; // Ensure this matches PHP's expected 'freelancer_id'
+  freelancer_id?: number | null; // Allow null for unassigning
   status?: string;
+  client_id?: number; // Optional: For admin re-assigning project to a new client
 }
 
 export interface UpdateProjectPHPResponse {
@@ -770,7 +858,30 @@ export const markConversationAsReadAPI = (conversationId: number | string): Prom
 export const fetchAllSkillsAPI = (): Promise<string[]> => apiFetch<string[]>('/skills');
 
 // --- Dashboard Stats API ---
-export const fetchAdminDashboardStatsAPI = (): Promise<any> => apiFetch<any>('/admin/dashboard/stats');
+
+export interface AdminDashboardStatsResponse {
+  total_active_users: number;
+  users_by_role: {
+    admin: number;
+    client: number;
+    freelancer: number;
+  };
+  total_projects: number;
+  projects_by_status: {
+    // Keys will be the project status strings as returned by backend
+    // e.g., 'Pending Approval', 'Open', 'In Progress', 'Completed', 'Cancelled'
+    // The exact keys should match what the PHP backend's $project_statuses_to_count produces as keys.
+    [status_key: string]: number;
+  };
+  total_open_applications: number;
+}
+
+export const fetchAdminDashboardStatsAPI = (): Promise<AdminDashboardStatsResponse> => {
+  return apiFetch<AdminDashboardStatsResponse>(`/api.php?action=get_admin_dashboard_stats`, {
+    method: 'GET',
+  }, true); // Requires Admin Auth
+};
+
 export const fetchFreelancerDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
 export const fetchClientDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
 export const fetchRecentActivityAPI = (userId: string): Promise<any[]> => apiFetch<any[]>(`/users/${userId}/recent-activity`);

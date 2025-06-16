@@ -909,10 +909,22 @@ Endpoints for 1-on-1 user communication.
 This section provides an overview of key database tables involved in the API.
 
 ### `users` Table
-- `id`: Primary Key
-- `username`, `email`, `role`, `password` (hashed)
-- `session_token`, `session_token_expires_at`
-- `created_at`
+- `id`: INT, PK, Auto Increment
+- `username`: VARCHAR(255), Unique, NOT NULL
+- `password`: VARCHAR(255), NOT NULL (hashed)
+- `email`: VARCHAR(255), Unique, NOT NULL
+- `role`: VARCHAR(50), NOT NULL (e.g., 'admin', 'client', 'freelancer')
+- `name`: VARCHAR(255), NULLABLE (Full name)
+- `phone_number`: VARCHAR(50), NULLABLE
+- `company`: VARCHAR(255), NULLABLE
+- `experience`: TEXT, NULLABLE (Bio, experience summary)
+- `hourly_rate`: DECIMAL(10,2), NULLABLE (Primarily for freelancers)
+- `avatar_url`: VARCHAR(2048), NULLABLE
+- `is_active`: BOOLEAN, NOT NULL, DEFAULT true (For soft deletes)
+- `session_token`: VARCHAR(255), NULLABLE, Unique
+- `session_token_expires_at`: TIMESTAMP, NULLABLE
+- `created_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP
+- `updated_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 
 ### `projects` Table
 - `id`: Primary Key

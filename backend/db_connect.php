@@ -44,10 +44,18 @@ Users Table:
 - username: VARCHAR(255), Unique, Not Null
 - password: VARCHAR(255), Not Null (should be hashed)
 - email: VARCHAR(255), Unique, Not Null
-- role: VARCHAR(50) (e.g., 'admin', 'client', 'freelancer')
+- role: VARCHAR(50) (e.g., 'admin', 'client', 'freelancer'), Not Null
+- name: VARCHAR(255), Nullable (Full name)
+- phone_number: VARCHAR(50), Nullable
+- company: VARCHAR(255), Nullable
+- experience: TEXT, Nullable (Bio, experience summary)
+- hourly_rate: DECIMAL(10,2), Nullable (Primarily for freelancers)
+- avatar_url: VARCHAR(2048), Nullable
+- is_active: BOOLEAN, Not Null, Default true (For soft deletes)
 - session_token: VARCHAR(255), Nullable, Unique
 - session_token_expires_at: TIMESTAMP, Nullable
 - created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP (Add this too)
 
 Projects Table:
 - id: INT, Primary Key, Auto Increment
