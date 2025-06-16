@@ -45,6 +45,8 @@ Users Table:
 - password: VARCHAR(255), Not Null (should be hashed)
 - email: VARCHAR(255), Unique, Not Null
 - role: VARCHAR(50) (e.g., 'admin', 'client', 'freelancer')
+- session_token: VARCHAR(255), Nullable, Unique
+- session_token_expires_at: TIMESTAMP, Nullable
 - created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
 
 Projects Table:
@@ -56,14 +58,67 @@ Projects Table:
 - status: VARCHAR(50) (e.g., 'open', 'in_progress', 'completed', 'cancelled')
 - created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
 - updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+
+Applications Table:
+- id: INT, Primary Key, Auto Increment
+- project_id: INT, Foreign Key (references projects.id ON DELETE CASCADE), Not Null
+- freelancer_id: INT, Foreign Key (references users.id ON DELETE CASCADE), Not Null
+- proposal_text: TEXT, Not Null
+- bid_amount: DECIMAL(10, 2), Nullable
+- status: VARCHAR(50), Not Null, Default 'pending' (values: 'pending', 'accepted', 'rejected', 'withdrawn_by_freelancer', 'archived_by_client')
+- applied_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+
+Job Cards Table:
+- id: INT, Primary Key, Auto Increment
+- project_id: INT, Foreign Key (references projects.id ON DELETE CASCADE), Not Null
+- title: VARCHAR(255), Not Null
+- description: TEXT, Nullable
+- status: VARCHAR(50), Not Null, Default 'todo' (values: 'todo', 'in_progress', 'pending_review', 'completed')
+- assigned_freelancer_id: INT, Foreign Key (references users.id ON DELETE SET NULL), Nullable
+- estimated_hours: DECIMAL(5, 2), Nullable
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+
+Time Logs Table:
+- id: INT, Primary Key, Auto Increment
+- job_card_id: INT, Foreign Key (references job_cards.id ON DELETE CASCADE), Not Null
+- user_id: INT, Foreign Key (references users.id ON DELETE CASCADE), Not Null
+- start_time: TIMESTAMP, Not Null
+- end_time: TIMESTAMP, Not Null
+- duration_minutes: INT, Not Null
+- notes: TEXT, Nullable
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+
+Conversations Table:
+- id: INT, Primary Key, Auto Increment
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+- last_message_at: TIMESTAMP, Nullable, INDEX
+
+Conversation Participants Table:
+- id: INT, Primary Key, Auto Increment
+- conversation_id: INT, Foreign Key (references conversations.id ON DELETE CASCADE), Not Null
+- user_id: INT, Foreign Key (references users.id ON DELETE CASCADE), Not Null
+- joined_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- UNIQUE KEY uk_conversation_user (conversation_id, user_id)
+
+Messages Table:
+- id: INT, Primary Key, Auto Increment
+- conversation_id: INT, Foreign Key (references conversations.id ON DELETE CASCADE), Not Null
+- sender_id: INT, Foreign Key (references users.id ON DELETE CASCADE), Not Null
+- content: TEXT, Not Null
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP, INDEX
+- read_at: TIMESTAMP, Nullable
 */
 
 // --- Database Connection ---
 // Replace with your actual database credentials
-define('DB_SERVER', '169.239.218.60'); // e.g., 'localhost' or IP address
-define('DB_USERNAME', 'architex_jules');
-define('DB_PASSWORD', 'xxh02ss5iwrc');
-define('DB_NAME', 'architex_jules');
+define('DB_SERVER', 'your_db_host'); // e.g., 'localhost' or IP address
+define('DB_USERNAME', 'your_db_username');
+define('DB_PASSWORD', 'your_db_password');
+define('DB_NAME', 'your_db_name');
 
 // Attempt to connect to MySQL database
 $conn = new mysqli(DB_SERVER, DB_USERNAME, DB_PASSWORD, DB_NAME);

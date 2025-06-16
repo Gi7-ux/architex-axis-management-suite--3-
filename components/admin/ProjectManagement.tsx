@@ -1,9 +1,17 @@
-import React, { useState, useEffect } from 'react';
-import { Project, ProjectStatus, User, UserRole, Application, JobCardStatus } from '../../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Project, ProjectStatus, UserRole, Application, JobCardStatus } from '../../types'; // User type might be adjusted or kept for specific roles
 import { 
-    fetchProjectsAPI, fetchProjectDetailsAPI, fetchApplicationsForProjectAPI, 
-    updateProjectStatusAPI, toggleProjectArchiveStatusAPI, createProjectAPI, 
-    acceptApplicationAPI, deleteProjectAPI, fetchUsersAPI 
+    fetchProjectsAPI,
+    fetchProjectDetailsAPI, // Still using this, but its backend is not fully defined
+    fetchApplicationsForProjectAPI,
+    createProjectAPI,
+    updateApplicationStatusAPI, // Use this instead of acceptApplicationAPI
+    deleteProjectAPI,
+    adminFetchAllUsersAPI, // Use this for fetching users for admin view
+    updateProjectAPI, // Use this for all project updates (status, archive, details)
+    AdminUserView, // For the type from adminFetchAllUsersAPI
+    CreateProjectPHPData // For creating projects
+    // User type might be needed if AdminUserView is not sufficient for all user displays
 } from '../../apiService';
 import { NAV_LINKS } from '../../constants';
 import Button from '../shared/Button';
@@ -14,18 +22,22 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import LoadingSpinner from '../shared/LoadingSpinner';
 
 // Helper to calculate project spend (basic version, assumes rates are available on user objects)
-const calculateProjectSpend = (project: Project, users: User[]): number => {
+const calculateProjectSpend = (project: Project, users: AdminUserView[]): number => {
     if (!project.assignedFreelancerId) return 0;
-    const freelancer = users.find(u => u.id === project.assignedFreelancerId && u.role === UserRole.FREELANCER);
-    if (!freelancer || !freelancer.hourlyRate) {
-        // console.warn(`Hourly rate for freelancer ${project.assignedFreelancerId} not found. Spend calculation might be inaccurate.`);
-        return 0; // Or fetch rate if not available, or handle as error
+    // AdminUserView does not have hourlyRate. This calculation will be inaccurate.
+    // This needs to be addressed if accurate spend is required, e.g., by fetching full User details or storing rate on project/application.
+    const freelancer = users.find(u => String(u.id) === project.assignedFreelancerId && u.role === UserRole.FREELANCER);
+    if (!freelancer) { // Removed hourlyRate check as it's not in AdminUserView
+        console.warn(`Freelancer ${project.assignedFreelancerId} not found in AdminUserView list. Spend calculation might be inaccurate.`);
+        return 0;
     }
-
+    // Placeholder for spend calculation logic if rates were available
+    // For now, returning 0 as rates are not in AdminUserView
     const totalMinutes = project.jobCards?.reduce((sum, jc) => 
         sum + (jc.timeLogs?.reduce((logSum, log) => logSum + log.durationMinutes, 0) || 0), 0) || 0;
     
-    return (totalMinutes / 60) * freelancer.hourlyRate;
+    // return (totalMinutes / 60) * (freelancer.hourlyRate || 0); // hourlyRate not on AdminUserView
+    return 0; // Returning 0 as rate is unknown
 };
 
 const ProjectManagement: React.FC = () => {
@@ -33,9 +45,9 @@ const ProjectManagement: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const [projects, setProjects] = useState<Project[]>([]);
-  const [allUsers, setAllUsers] = useState<User[]>([]); 
-  const [clients, setClients] = useState<User[]>([]);
-  const [freelancers, setFreelancers] = useState<User[]>([]);
+  const [allUsers, setAllUsers] = useState<AdminUserView[]>([]);
+  const [clients, setClients] = useState<AdminUserView[]>([]); // Admins can assign to clients
+  const [freelancers, setFreelancers] = useState<AdminUserView[]>([]); // For filtering
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -54,26 +66,43 @@ const ProjectManagement: React.FC = () => {
   const [formError, setFormError] = useState<string | null>(null);
 
   const [filterStatus, setFilterStatus] = useState<ProjectStatus | 'ALL'>('ALL');
-  const [filterClient, setFilterClient] = useState<string>('ALL');
-  const [filterFreelancer, setFilterFreelancer] = useState<string>('ALL');
+  const [filterClient, setFilterClient] = useState<string>('ALL'); // This would be client ID (string/number)
+  const [filterFreelancer, setFilterFreelancer] = useState<string>('ALL'); // This would be freelancer ID (string/number)
   const [searchTerm, setSearchTerm] = useState<string>('');
-  const [showArchived, setShowArchived] = useState<boolean>(false);
+  const [showArchived, setShowArchived] = useState<boolean>(false); // Assuming 'archived' is a status or a boolean field
   const [sortConfig, setSortConfig] = useState<{ key: keyof Project | 'spend' | null, direction: 'ascending' | 'descending' }>({ key: 'createdAt', direction: 'descending' });
 
-  const loadInitialData = async () => {
+  const loadInitialData = useCallback(async () => { // useCallback
       setIsLoading(true);
       setFormError(null);
       try {
-          const [fetchedProjects, fetchedUsers, fetchedClients, fetchedFreelancers] = await Promise.all([
-              fetchProjectsAPI(),
-              fetchUsersAPI(),
-              fetchUsersAPI(UserRole.CLIENT),
-              fetchUsersAPI(UserRole.FREELANCER)
-          ]);
-          setProjects(fetchedProjects);
-          setAllUsers(fetchedUsers); // Store all users for spend calculation etc.
-          setClients(fetchedClients);
-          setFreelancers(fetchedFreelancers);
+          // Fetch all projects for admin view
+          const fetchedProjects = await fetchProjectsAPI({ status: 'all' });
+          const fetchedAdminUsersView = await adminFetchAllUsersAPI(); // Use new API
+
+          // Basic mapping, assuming Project type is mostly compatible. More detailed mapping might be needed.
+          const mappedProjects = fetchedProjects.map(p => ({
+              ...p,
+              id: String(p.id),
+              clientId: String(p.clientId),
+              clientName: fetchedAdminUsersView.find(u => u.id === p.clientId)?.username || 'Unknown Client',
+              assignedFreelancerName: p.freelancerId ? fetchedAdminUsersView.find(u => u.id === p.freelancerId)?.username : undefined,
+              // budget and other fields might need default values if not present or mapping
+              budget: p.budget || 0,
+              deadline: p.deadline || new Date().toISOString(), // Example default
+              skillsRequired: p.skillsRequired || [],
+              currency: p.currency || 'USD',
+              paymentType: p.paymentType || 'fixed',
+              experienceLevel: p.experienceLevel || 'intermediate',
+              duration: p.duration || 'unknown',
+              isFeatured: p.isFeatured || false,
+              jobCards: p.jobCards || [],
+              isArchived: p.status === 'archived', // Example: deriving isArchived from status
+          }));
+          setProjects(mappedProjects);
+          setAllUsers(fetchedAdminUsersView);
+          setClients(fetchedAdminUsersView.filter(u => u.role === UserRole.CLIENT));
+          setFreelancers(fetchedAdminUsersView.filter(u => u.role === UserRole.FREELANCER));
 
           if (location.pathname.endsWith(NAV_LINKS.ADMIN_CREATE_PROJECT)) {
               handleOpenCreateModal();
@@ -81,20 +110,10 @@ const ProjectManagement: React.FC = () => {
       } catch (error: any) {
           console.error("Failed to load initial project management data:", error);
           setFormError(error.message || "Failed to load necessary data. Please try refreshing.");
-      } finally {
-          setIsLoading(false);
-      }
-  };
-  
-  useEffect(() => {
-    loadInitialData();
-  }, []); 
+      } finally { setIsLoading(false); }
+  }, [location.pathname]); // Add dependencies
 
-  useEffect(() => { // Handle direct navigation to create project
-    if (location.pathname.endsWith(NAV_LINKS.ADMIN_CREATE_PROJECT) && !isCreateModalOpen && clients.length > 0) {
-        handleOpenCreateModal();
-    }
-  }, [location.pathname, isCreateModalOpen, clients]);
+  useEffect(() => { loadInitialData(); }, [loadInitialData]);
 
   const handleViewDetails = async (project: Project) => {
     setIsSubmitting(true);
@@ -130,9 +149,8 @@ const ProjectManagement: React.FC = () => {
   
   const handleOpenCreateModal = () => {
     resetCreateForm();
-    if (clients.length === 0 && !isLoading) { //isLoading check to prevent premature warning
-        setFormError("No clients available to assign for new project. Please add clients first.");
-    }
+    // Admin creates project, client_id is admin's ID by default from backend.
+    // No specific client assignment on this simplified form.
     setIsCreateModalOpen(true);
     if (location.pathname !== `${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`) {
         navigate(`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`, { replace: true });
@@ -147,31 +165,31 @@ const ProjectManagement: React.FC = () => {
     }
   };
 
-  const handleAddSkill = () => {
-    if (currentSkill.trim() && !skillsRequired.includes(currentSkill.trim())) {
-      setSkillsRequired([...skillsRequired, currentSkill.trim()]);
-      setCurrentSkill('');
-    }
-  };
-
-  const handleRemoveSkill = (skillToRemove: string) => {
-    setSkillsRequired(skillsRequired.filter(skill => skill !== skillToRemove));
-  };
+  // handleAddSkill and handleRemoveSkill are removed from this simplified create form for now
+  // const handleAddSkill = () => { ... };
+  // const handleRemoveSkill = (skillToRemove: string) => { ... };
 
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!adminUser || adminUser.role !== UserRole.ADMIN) {
-        setFormError("Authentication error."); return;
+        setFormError("Authentication error. Only admins can create projects here."); return;
     }
-    if (!title || !description || !budget || !deadline || !assignedClientId) {
-      setFormError("Please fill in all required fields including assigning a client.");
+    if (!title || !description) { // Simplified validation for CreateProjectPHPData
+      setFormError("Title and description are required.");
       return;
     }
     setIsSubmitting(true); setFormError(null);
     try {
-      const projectData = { title, description, budget: Number(budget), deadline: new Date(deadline).toISOString(), skillsRequired, clientId: assignedClientId, adminCreatorId: adminUser.id };
+      // Data for createProjectAPI (PHP version)
+      const projectData: CreateProjectPHPData = {
+        title,
+        description,
+        status: ProjectStatus.PENDING_APPROVAL, // Admin might set to pending for review
+        // freelancer_id is optional and not included in this simplified admin form
+      };
+      // This will create a project with the admin as the client via backend logic.
       await createProjectAPI(projectData);
-      alert("Project created and is pending approval."); 
+      alert("Project created by admin (assigned to admin as client). Status: Pending Approval.");
       await loadInitialData(); 
       handleCloseCreateModal();
     } catch (err: any) {
@@ -183,40 +201,51 @@ const ProjectManagement: React.FC = () => {
   };
   
   const handleApproveProjectStatus = async (projectId: string) => { 
-    setIsSubmitting(true);
-    setFormError(null);
+    setIsSubmitting(true); setFormError(null);
     try {
-        await updateProjectStatusAPI(projectId, ProjectStatus.OPEN);
+        await updateProjectAPI(projectId, { status: ProjectStatus.OPEN }); // Use updateProjectAPI
         alert("Project approved and is now open for applications.");
         await loadInitialData();
         if (selectedProject?.id === projectId) { 
-            const details = await fetchProjectDetailsAPI(projectId);
+            const details = await fetchProjectDetailsAPI(projectId); // This API's backend is not fully defined for Phase 4
             setSelectedProject(details || null);
         }
     } catch (err: any) {
         alert(err.message || "Failed to approve project.");
         setFormError(err.message || "Failed to approve project.");
+    } finally {
+        setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
-  const handleAcceptApplication = async (applicationId: string) => {
+  const handleAcceptApplication = async (applicationId: string, projectIdToRefresh: string) => {
     if (!adminUser) return;
-    setIsSubmitting(true);
-    setFormError(null);
+    setIsSubmitting(true); setFormError(null);
     try {
-        await acceptApplicationAPI(applicationId);
+        await updateApplicationStatusAPI(applicationId, { status: 'accepted' }); // Use new API
         alert("Application accepted. Freelancer assigned and project is In Progress.");
-        await loadInitialData();
-        handleCloseDetailModal(); 
+        await loadInitialData(); // Refresh all projects
+        // Refresh details if selected project was this one
+        if (selectedProject?.id === projectIdToRefresh) {
+            const details = await fetchProjectDetailsAPI(projectIdToRefresh); // Still old API path
+            setSelectedProject(details || null);
+             if (details) {
+                const apps = await fetchApplicationsForProjectAPI(details.id); // Uses new API path
+                setProjectApplications(apps); // Assuming ProjectApplicationPHPResponse type
+            }
+        } else {
+            handleCloseDetailModal();
+        }
     } catch (err: any) {
         alert(err.message || "Failed to accept application.");
         setFormError(err.message || "Failed to accept application.");
+    } finally {
+        setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
 
   const handleNavigateToEditProjectTasks = (project: Project) => {
+    // This navigation might need to be updated if project details page has changed significantly
     navigate(NAV_LINKS.PROJECT_DETAILS.replace(':id', project.id)); 
     handleCloseDetailModal();
   };
@@ -226,30 +255,33 @@ const ProjectManagement: React.FC = () => {
         setIsSubmitting(true);
         setFormError(null);
         try {
-            await deleteProjectAPI(projectId);
+            await deleteProjectAPI(projectId); // API is fine, uses requiresAuth: true
             await loadInitialData();
         } catch (err: any) {
             alert(err.message || "Failed to delete project.");
             setFormError(err.message || "Failed to delete project.");
+        } finally {
+            setIsSubmitting(false);
         }
-        setIsSubmitting(false);
     }
   };
 
   const handleToggleArchive = async (project: Project) => {
-    setIsSubmitting(true);
-    setFormError(null);
+    setIsSubmitting(true); setFormError(null);
     try {
-        await toggleProjectArchiveStatusAPI(project.id);
+        // Use updateProjectAPI to change status to 'archived' or back to 'open' (example)
+        const newStatus = project.isArchived ? ProjectStatus.OPEN : 'archived' as ProjectStatus;
+        await updateProjectAPI(project.id, { status: newStatus });
         await loadInitialData(); 
     } catch (err: any) {
         alert(err.message || "Failed to update archive status.");
         setFormError(err.message || "Failed to update archive status.");
+    } finally {
+        setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
   
-  const getStatusClass = (status: ProjectStatus) => {
+  const getStatusClass = (status?: ProjectStatus | string) => { // Allow string for 'archived'
     switch (status) {
       case ProjectStatus.PENDING_APPROVAL: return 'bg-orange-100 text-orange-700';
       case ProjectStatus.OPEN: return 'bg-green-100 text-green-700';
@@ -347,14 +379,15 @@ const ProjectManagement: React.FC = () => {
           <label className="block text-xs font-medium text-gray-700">Client</label>
           <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm">
             <option value="ALL">All Clients</option>
-            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {clients.map(c => <option key={c.id} value={String(c.id)}>{c.username}</option>)}
+            {/* Use AdminUserView properties and ensure value is string if that's what filterClient expects */}
           </select>
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-700">Freelancer</label>
           <select value={filterFreelancer} onChange={e => setFilterFreelancer(e.target.value)} className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm">
             <option value="ALL">All Freelancers</option>
-            {freelancers.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            {freelancers.map(f => <option key={f.id} value={String(f.id)}>{f.username}</option>)}
           </select>
         </div>
         <div className="md:col-span-2 lg:col-span-4 flex items-center">
@@ -443,37 +476,25 @@ const ProjectManagement: React.FC = () => {
                 ))}
               </div>
             </div>
-             {selectedProject.jobCards && selectedProject.jobCards.length > 0 && (
-                <div className="pt-3">
-                    <h4 className="font-medium text-gray-700">Job Cards / Tasks:</h4>
-                    <ul className="list-disc list-inside mt-1 space-y-1 text-sm max-h-40 overflow-y-auto bg-gray-50 p-3 rounded-md border">
-                        {selectedProject.jobCards.map(jc => (
-                            <li key={jc.id} className="text-gray-600">
-                                {jc.title} - <span className={`font-semibold ${
-                                    jc.status === JobCardStatus.COMPLETED ? 'text-green-600' : 
-                                    jc.status === JobCardStatus.IN_PROGRESS ? 'text-yellow-600' :
-                                    jc.status === JobCardStatus.PENDING_REVIEW ? 'text-purple-600' :
-                                    'text-gray-500'
-                                }`}>{jc.status}</span>
-                                {jc.assignedArchitectName && <span className="text-xs text-gray-400"> (Assigned: {jc.assignedArchitectName})</span>}
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            )}
+            {/* Job Cards display removed/simplified for now as it's complex and depends on full Project type */}
+            {/* {selectedProject.jobCards && selectedProject.jobCards.length > 0 && ( ... )} */}
 
-            { (selectedProject.status === ProjectStatus.OPEN || selectedProject.status === ProjectStatus.PENDING_APPROVAL) && projectApplications.length > 0 && !selectedProject.assignedFreelancerId && (
+            { (selectedProject.status === ProjectStatus.OPEN || selectedProject.status === ProjectStatus.PENDING_APPROVAL) &&
+              projectApplications.length > 0 && !selectedProject.assignedFreelancerId && (
                 <div className="pt-4 border-t mt-4">
-                    <h4 className="text-md font-semibold text-gray-700 mb-2">Pending Applications ({projectApplications.filter(app => app.status === 'PendingAdminApproval').length})</h4>
-                    {projectApplications.filter(app => app.status === 'PendingAdminApproval').length > 0 ? (
+                    <h4 className="text-md font-semibold text-gray-700 mb-2">
+                        Pending Applications ({projectApplications.filter(app => app.status === 'pending').length})
+                    </h4>
+                    {projectApplications.filter(app => app.status === 'pending').length > 0 ? (
                         <div className="space-y-3 max-h-60 overflow-y-auto">
-                            {projectApplications.filter(app => app.status === 'PendingAdminApproval').map(app => (
-                                <div key={app.id} className="p-3 bg-gray-50 rounded-md border hover:shadow-sm">
-                                    <p className="font-semibold text-gray-800">{app.freelancerName} <span className="text-xs text-gray-500">({app.freelancerId})</span></p>
-                                    <p className="text-sm text-gray-600">Bid: R {app.bidAmount.toLocaleString()}</p>
-                                    <p className="text-sm text-gray-600 mt-1 italic">"{app.proposal}"</p>
+                            {projectApplications.filter(app => app.status === 'pending').map(app => (
+                                <div key={app.id /* Assuming ProjectApplicationPHPResponse has id */}
+                                     className="p-3 bg-gray-50 rounded-md border hover:shadow-sm">
+                                    <p className="font-semibold text-gray-800">{app.freelancer_username} <span className="text-xs text-gray-500">({app.freelancer_id})</span></p>
+                                    <p className="text-sm text-gray-600">Bid: R {app.bid_amount ? app.bid_amount.toLocaleString() : 'N/A'}</p>
+                                    <p className="text-sm text-gray-600 mt-1 italic whitespace-pre-wrap">"{app.proposal_text}"</p>
                                     <Button 
-                                        onClick={() => handleAcceptApplication(app.id)} 
+                                        onClick={() => handleAcceptApplication(String(app.id), selectedProject.id)}
                                         variant="primary" size="sm" className="mt-2" 
                                         leftIcon={<UserCheckIcon className="w-4 h-4"/>}
                                         isLoading={isSubmitting}>
@@ -483,14 +504,13 @@ const ProjectManagement: React.FC = () => {
                             ))}
                         </div>
                     ) : (
-                        <p className="text-sm text-gray-500">No applications currently pending admin approval for this project.</p>
+                        <p className="text-sm text-gray-500">No applications currently pending for this project.</p>
                     )}
                 </div>
             )}
-            {selectedProject.status === ProjectStatus.OPEN && projectApplications.filter(app => app.status === 'PendingAdminApproval').length === 0 && !selectedProject.assignedFreelancerId && (
-                 <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open for bidding but has no pending applications yet.</p>
+            {selectedProject.status === ProjectStatus.OPEN && projectApplications.filter(app => app.status === 'pending').length === 0 && !selectedProject.assignedFreelancerId && (
+                 <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open but has no pending applications yet.</p>
             )}
-
 
              <div className="mt-6 flex justify-end space-x-2">
                 <Button onClick={() => handleNavigateToEditProjectTasks(selectedProject)} variant="secondary">Manage Tasks</Button>
@@ -513,48 +533,14 @@ const ProjectManagement: React.FC = () => {
               <textarea id="proj_desc" rows={4} value={description} onChange={(e) => setDescription(e.target.value)}
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" required />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label htmlFor="proj_budget" className="block text-sm font-medium text-gray-700">Budget (R)</label>
-                <input type="number" id="proj_budget" value={budget} onChange={(e) => setBudget(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" required min="1" />
-              </div>
-              <div>
-                <label htmlFor="proj_deadline" className="block text-sm font-medium text-gray-700">Deadline</label>
-                <input type="date" id="proj_deadline" value={deadline} onChange={(e) => setDeadline(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" required min={new Date().toISOString().split('T')[0]} />
-              </div>
-            </div>
-             <div>
-                <label htmlFor="assignClient" className="block text-sm font-medium text-gray-700">Assign Client</label>
-                <select id="assignClient" value={assignedClientId} onChange={(e) => setAssignedClientId(e.target.value)} required
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
-                    <option value="" disabled>Select a client</option>
-                    {clients.length > 0 ? clients.map(client => <option key={client.id} value={client.id}>{client.name} ({client.email})</option>) : <option disabled>No clients available</option>}
-                </select>
-            </div>
-            <div>
-              <label htmlFor="proj_skills" className="block text-sm font-medium text-gray-700">Skills Required (optional)</label>
-              <div className="flex items-center mt-1">
-                <input type="text" id="proj_skills" value={currentSkill} onChange={(e) => setCurrentSkill(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddSkill();}}}
-                  className="flex-grow px-3 py-2 border border-gray-300 rounded-l-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" placeholder="e.g., Revit, AutoCAD" />
-                <Button type="button" onClick={handleAddSkill} className="rounded-l-none !py-2" variant="secondary">Add Skill</Button>
-              </div>
-              {skillsRequired.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {skillsRequired.map(skill => (
-                    <span key={skill} className="flex items-center px-2.5 py-1 bg-accent text-secondary text-sm rounded-full font-medium">
-                      {skill} <button type="button" onClick={() => handleRemoveSkill(skill)} className="ml-1.5 text-secondary hover:text-red-700 font-bold">&times;</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
+            {/* Simplified form: budget, deadline, skills, client assignment removed for now to match CreateProjectPHPData */}
+            {/* Admin creates project, it's assigned to admin as client by default in backend */}
+            {/* To assign to a specific client, backend create_project would need client_id_override_by_admin */}
+
             {formError && <p className="text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
             <div className="pt-4 flex justify-end space-x-3">
                 <Button type="button" variant="secondary" onClick={handleCloseCreateModal} disabled={isSubmitting}>Cancel</Button>
-                <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting || (clients.length === 0 && !isLoading) }>Create Project</Button>
+                <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting}>Create Project</Button>
             </div>
           </form>
         </Modal>

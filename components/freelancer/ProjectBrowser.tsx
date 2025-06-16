@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Project, ProjectStatus, Application, UserRole } from '../../types'; // Removed User as it's not directly used here, UserRole is for user.role check
-import { fetchProjectsAPI, submitApplicationAPI, fetchAllSkillsAPI, fetchUserApplicationsAPI } from '../../apiService';
+import { Project, ProjectStatus, UserRole } from '../../types'; // Removed Application as it's not directly used for type here
+import {
+    fetchProjectsAPI,
+    submitApplicationAPI,
+    fetchAllSkillsAPI,
+    fetchFreelancerApplicationsAPI, // Use this instead of fetchUserApplicationsAPI
+    FreelancerApplicationResponseItem, // Type for the response
+    SubmitApplicationPayload, // Type for submitting application
+    ApiError // Ensure ApiError is imported if used in catch blocks
+} from '../../apiService';
 import ProjectCard from '../shared/ProjectCard';
 import Modal from '../shared/Modal';
 import Button from '../shared/Button';
@@ -90,10 +98,11 @@ const ProjectBrowser: React.FC = () => {
       // Fetch user applications if freelancer
       if (user && user.role === UserRole.FREELANCER) {
         try {
-          const userApplications = await fetchUserApplicationsAPI(user.id);
-          setAppliedProjectIds(new Set(userApplications.map(app => app.projectId)));
+          // Use new API for freelancer's applications
+          const freelancerApps: FreelancerApplicationResponseItem[] = await fetchFreelancerApplicationsAPI();
+          setAppliedProjectIds(new Set(freelancerApps.map(app => String(app.project_id)))); // Ensure project_id is string if Project.id is string
         } catch (appError: any) {
-          console.warn("fetchUserApplicationsAPI failed:", appError);
+          console.warn("fetchFreelancerApplicationsAPI failed:", appError);
           // errorMessages.push("Could not load your application statuses."); // Optionally inform user
           setAppliedProjectIds(new Set()); // Default to empty set
         }
@@ -129,24 +138,27 @@ const ProjectBrowser: React.FC = () => {
 
   const handleSubmitApplication = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProjectForApplication || !user || !proposal || !bidAmount) return;
+    if (!selectedProjectForApplication || !user || !proposal || bidAmount === '') return; // Check bidAmount for empty string too
     setApplying(true);
-    setError(null);
+    setError(null); // Clear previous modal errors
     try {
-      await submitApplicationAPI({
-        projectId: selectedProjectForApplication.id,
-        freelancerId: user.id,
-        proposal,
-        bidAmount: Number(bidAmount),
-        status: 'PendingAdminApproval', 
-      });
+      const payload: SubmitApplicationPayload = {
+        project_id: parseInt(selectedProjectForApplication.id, 10), // Ensure project_id is number
+        proposal_text: proposal,
+        bid_amount: Number(bidAmount) // Ensure bid_amount is number
+      };
+      await submitApplicationAPI(payload); // Use new API
       setAppliedProjectIds(prev => new Set(prev).add(selectedProjectForApplication.id));
-      alert(`Application submitted for ${selectedProjectForApplication.title}`); 
+      alert(`Application submitted for ${selectedProjectForApplication.title}`);
       handleCloseApplyModal();
     } catch (error: any) {
       console.error("Failed to submit application", error);
-      setError(error.message || "Failed to submit application. Please try again.");
-      alert(error.message || "Failed to submit application. Please try again.");
+      if (error instanceof ApiError) {
+        setError(error.message || "Failed to submit application. Please try again.");
+      } else {
+        setError("An unexpected error occurred. Please try again.");
+      }
+      // Do not alert error here if it's already displayed in the modal via setError
     } finally {
       setApplying(false);
     }

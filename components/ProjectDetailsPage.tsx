@@ -3,8 +3,23 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Project, ProjectStatus, Application, UserRole, JobCard, JobCardStatus, TimeLog, User, MessageStatus, ManagedFile, Conversation, Message } from '../../types';
 import { 
     fetchProjectDetailsAPI, fetchApplicationsForProjectAPI, fetchProjectFilesAPI, submitApplicationAPI,
-    addJobCardAPI, updateJobCardAPI, deleteJobCardAPI, updateJobCardStatusAPI, addTimeLogAPI,
-    uploadFileAPI, deleteFileAPI, findOrCreateConversationAPI, sendMessageAPI
+    createJobCardAPI,
+    updateJobCardAPI,
+    deleteJobCardAPI,
+    fetchJobCardsForProjectAPI,
+    // NEW Time Log APIs:
+    logTimeAPI,
+    fetchTimeLogsForJobCardAPI,
+    fetchTimeLogsForProjectAPI, // For admin/client project-wide view
+    updateTimeLogAPI, // Optional for edit
+    deleteTimeLogAPI, // Optional for delete
+    uploadFileAPI, deleteFileAPI, findOrCreateConversationAPI, sendMessageAPI,
+    CreateJobCardPayload, UpdateJobCardPayload, JobCardPHPResponse,
+    // New Time Log Types:
+    LogTimePayload,
+    UpdateTimeLogPayload,
+    TimeLogPHPResponse,
+    ProjectApplicationPHPResponse // Ensure this is imported if used by fetchApplicationsForProjectAPI
 } from '../../apiService';
 import { NAV_LINKS, getMockFileIconPath, formatDurationToHHMMSS } from '../../constants';
 import LoadingSpinner from './shared/LoadingSpinner';
@@ -24,7 +39,8 @@ const formatMinutesToHM = (minutes: number): string => {
 interface TimeLogModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSubmit: (log: Omit<TimeLog, 'id' | 'jobCardId' | 'architectId' | 'createdAt' | 'durationMinutes'> & {durationMinutes?: number}) => void;
+  // Updated onSubmit to match the data structure ProjectDetailsPage.handleTimeLogSubmit expects
+  onSubmit: (logData: Omit<TimeLog, 'id'|'jobCardId'|'architectId'|'createdAt'|'durationMinutes'|'manualEntry'> & {startTime: string, endTime: string, notes?:string}) => void;
   jobCardTitle: string;
 }
 
@@ -42,14 +58,13 @@ const ManualTimeLogModal: React.FC<TimeLogModalProps> = ({isOpen, onClose, onSub
             alert("End time must be after start time.");
             return;
         }
-        const durationMinutes = (endDateTime.getTime() - startDateTime.getTime()) / (1000 * 60);
+        // const durationMinutes = (endDateTime.getTime() - startDateTime.getTime()) / (1000 * 60); // Duration calculated by backend now
         
         onSubmit({ 
             startTime: startDateTime.toISOString(), 
             endTime: endDateTime.toISOString(), 
-            durationMinutes, 
-            notes, 
-            manualEntry: true 
+            notes: notes || undefined,
+            // manualEntry and durationMinutes are not part of this specific payload structure for logTimeAPI
         });
         onClose(); 
     };
@@ -94,8 +109,8 @@ interface JobCardDisplayProps {
   project: Project; 
   isAssignedToCurrentUser: boolean;
   isAdminView: boolean;
-  onStatusUpdate: (projectId: string, jobCardId: string, newStatus: JobCardStatus) => void;
-  onTimeLog: (projectId: string, jobCardId: string, timeLogData: Omit<TimeLog, 'id' | 'createdAt' | 'architectId' | 'jobCardId'>) => void;
+  onStatusUpdate: (jobCardId: string, newStatus: JobCardStatus) => void; // projectId removed
+  onTimeLog: (jobCardId: string, logData: Omit<TimeLog, 'id'|'jobCardId'|'architectId'|'createdAt'|'durationMinutes'|'manualEntry'> & {startTime: string, endTime: string, notes?:string}) => void;
   onEditJobCard: (jobCard: JobCard) => void;
   onDeleteJobCard: (jobCardId: string) => void;
   activeTimerJobCardId?: string | null;
@@ -112,11 +127,11 @@ const JobCardDisplay: React.FC<JobCardDisplayProps> = ({
     const auth = useAuth();
 
     const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-      onStatusUpdate(project.id, jobCard.id, e.target.value as JobCardStatus);
+      onStatusUpdate(jobCard.id, e.target.value as JobCardStatus); // Pass only jobCard.id
     };
 
-    const handleManualTimeSubmit = (logData: Omit<TimeLog, 'id'|'jobCardId'|'architectId'|'createdAt'>) => {
-        onTimeLog(project.id, jobCard.id, logData);
+    const handleManualTimeSubmit = (logDataFromModal: Omit<TimeLog, 'id'|'jobCardId'|'architectId'|'createdAt'|'durationMinutes'|'manualEntry'> & {startTime: string, endTime: string, notes?:string}) => {
+        onTimeLog(jobCard.id, logDataFromModal); // Pass jobCard.id and the new logData structure
     };
     
     const isTimerActiveForThisCard = activeTimerJobCardId === jobCard.id;
@@ -154,6 +169,22 @@ const JobCardDisplay: React.FC<JobCardDisplayProps> = ({
                     <div className="font-medium">Logged: {formatMinutesToHM(totalMinutesLogged)}</div>
                 </div>
             </div>
+
+            {jobCard.timeLogs && jobCard.timeLogs.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                    <h5 className="text-xs font-semibold text-gray-500 mb-1">Logged Time:</h5>
+                    <ul className="space-y-1 max-h-20 overflow-y-auto text-xs">
+                        {jobCard.timeLogs.map(log => (
+                            <li key={log.id} className="text-gray-600 p-1 bg-gray-50 rounded">
+                                {new Date(log.startTime).toLocaleDateString()} ({formatMinutesToHM(log.durationMinutes)})
+                                {log.notes && <span className="italic truncate block" title={log.notes}> - {log.notes}</span>}
+                                {/* Add Edit/Delete buttons here if implementing */}
+                            </li>
+                        ))}
+                    </ul>
+                </div>
+            )}
+
             {(isAssignedToCurrentUser || isAdminView) && ( 
               <div className="mt-3 pt-3 border-t border-gray-100 space-y-2">
                 <div>
@@ -162,7 +193,7 @@ const JobCardDisplay: React.FC<JobCardDisplayProps> = ({
                         disabled={!isAdminView && !canLogTime && jobCard.status === JobCardStatus.COMPLETED} 
                         className="block w-full p-1.5 text-xs border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 bg-gray-50">
                         {Object.values(JobCardStatus).map(status => (
-                            <option key={status} value={status}>{status.replace(/([A-Z])/g, ' $1').trim()}</option>
+                            <option key={status} value={status}>{status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</option>
                         ))}
                     </select>
                 </div>
@@ -227,7 +258,7 @@ const ProjectProgressBar: React.FC<{ jobCards?: JobCard[], projectStatus: Projec
 interface JobCardFormModalProps {
     isOpen: boolean;
     onClose: () => void;
-    onSubmit: (jobCardData: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt' | 'projectId' | 'status' | 'assignedArchitectName' | 'timeLogs' | 'actualTimeLogged'>) => void;
+    onSubmit: (jobCardData: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt' | 'projectId' | 'status' | 'assignedArchitectName' | 'timeLogs' | 'actualTimeLogged'> & {status?: JobCardStatus}) => void;
     editingJobCard?: JobCard | null;
     projectAssignedFreelancerId?: string; 
 }
@@ -237,20 +268,19 @@ const JobCardFormModal: React.FC<JobCardFormModalProps> = ({ isOpen, onClose, on
     const [description, setDescription] = useState('');
     const [estimatedTime, setEstimatedTime] = useState<number | string>('');
     const [assignedArchitectId, setAssignedArchitectId] = useState<string | undefined>(projectAssignedFreelancerId);
+    const [status, setStatus] = useState<JobCardStatus>(JobCardStatus.TODO);
     
-    // TODO: Fetch list of possible freelancers for assignment if needed
-    // const [availableFreelancers, setAvailableFreelancers] = useState<User[]>([]);
-    // useEffect(() => { fetchUsersAPI(UserRole.FREELANCER).then(setAvailableFreelancers); }, []);
-
     useEffect(() => {
         if (editingJobCard) {
             setTitle(editingJobCard.title);
             setDescription(editingJobCard.description);
             setEstimatedTime(editingJobCard.estimatedTime || '');
             setAssignedArchitectId(editingJobCard.assignedArchitectId || projectAssignedFreelancerId);
+            setStatus(editingJobCard.status);
         } else {
             setTitle(''); setDescription(''); setEstimatedTime('');
             setAssignedArchitectId(projectAssignedFreelancerId);
+            setStatus(JobCardStatus.TODO);
         }
     }, [editingJobCard, isOpen, projectAssignedFreelancerId]);
 
@@ -261,7 +291,8 @@ const JobCardFormModal: React.FC<JobCardFormModalProps> = ({ isOpen, onClose, on
             title, 
             description, 
             estimatedTime: estimatedTime ? Number(estimatedTime) : undefined,
-            assignedArchitectId: assignedArchitectId // Ensure this is part of submitted data
+            assignedArchitectId: assignedArchitectId,
+            status // Include status if it's part of the form
         });
         onClose();
     };
@@ -284,15 +315,7 @@ const JobCardFormModal: React.FC<JobCardFormModalProps> = ({ isOpen, onClose, on
                     <input type="number" id="jcEstTime" value={estimatedTime} onChange={e => setEstimatedTime(e.target.value)} min="0" step="0.5"
                            className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm"/>
                 </div>
-                {/* Optional: Freelancer assignment field if different from project default or for unassigned tasks */}
-                {/* <div>
-                    <label htmlFor="jcAssignArc" className="block text-sm font-medium text-gray-700">Assign Architect (Optional)</label>
-                    <select id="jcAssignArc" value={assignedArchitectId || ''} onChange={e => setAssignedArchitectId(e.target.value || undefined)}
-                           className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm bg-white">
-                        <option value="">{projectAssignedFreelancerId ? 'Project Default' : 'Unassigned'}</option>
-                        {availableFreelancers.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
-                    </select>
-                </div> */}
+                {/* Simplified: Status not editable in this form directly for now, default or handled by onStatusUpdate */}
                 <div className="flex justify-end space-x-2 pt-2">
                     <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
                     <Button type="submit" variant="primary">{editingJobCard ? "Save Changes" : "Add Job Card"}</Button>
@@ -319,7 +342,6 @@ const ProjectDetailsPage: React.FC = () => {
   const [bidAmount, setBidAmount] = useState<number | string>('');
   const [applying, setApplying] = useState(false);
   const [hasApplied, setHasApplied] = useState(false);
-  // Applications are now fetched as part of loadProjectDetails if needed
 
   const [isJobCardModalOpen, setIsJobCardModalOpen] = useState(false);
   const [editingJobCard, setEditingJobCard] = useState<JobCard | null>(null);
@@ -330,7 +352,6 @@ const ProjectDetailsPage: React.FC = () => {
   const [selectedFileForUpload, setSelectedFileForUpload] = useState<File | null>(null);
   const [isSubmittingFile, setIsSubmittingFile] = useState(false);
   
-  // State for Admin Time Logs tab
   const [allProjectTimeLogs, setAllProjectTimeLogs] = useState<(TimeLog & { jobCardTitle?: string, architectName?: string })[]>([]);
 
 
@@ -339,75 +360,150 @@ const ProjectDetailsPage: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-        const fetchedProject = await fetchProjectDetailsAPI(projectId); //This should include jobCards with their timeLogs
-        if (fetchedProject) {
-            setProject(fetchedProject);
-            // Denormalize time logs for admin tab here if not done by API
-            if (user?.role === UserRole.ADMIN) {
-                const logs: (TimeLog & { jobCardTitle?: string, architectName?: string })[] = [];
-                // This assumes fetchProjectDetailsAPI returns projects with jobCards and timeLogs
-                // And we'd need to fetch user names if not included in log/jobCard data
-                fetchedProject.jobCards?.forEach(jc => {
-                    jc.timeLogs?.forEach(tl => {
-                        // const architect = await fetchUserAPI(tl.architectId); // Potentially N+1, better if backend denormalizes
-                        logs.push({
-                            ...tl,
-                            jobCardTitle: jc.title,
-                            architectName: tl.architectId // Placeholder, replace with actual name if fetched
-                        });
-                    });
-                });
-                logs.sort((a,b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
-                setAllProjectTimeLogs(logs);
+      const fetchedProjectCore = await fetchProjectDetailsAPI(projectId);
+
+      if (fetchedProjectCore) {
+        const jobCardsPHP: JobCardPHPResponse[] = await fetchJobCardsForProjectAPI(projectId);
+
+        const mappedJobCards: JobCard[] = await Promise.all(jobCardsPHP.map(async (jcPHP) => {
+            let timeLogsForThisCard: TimeLog[] = [];
+            try {
+                const timeLogsPHP: TimeLogPHPResponse[] = await fetchTimeLogsForJobCardAPI(jcPHP.id);
+                timeLogsForThisCard = timeLogsPHP.map(tlPHP => ({
+                    id: String(tlPHP.id),
+                    jobCardId: String(tlPHP.job_card_id),
+                    architectId: String(tlPHP.user_id),
+                    startTime: tlPHP.start_time,
+                    endTime: tlPHP.end_time,
+                    durationMinutes: tlPHP.duration_minutes,
+                    notes: tlPHP.notes || undefined,
+                    manualEntry: false,
+                    createdAt: tlPHP.created_at,
+                    // logger_username can be stored on a temporary/display version of TimeLog if needed
+                }));
+            } catch (logError) {
+                console.error(`Failed to fetch time logs for job card ${jcPHP.id}:`, logError);
             }
 
+            let totalLoggedMinutesForCard = 0;
+            timeLogsForThisCard.forEach(log => totalLoggedMinutesForCard += log.durationMinutes);
 
-            if (user && user.role === UserRole.FREELANCER) {
-                const fetchedApplications = await fetchApplicationsForProjectAPI(projectId);
-                const existingApplication = fetchedApplications.find(app => app.freelancerId === user.id);
-                setHasApplied(!!existingApplication);
+            let statusEnum: JobCardStatus;
+            const backendStatus = jcPHP.status.toLowerCase().replace('-', '_'); // Normalize e.g. in-progress to in_progress
+            switch (backendStatus) {
+                case 'todo': statusEnum = JobCardStatus.TODO; break;
+                case 'in_progress': statusEnum = JobCardStatus.IN_PROGRESS; break;
+                case 'pending_review': statusEnum = JobCardStatus.PENDING_REVIEW; break;
+                case 'completed': statusEnum = JobCardStatus.COMPLETED; break;
+                default: statusEnum = JobCardStatus.TODO;
             }
-            const fetchedFiles = await fetchProjectFilesAPI(projectId);
-            setProjectFiles(fetchedFiles);
-        } else { 
-            setError("Project not found."); 
-            setProject(null); 
+
+            return {
+                id: String(jcPHP.id),
+                projectId: String(jcPHP.project_id),
+                title: jcPHP.title,
+                description: jcPHP.description || '',
+                status: statusEnum,
+                assignedArchitectId: jcPHP.assigned_freelancer_id ? String(jcPHP.assigned_freelancer_id) : undefined,
+                assignedArchitectName: jcPHP.assigned_freelancer_username || undefined,
+                estimatedTime: jcPHP.estimated_hours !== null ? Number(jcPHP.estimated_hours) : undefined,
+                createdAt: jcPHP.created_at,
+                updatedAt: jcPHP.updated_at,
+                timeLogs: timeLogsForThisCard,
+                actualTimeLogged: totalLoggedMinutesForCard / 60,
+            };
+        }));
+
+        const fullProjectData: Project = {
+            ...fetchedProjectCore,
+            id: String(fetchedProjectCore.id),
+            clientId: String(fetchedProjectCore.clientId),
+            assignedFreelancerId: fetchedProjectCore.assignedFreelancerId ? String(fetchedProjectCore.assignedFreelancerId) : undefined,
+            jobCards: mappedJobCards,
+        };
+        setProject(fullProjectData);
+
+        if (user?.role === UserRole.ADMIN && fetchedProjectCore) {
+            try {
+                const projectTimeLogsPHP: TimeLogPHPResponse[] = await fetchTimeLogsForProjectAPI(projectId);
+                const mappedProjectTimeLogs = projectTimeLogsPHP.map(tlPHP => ({
+                    id: String(tlPHP.id),
+                    jobCardId: String(tlPHP.job_card_id),
+                    architectId: String(tlPHP.user_id),
+                    architectName: tlPHP.logger_username,
+                    jobCardTitle: tlPHP.job_card_title,
+                    startTime: tlPHP.start_time,
+                    endTime: tlPHP.end_time,
+                    durationMinutes: tlPHP.duration_minutes,
+                    notes: tlPHP.notes || undefined,
+                    manualEntry: false,
+                    createdAt: tlPHP.created_at,
+                }));
+                mappedProjectTimeLogs.sort((a,b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+                setAllProjectTimeLogs(mappedProjectTimeLogs);
+            } catch (projectLogError) {
+                console.error(`Failed to fetch all time logs for project ${projectId}:`, projectLogError);
+            }
         }
+
+        if (user && user.role === UserRole.FREELANCER) {
+            const fetchedApplications = await fetchApplicationsForProjectAPI(projectId);
+            const existingApplication = fetchedApplications.find(app => String(app.freelancer_id) === user.id);
+            setHasApplied(!!existingApplication);
+        }
+        const fetchedFiles = await fetchProjectFilesAPI(projectId);
+        setProjectFiles(fetchedFiles);
+
+      } else {
+        setError("Project not found.");
+        setProject(null);
+      }
     } catch (err: any) {
         console.error("Error loading project details:", err);
         setError(err.message || "Failed to load project details. Please try again.");
         setProject(null);
-    } finally {
-        setIsLoading(false);
-    }
+    } finally { setIsLoading(false); }
   }, [projectId, user]);
 
-  useEffect(() => { loadProjectDetails(); }, [loadProjectDetails, activeTimerInfo?.jobCardId]); // Reload on active timer change
+  useEffect(() => { loadProjectDetails(); }, [loadProjectDetails, activeTimerInfo?.jobCardId]);
   
   const handleOpenJobCardModal = (jobCardToEdit: JobCard | null = null) => {
     setEditingJobCard(jobCardToEdit);
     setIsJobCardModalOpen(true);
   };
 
-  const handleJobCardFormSubmit = async (jobCardData: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt' | 'projectId' | 'status' | 'assignedArchitectName' | 'timeLogs' | 'actualTimeLogged'>) => {
+  const handleJobCardFormSubmit = async (
+      formData: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt' | 'projectId' | 'status' | 'assignedArchitectName' | 'timeLogs' | 'actualTimeLogged'> & {status?: JobCardStatus}
+    ) => {
     if (!project || !projectId) return;
-    
-    // Architect name will be populated by backend based on ID
-    const dataToSend = { ...jobCardData };
-    if (!dataToSend.assignedArchitectId && project.assignedFreelancerId) {
-        dataToSend.assignedArchitectId = project.assignedFreelancerId;
-    }
-    
+
     try {
-        if (editingJobCard) {
-            await updateJobCardAPI(projectId, editingJobCard.id, dataToSend);
-        } else {
-            await addJobCardAPI(projectId, dataToSend);
-        }
-        await loadProjectDetails(); 
+      if (editingJobCard) { // UPDATE
+        const payload: UpdateJobCardPayload = {
+          title: formData.title,
+          description: formData.description || null,
+          status: formData.status ? formData.status.toLowerCase().replace('_', '-') : undefined, // Convert enum to backend string
+          assigned_freelancer_id: formData.assignedArchitectId ? parseInt(formData.assignedArchitectId, 10) : null,
+          estimated_hours: formData.estimatedTime !== undefined ? Number(formData.estimatedTime) : null,
+        };
+        await updateJobCardAPI(editingJobCard.id, payload);
+      } else { // CREATE
+        const payload: CreateJobCardPayload = {
+          project_id: parseInt(projectId, 10),
+          title: formData.title,
+          description: formData.description || null,
+          status: formData.status ? formData.status.toLowerCase().replace('_', '-') : 'todo',
+          assigned_freelancer_id: formData.assignedArchitectId ?
+                                    parseInt(formData.assignedArchitectId, 10) :
+                                    (project.assignedFreelancerId ? parseInt(project.assignedFreelancerId, 10) : null),
+          estimated_hours: formData.estimatedTime !== undefined ? Number(formData.estimatedTime) : null,
+        };
+        await createJobCardAPI(payload);
+      }
+      await loadProjectDetails();
     } catch (err: any) {
         console.error("Failed to save job card:", err);
-        alert(err.message || "Failed to save job card."); 
+        alert(err.message || "Failed to save job card.");
     }
     setIsJobCardModalOpen(false);
     setEditingJobCard(null);
@@ -416,32 +512,44 @@ const ProjectDetailsPage: React.FC = () => {
   const handleDeleteJobCard = async (jobCardId: string) => {
     if (!project || !projectId) return;
     if (window.confirm("Are you sure you want to delete this job card?")) {
-        try {
-            await deleteJobCardAPI(projectId, jobCardId);
-            await loadProjectDetails(); 
-        } catch (err: any) {
-            console.error("Failed to delete job card:", err);
-            alert(err.message || "Failed to delete job card."); 
-        }
+      try {
+        await deleteJobCardAPI(jobCardId);
+        await loadProjectDetails();
+      } catch (err: any) {
+          console.error("Failed to delete job card:", err);
+          alert(err.message || "Failed to delete job card.");
+      }
     }
   };
 
-  const handleJobCardStatusUpdate = async (pId: string, jobCardId: string, newStatus: JobCardStatus) => {
+  const handleJobCardStatusUpdate = async (jobCardId: string, newStatus: JobCardStatus) => {
     try {
-        await updateJobCardStatusAPI(pId, jobCardId, newStatus);
-        loadProjectDetails(); 
+      const payload: UpdateJobCardPayload = {
+        status: newStatus.toLowerCase().replace('_', '-')
+      };
+      await updateJobCardAPI(jobCardId, payload);
+      loadProjectDetails();
     } catch (err: any) { 
         console.error("Failed to update job card status:", err); 
-        alert(err.message || "Failed to update status."); 
+        alert(err.message || "Failed to update status.");
     }
   };
 
-  const handleTimeLogSubmit = async (pId: string, jobCardId: string, timeLogData: Omit<TimeLog, 'id'|'createdAt' | 'jobCardId' | 'architectId'>) => {
+  const handleTimeLogSubmit = async (
+      jobCardIdToLog: string,
+      logDataFromModal: Omit<TimeLog, 'id'|'jobCardId'|'architectId'|'createdAt'|'durationMinutes'|'manualEntry'> & {startTime: string, endTime: string, notes?:string}
+  ) => {
     if (!user) return;
-    const fullTimeLogData = { ...timeLogData, jobCardId: jobCardId, architectId: user.id };
+
+    const payload: LogTimePayload = {
+      job_card_id: parseInt(jobCardIdToLog, 10),
+      start_time: logDataFromModal.startTime,
+      end_time: logDataFromModal.endTime,
+      notes: logDataFromModal.notes || null,
+    };
     try {
-        await addTimeLogAPI(pId, jobCardId, fullTimeLogData);
-        loadProjectDetails(); 
+      await logTimeAPI(payload);
+      loadProjectDetails();
     } catch (err: any) { 
         alert(err.message || "Failed to log time."); 
         console.error("Failed to log time:", err);
@@ -458,12 +566,15 @@ const ProjectDetailsPage: React.FC = () => {
     if (!project || !user || !proposal || !bidAmount) return;
     setApplying(true);
     try {
+      // submitApplicationAPI expects SubmitApplicationPayload
+      // Assuming project.id is string, user.id (AuthUser) is number
       await submitApplicationAPI({
-        projectId: project.id, freelancerId: user.id, proposal, 
-        bidAmount: Number(bidAmount), status: 'PendingAdminApproval',
+        project_id: parseInt(project.id, 10),
+        proposal_text: proposal,
+        bid_amount: Number(bidAmount)
       });
       setHasApplied(true);
-      alert(`Application submitted for ${project.title}. It's now pending Admin approval.`); 
+      alert(`Application submitted for ${project.title}.`);
       await loadProjectDetails(); 
     } catch (err: any) {  
         alert(err.message || "Failed to submit application. Please try again."); 
@@ -479,7 +590,13 @@ const ProjectDetailsPage: React.FC = () => {
 
   const handleOpenProjectChat = async () => {
     if (!project || !user) return;
-    const participantIds = Array.from(new Set([user.id, project.clientId, project.assignedFreelancerId, project.adminCreatorId].filter(Boolean) as string[]));
+    // Ensure all IDs are strings for findOrCreateConversationAPI if it expects string[]
+    const participantIds = Array.from(new Set([
+        String(user.id),
+        String(project.clientId),
+        project.assignedFreelancerId ? String(project.assignedFreelancerId) : undefined,
+        project.adminCreatorId ? String(project.adminCreatorId) : undefined
+    ].filter(Boolean) as string[]));
     
     try {
         const conversation = await findOrCreateConversationAPI(participantIds, project.id);
@@ -492,13 +609,16 @@ const ProjectDetailsPage: React.FC = () => {
   
   const handleRequestStatusUpdate = async () => {
     if (!project || !user || user.role !== UserRole.CLIENT) return;
-    const participantIds = [user.id, project.assignedFreelancerId, project.adminCreatorId].filter(Boolean) as string[];
+    const participantIds = [
+        String(user.id),
+        project.assignedFreelancerId ? String(project.assignedFreelancerId) : undefined,
+        project.adminCreatorId ? String(project.adminCreatorId) : undefined
+    ].filter(Boolean) as string[];
     try {
         const conversation = await findOrCreateConversationAPI(participantIds, project.id);
         await sendMessageAPI(conversation.id, {
-            senderId: user.id,
-            content: `Client ${user.name} requests a status update for project '${project.title}'.`,
-            // status is handled by backend based on rules
+            senderId: String(user.id), // Ensure senderId is string if API expects that
+            content: `Client ${user.username} requests a status update for project '${project.title}'.`,
         });
         alert("Status update request sent via messages.");
         navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.id } });
@@ -514,10 +634,10 @@ const ProjectDetailsPage: React.FC = () => {
     const formData = new FormData();
     formData.append('file', selectedFileForUpload);
     formData.append('projectId', project.id);
-    formData.append('uploaderId', user.id);
+    formData.append('uploaderId', String(user.id)); // Ensure uploaderId is string if API expects that
 
     try {
-        await uploadFileAPI(project.id, formData);
+        await uploadFileAPI(project.id, formData); // projectId is string here
         alert("File uploaded successfully.");
         await loadProjectDetails(); 
     } catch (err: any) {
@@ -546,7 +666,7 @@ const ProjectDetailsPage: React.FC = () => {
   if (error) return <div className="p-6 text-center text-red-500 text-xl">{error}</div>;
   if (!project) return <div className="p-6 text-center text-gray-500 text-xl">Project data could not be loaded or found.</div>;
   
-  const getStatusColor = (status: ProjectStatus) => {
+  const getStatusColor = (status: ProjectStatus | string) => { // Allow string for backend statuses not in enum yet
     switch (status) {
       case ProjectStatus.PENDING_APPROVAL: return 'text-orange-600 bg-orange-100';
       case ProjectStatus.OPEN: return 'text-green-600 bg-green-100';
@@ -571,13 +691,13 @@ const ProjectDetailsPage: React.FC = () => {
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
             <h1 className="text-3xl md:text-4xl font-bold text-gray-800 leading-tight">{project.title}</h1>
             <span className={`mt-2 md:mt-0 px-4 py-1.5 text-sm font-semibold rounded-full ${getStatusColor(project.status)}`}>
-              {project.status}
+              {project.status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
             </span>
           </div>
           
           <div className="mb-6 text-sm text-gray-500">
             Posted on: {new Date(project.createdAt).toLocaleDateString()} by {project.clientName || 'Unknown Client'}
-            {project.adminCreatorId && ` (Managed by Admin: ${project.adminCreatorId})`}
+            {project.adminCreatorId && ` (Managed by Admin ID: ${project.adminCreatorId})`}
           </div>
 
           {user?.role === UserRole.CLIENT && project.status === ProjectStatus.IN_PROGRESS && (
@@ -653,7 +773,7 @@ const ProjectDetailsPage: React.FC = () => {
                         {project.jobCards.map(jc => (
                         <JobCardDisplay 
                             key={jc.id} jobCard={jc} project={project}
-                            isAssignedToCurrentUser={!!user && user.role === UserRole.FREELANCER && (jc.assignedArchitectId === user.id || (!jc.assignedArchitectId && project.assignedFreelancerId === user.id))}
+                            isAssignedToCurrentUser={!!user && user.role === UserRole.FREELANCER && (jc.assignedArchitectId === String(user.id) || (!jc.assignedArchitectId && project.assignedFreelancerId === String(user.id)))}
                             isAdminView={isAdminView}
                             onStatusUpdate={handleJobCardStatusUpdate}
                             onTimeLog={handleTimeLogSubmit}
@@ -683,7 +803,7 @@ const ProjectDetailsPage: React.FC = () => {
                  <div>
                     <div className="flex justify-between items-center mb-4">
                         <h3 className="text-xl font-semibold text-gray-700">Project Files</h3>
-                        {(user?.role === UserRole.ADMIN || user?.id === project.clientId || user?.id === project.assignedFreelancerId ) && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED && (
+                        {(user?.role === UserRole.ADMIN || String(user?.id) === project.clientId || String(user?.id) === project.assignedFreelancerId ) && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED && (
                             <Button onClick={() => setIsFileUploadModalOpen(true)} variant="primary" size="sm" leftIcon={<UploadIcon />}>Upload File</Button>
                         )}
                     </div>
@@ -706,7 +826,7 @@ const ProjectDetailsPage: React.FC = () => {
                                               <span className="hidden sm:inline">Download</span>
                                           </Button>
                                         </a>
-                                        {(isAdminView || user?.id === file.uploadedBy) && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED && (
+                                        {(isAdminView || String(user?.id) === file.uploadedBy) && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED && (
                                             <Button variant="ghost" size="sm" onClick={() => handleFileDelete(file.id)} className="text-red-500 hover:text-red-700 p-1" leftIcon={<TrashIcon className="w-4 h-4"/>}>
                                                  <span className="hidden sm:inline">Delete</span>
                                             </Button>

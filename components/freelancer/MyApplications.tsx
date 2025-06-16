@@ -1,74 +1,84 @@
-import React, { useState, useEffect } from 'react';
-import { Application, Project, ProjectStatus } from '../../types';
-import { fetchUserApplicationsAPI, fetchProjectDetailsAPI } from '../../apiService';
+import React, { useState, useEffect, useCallback } from 'react';
+import { ProjectStatus, UserRole } from '../../types'; // Application type removed as FreelancerApplicationResponseItem is more specific
+import {
+    fetchFreelancerApplicationsAPI,
+    FreelancerApplicationResponseItem, // Use this type
+    withdrawApplicationAPI,
+    ApiError   // Import withdrawApplicationAPI and ApiError
+} from '../../apiService';
 import { useAuth } from '../AuthContext';
 import LoadingSpinner from '../shared/LoadingSpinner';
 import { Link } from 'react-router-dom';
 import { NAV_LINKS } from '../../constants';
-import { EyeIcon, DocumentTextIcon } from '../shared/IconComponents';
+import { EyeIcon, DocumentTextIcon, XCircleIcon } from '../shared/IconComponents'; // Added XCircleIcon
 import Button from '../shared/Button';
 
-
-interface ApplicationWithProject extends Application {
-    projectTitle?: string;
-    projectStatus?: ProjectStatus;
-}
+// Remove ApplicationWithProject interface, use FreelancerApplicationResponseItem directly
 
 const MyApplications: React.FC = () => {
   const { user } = useAuth();
-  const [applications, setApplications] = useState<ApplicationWithProject[]>([]);
+  // Use FreelancerApplicationResponseItem for state
+  const [applications, setApplications] = useState<FreelancerApplicationResponseItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    const loadApplications = async () => {
-      if (!user) {
+  const loadApplications = useCallback(async () => { // useCallback for stable reference
+    if (!user || user.role !== UserRole.FREELANCER) { // Ensure user is freelancer
+        setApplications([]);
         setIsLoading(false);
+        // setError("Only freelancers can view this page."); // Optional: set error for non-freelancers
         return;
-      }
-      setIsLoading(true);
-      setError(null);
-      try {
-        const myApps = await fetchUserApplicationsAPI(user.id);
-        
-        const appsWithProjectData: ApplicationWithProject[] = await Promise.all(
-          myApps.map(async (app) => {
-            try {
-                const project = await fetchProjectDetailsAPI(app.projectId);
-                return {
-                ...app,
-                projectTitle: project?.title || "Project Not Found",
-                projectStatus: project?.status,
-                };
-            } catch (projectError) {
-                console.warn(`Could not fetch details for project ${app.projectId}:`, projectError);
-                 return {
-                ...app,
-                projectTitle: "Project Details Unavailable",
-                projectStatus: undefined, // Or a specific status like 'Unknown'
-                };
-            }
-          })
-        );
+    }
+    setIsLoading(true);
+    setError(null);
+    try {
+      const myApps = await fetchFreelancerApplicationsAPI(); // Use new API
+      // Data already contains project_title and project_status
+      setApplications(myApps.sort((a,b) => new Date(b.applied_at).getTime() - new Date(a.applied_at).getTime()));
+    } catch (err: any) {
+      console.error("Failed to load applications:", err);
+      setError(err.message || "Could not load your applications.");
+    } finally {
+      setIsLoading(false);
+    }
+  }, [user]); // Add user to dependency array
 
-        setApplications(appsWithProjectData.sort((a,b) => new Date(b.appliedAt).getTime() - new Date(a.appliedAt).getTime()));
-      } catch (err: any) {
-        console.error("Failed to load applications:", err);
-        setError(err.message || "Could not load your applications. Please try again later.");
-      } finally {
-        setIsLoading(false);
-      }
-    };
+  useEffect(() => {
     loadApplications();
-  }, [user]);
+  }, [loadApplications]); // useEffect depends on loadApplications
 
-  const getStatusColor = (status: Application['status']) => {
+  const handleWithdrawApplication = async (applicationId: number | string) => {
+    if (!window.confirm("Are you sure you want to withdraw this application?")) return;
+    try {
+      await withdrawApplicationAPI(String(applicationId));
+      alert("Application withdrawn successfully.");
+      loadApplications(); // Refresh the list
+    } catch (err: any) {
+      if (err instanceof ApiError) {
+        setError(err.message || "Failed to withdraw application.");
+        alert(err.message || "Failed to withdraw application.");
+      } else {
+        setError("An unexpected error occurred while withdrawing.");
+        alert("An unexpected error occurred while withdrawing.");
+      }
+      console.error("Withdraw application error:", err);
+    }
+  };
+
+  const getStatusColor = (status: string) => { // status is now string from FreelancerApplicationResponseItem
     switch (status) {
-      case 'PendingAdminApproval':
+      case 'pending': // Assuming 'pending' is the value from backend
+      case 'PendingAdminApproval': // Keep old ones for compatibility if needed or update
       case 'PendingClientReview':
         return 'bg-yellow-100 text-yellow-700';
-      case 'Accepted': return 'bg-green-100 text-green-700';
-      case 'Rejected': return 'bg-red-100 text-red-700';
+      case 'accepted': // Assuming 'accepted'
+      case 'Accepted':
+        return 'bg-green-100 text-green-700';
+      case 'rejected': // Assuming 'rejected'
+      case 'Rejected':
+        return 'bg-red-100 text-red-700';
+      case 'withdrawn_by_freelancer':
+        return 'bg-orange-100 text-orange-700';
       default: return 'bg-gray-100 text-gray-700';
     }
   };
@@ -77,7 +87,7 @@ const MyApplications: React.FC = () => {
     return <LoadingSpinner text="Loading your applications..." className="p-6" />;
   }
 
-  if (!user) {
+  if (!user) { // Initial check before loading state is known
     return <p className="p-6 text-center text-red-500">You must be logged in to view your applications.</p>;
   }
   
@@ -85,6 +95,9 @@ const MyApplications: React.FC = () => {
     return <p className="p-6 text-center text-red-500 bg-red-50 rounded-md">{error}</p>;
   }
 
+  if (user.role !== UserRole.FREELANCER && !isLoading) { // After loading, if still not freelancer
+      return <p className="p-6 text-center text-red-500">This page is for freelancers only.</p>;
+  }
 
   if (applications.length === 0 && !isLoading) {
     return (
@@ -105,33 +118,44 @@ const MyApplications: React.FC = () => {
       <div className="bg-white shadow-xl rounded-lg overflow-hidden">
         <ul className="divide-y divide-gray-200">
           {applications.map((app) => (
-            <li key={app.id} className="p-4 sm:p-6 hover:bg-gray-50 transition-colors">
+            <li key={app.application_id} className="p-4 sm:p-6 hover:bg-gray-50 transition-colors">
               <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center">
                 <div>
-                  <Link to={NAV_LINKS.PROJECT_DETAILS.replace(':id', app.projectId)} className="text-xl font-semibold text-blue-600 hover:text-blue-700 hover:underline">
-                    {app.projectTitle}
+                  <Link to={NAV_LINKS.PROJECT_DETAILS.replace(':id', String(app.project_id))} className="text-xl font-semibold text-primary hover:text-primary-hover hover:underline">
+                    {app.project_title}
                   </Link>
                   <p className="text-sm text-gray-500 mt-1">
-                    Applied on: {new Date(app.appliedAt).toLocaleDateString()}
+                    Applied on: {new Date(app.applied_at).toLocaleDateString()}
                   </p>
                 </div>
-                <span className={`mt-2 sm:mt-0 px-3 py-1 text-sm font-semibold rounded-full ${getStatusColor(app.status)}`}>
-                  {app.status.replace(/([A-Z])/g, ' $1').trim()} 
+                <span className={`mt-2 sm:mt-0 px-3 py-1 text-sm font-semibold rounded-full ${getStatusColor(app.application_status)}`}>
+                  {app.application_status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                 </span>
               </div>
               <div className="mt-3 space-y-2 text-sm text-gray-700">
-                <p><strong className="font-medium">Bid Amount:</strong> R {app.bidAmount.toLocaleString()}</p>
+                <p><strong className="font-medium">Bid Amount:</strong> R {app.bid_amount ? app.bid_amount.toLocaleString() : 'N/A'}</p>
                 <p><strong className="font-medium">Proposal:</strong></p>
-                <p className="pl-2 border-l-2 border-gray-200 italic line-clamp-3">{app.proposal}</p>
+                <p className="pl-2 border-l-2 border-gray-200 italic line-clamp-3 whitespace-pre-wrap">{app.proposal_text}</p>
+                <p className="text-xs text-gray-500">Project Status: {app.project_status}</p>
               </div>
-              {app.status === 'Accepted' && app.projectStatus !== ProjectStatus.COMPLETED && (
-                 <div className="mt-3">
-                     <Link to={NAV_LINKS.PROJECT_DETAILS.replace(':id', app.projectId)} 
-                           className="inline-flex items-center px-3 py-1.5 border border-transparent text-xs font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500">
-                         <EyeIcon className="w-4 h-4 mr-1.5"/> View Project Workspace
-                     </Link>
-                 </div>
-              )}
+              <div className="mt-3 flex items-center space-x-3">
+                {app.application_status === 'accepted' && app.project_status !== ProjectStatus.COMPLETED && (
+                   <Link to={NAV_LINKS.PROJECT_DETAILS.replace(':id', String(app.project_id))} >
+                       <Button size="xs" variant="successOutline" className="inline-flex items-center">
+                           <EyeIcon className="w-4 h-4 mr-1.5"/> View Project Workspace
+                       </Button>
+                   </Link>
+                )}
+                {app.application_status === 'pending' && (
+                  <Button
+                    size="xs"
+                    variant="warningOutline"
+                    onClick={() => handleWithdrawApplication(app.application_id)}
+                  >
+                    <XCircleIcon className="w-4 h-4 mr-1"/> Withdraw Application
+                  </Button>
+                )}
+              </div>
             </li>
           ))}
         </ul>
