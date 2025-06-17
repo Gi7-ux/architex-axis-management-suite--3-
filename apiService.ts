@@ -82,6 +82,67 @@ export interface MarkNotificationsReadResponse {
 }
 // --- Notification Service Types --- END
 
+// --- User Profile Service Types --- START
+export interface Skill { // Ensure this is exported and defined if not already
+  id: number;
+  name: string;
+}
+
+export interface MyFullProfileResponse {
+  id: number;
+  username: string;
+  email: string;
+  role: UserRole; // Assuming UserRole enum/type exists from './types'
+  name: string | null;
+  phone_number: string | null;
+  company: string | null;
+  experience: string | null;
+  hourly_rate: number | null;
+  avatar_url: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  skills: Skill[];
+}
+
+export interface UpdateMyProfilePayload {
+  name?: string | null;
+  phone_number?: string | null;
+  company?: string | null;
+  experience?: string | null;
+  avatar_url?: string | null;
+  hourly_rate?: number | null;
+  skill_ids?: number[];
+}
+
+export interface UpdateProfileResponse { // Generic response for profile updates
+  message: string;
+}
+// --- User Profile Service Types --- END
+
+// --- Freelancer Specific Types --- START
+export interface FreelancerDashboardStatsResponse {
+  myTotalJobCards: number;
+  myInProgressJobCards: number;
+  openProjectsCount: number;
+  myApplicationsCount: number;
+}
+
+export interface MyJobCardItem {
+  id: number;
+  project_id: number;
+  project_title: string;
+  title: string;
+  description: string | null;
+  status: string; // Consider JobCardStatus from './types' if applicable
+  assigned_freelancer_id: number | null; // Should match current authenticated user's ID
+  estimated_hours: number | null;
+  created_at: string;
+  updated_at: string;
+  // Add any other relevant fields returned by the backend if necessary
+}
+// --- Freelancer Specific Types --- END
+
 
 // const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api'; // Example if using build-time env vars
 const API_BASE_URL = '/backend'; // Using relative path for API calls
@@ -320,32 +381,22 @@ export const adminDeleteUserAPI = (userId: number | string): Promise<AdminAction
 };
 
 // --- User Service ---
-export const fetchUsersAPI = (role?: UserRole): Promise<User[]> => {
-  const endpoint = role ? `/users?role=${role}` : '/users';
-  // Assuming fetching users list might require authentication in the future with PHP backend
-  // For now, let's assume it's a protected route.
-  // The actual PHP backend for '/users' is not implemented yet.
-  // This is a placeholder for how it would be called.
-  // If it's a public list, set requiresAuth to false.
-  // If the PHP equivalent is /api.php?action=get_users, change the endpoint.
-  console.warn("fetchUsersAPI is pointing to a generic /users endpoint; PHP backend for this is not yet defined. Assuming requiresAuth for now.");
-  return apiFetch<User[]>(endpoint, {}, true); // Example: mark as requiring auth
+// (Existing fetchUsersAPI, fetchUserAPI etc. would remain here)
+// ...
+
+// NEW User Profile Management functions
+export const fetchMyFullProfileAPI = (): Promise<MyFullProfileResponse> => {
+  return apiFetch<MyFullProfileResponse>(`/api.php?action=get_my_profile_details`, {
+    method: 'GET',
+  }, true); // Requires Auth
 };
-export const fetchUserAPI = (userId: string): Promise<User> => {
-  // This would likely require auth and a new PHP endpoint e.g. /api.php?action=get_user&id=${userId}
-  console.warn("fetchUserAPI is pointing to a generic /users/:id endpoint; PHP backend for this is not yet defined. Assuming requiresAuth for now.");
-  return apiFetch<User>(`/users/${userId}`, {}, true);
+
+export const updateMyProfileAPI = (payload: UpdateMyProfilePayload): Promise<UpdateProfileResponse> => {
+  return apiFetch<UpdateProfileResponse>(`/api.php?action=update_my_profile`, {
+    method: 'POST', // Or 'PUT' as per backend implementation
+    body: JSON.stringify(payload),
+  }, true); // Requires Auth
 };
-export const addUserAPI = (userData: Omit<User, 'id' | 'avatarUrl'>): Promise<User> => {
-  return apiFetch<User>('/users', { method: 'POST', body: JSON.stringify(userData) });
-};
-export const updateUserAPI = (userId: string, userData: Partial<User>): Promise<User> => {
-  return apiFetch<User>(`/users/${userId}`, { method: 'PATCH', body: JSON.stringify(userData) });
-};
-export const deleteUserAPI = (userId: string): Promise<void> => {
-  return apiFetch<void>(`/users/${userId}`, { method: 'DELETE' });
-};
-export const fetchUserApplicationsAPI = (userId: string): Promise<Application[]> => apiFetch<Application[]>(`/users/${userId}/applications`);
 
 
 // --- Project Service ---
@@ -974,9 +1025,22 @@ export const fetchAdminDashboardStatsAPI = (): Promise<AdminDashboardStatsRespon
   }, true); // Requires Admin Auth
 };
 
-export const fetchFreelancerDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
-export const fetchClientDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
-export const fetchRecentActivityAPI = (userId: string): Promise<any[]> => apiFetch<any[]>(`/users/${userId}/recent-activity`);
+// Updated fetchFreelancerDashboardStatsAPI
+export const fetchFreelancerDashboardStatsAPI = (): Promise<FreelancerDashboardStatsResponse> => {
+  return apiFetch<FreelancerDashboardStatsResponse>(`/api.php?action=get_freelancer_dashboard_stats`, {
+    method: 'GET',
+  }, true); // Requires Auth
+};
+
+// New fetchMyJobCardsAPI
+export const fetchMyJobCardsAPI = (): Promise<MyJobCardItem[]> => {
+  return apiFetch<MyJobCardItem[]>(`/api.php?action=get_my_job_cards`, {
+    method: 'GET',
+  }, true); // Requires Auth
+};
+
+export const fetchClientDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`); // This seems like a placeholder or old
+export const fetchRecentActivityAPI = (userId: string): Promise<any[]> => apiFetch<any[]>(`/users/${userId}/recent-activity`); // This seems like a placeholder or old
 export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`);
 
 // Reports

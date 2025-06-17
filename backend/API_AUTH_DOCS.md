@@ -101,6 +101,107 @@ Requests are typically made by appending a `?action=some_action` query parameter
   }
   ```
 
+## User Profile Management
+
+Endpoints for any authenticated user to manage their own profile.
+
+### 1. Get My Profile Details
+- **Action**: `get_my_profile_details`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_my_profile_details`
+- **Authentication**: **Required** (Bearer Token).
+- **Description**: Fetches the detailed profile information for the currently authenticated user, including their associated skills.
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "id": 123,
+    "username": "testuser",
+    "email": "test@example.com",
+    "role": "freelancer",
+    "name": "Test User Full Name",
+    "phone_number": "555-1234",
+    "company": "Test Inc.",
+    "experience": "5 years in web development focusing on PHP and React.",
+    "hourly_rate": 60.50, // Null if not applicable (e.g., for clients)
+    "avatar_url": "https://example.com/avatars/testuser.png",
+    "is_active": true,
+    "created_at": "YYYY-MM-DD HH:MM:SS",
+    "updated_at": "YYYY-MM-DD HH:MM:SS",
+    "skills": [
+      {"id": 1, "name": "PHP"},
+      {"id": 2, "name": "React"}
+      // ... other skills
+    ]
+  }
+  ```
+- **Response (Error - 401 Unauthorized / 403 Forbidden)**:
+  ```json
+  {
+    "error": "Authorization header missing or malformed. Usage: Bearer <token>"
+    // or "Invalid or expired session token. Please log in again."
+  }
+  ```
+- **Response (Error - 404 Not Found)**:
+  ```json
+  {
+    "error": "User profile not found." // Should be rare if user is authenticated
+  }
+  ```
+- **Response (Error - 500 Server Error)**:
+  ```json
+  {
+    "error": "Failed to prepare/execute statement for user details/skills."
+  }
+  ```
+
+### 2. Update My Profile
+- **Action**: `update_my_profile`
+- **Method**: `POST` (or `PUT`)
+- **URL**: `/backend/api.php?action=update_my_profile`
+- **Authentication**: **Required** (Bearer Token).
+- **Description**: Allows the authenticated user to update their own profile information.
+- **Request Body (JSON) - Include only fields to update**:
+  ```json
+  {
+    "name": "Updated Full Name", // Optional
+    "phone_number": "555-5678", // Optional
+    "company": "Updated Company LLC", // Optional
+    "experience": "Updated bio with new achievements.", // Optional
+    "avatar_url": "https://example.com/avatars/new_avatar.png", // Optional
+    "hourly_rate": 75.00, // Optional; only applicable if user is 'freelancer'. Must not be negative.
+    "skill_ids": [1, 3, 5] // Optional; replaces all existing skills with the new set. An empty array [] removes all skills.
+  }
+  ```
+  *Fields like `username`, `email`, `role`, `password`, `is_active` cannot be updated via this endpoint.*
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "Profile updated successfully."
+    // or "No profile data provided or no changes made."
+  }
+  ```
+- **Response (Error - 400 Bad Request)**:
+  ```json
+  {
+    "error": "No update data provided or invalid JSON."
+    // or "Hourly rate cannot be negative."
+    // or "One or more provided skill IDs are invalid."
+  }
+  ```
+- **Response (Error - 401 Unauthorized / 403 Forbidden)**:
+  ```json
+  {
+    "error": "Authorization header missing or malformed. Usage: Bearer <token>"
+    // or "Invalid or expired session token. Please log in again."
+  }
+  ```
+- **Response (Error - 500 Server Error)**:
+  ```json
+  {
+    "error": "Failed to update profile: <specific DB error or preparation failure>"
+  }
+  ```
+
 ## Admin Specific Endpoints
 
 These endpoints are typically restricted to users with the 'admin' role.
@@ -511,6 +612,94 @@ These endpoints are typically restricted to users with the 'admin' role.
   ```json
   {
     "error": "Error message (e.g., Forbidden)."
+  }
+  ```
+
+## Freelancer Dashboard Endpoints
+
+### 1. Get Freelancer Dashboard Stats
+- **Action**: `get_freelancer_dashboard_stats`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_freelancer_dashboard_stats`
+- **Authentication**: **Required** (Bearer Token), Role: `freelancer`.
+- **Description**: Retrieves key statistics for the authenticated freelancer's dashboard.
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "myTotalJobCards": 5,
+    "myInProgressJobCards": 2,
+    "openProjectsCount": 10,
+    "myApplicationsCount": 7
+  }
+  ```
+- **Response (Error - 401 Unauthorized)**:
+  ```json
+  {
+    "error": "Authorization header missing or malformed. Usage: Bearer <token>"
+  }
+  ```
+- **Response (Error - 403 Forbidden)**:
+  ```json
+  {
+    "error": "Invalid or expired session token. Please log in again."
+    // or "Forbidden: Only freelancers can access these statistics."
+  }
+  ```
+
+### 2. Get My Job Cards
+- **Action**: `get_my_job_cards`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_my_job_cards`
+- **Authentication**: **Required** (Bearer Token), Role: `freelancer`.
+- **Description**: Fetches all job cards assigned to the authenticated freelancer. Each job card includes `project_id` and `project_title` for context. Results are ordered by the job card's last update time (descending).
+- **Response (Success - 200 OK)**:
+  ```json
+  [
+    {
+      "id": 101,
+      "project_id": 123,
+      "title": "Develop homepage banner",
+      "description": "Create a responsive banner for the homepage.",
+      "status": "in_progress",
+      "assigned_freelancer_id": 789,
+      "estimated_hours": 10.0,
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "updated_at": "YYYY-MM-DD HH:MM:SS",
+      "project_title": "E-commerce Website Redesign"
+    },
+    {
+      "id": 105,
+      "project_id": 124,
+      "title": "Setup database schema",
+      "description": null,
+      "status": "todo",
+      "assigned_freelancer_id": 789,
+      "estimated_hours": 5.5,
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "updated_at": "YYYY-MM-DD HH:MM:SS",
+      "project_title": "Mobile App Development"
+    }
+    // ... more job cards
+  ]
+  ```
+- **Response (Error - 401 Unauthorized)**:
+  ```json
+  {
+    "error": "Authorization header missing or malformed. Usage: Bearer <token>"
+  }
+  ```
+- **Response (Error - 403 Forbidden)**:
+  ```json
+  {
+    "error": "Invalid or expired session token. Please log in again."
+    // or "Forbidden: Only freelancers can access their job cards."
+  }
+  ```
+- **Response (Error - 500 Server Error)**:
+  ```json
+  {
+    "error": "Failed to prepare statement for fetching job cards."
+    // or "Failed to execute statement for fetching job cards."
   }
   ```
 
