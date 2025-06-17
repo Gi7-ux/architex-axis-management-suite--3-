@@ -182,3 +182,127 @@ export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<M
 
 // Reports
 export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetch<Project[]>('/reports/projects-with-timelogs');
+
+// --- NEW PHP Backend API Service ---
+
+const PHP_API_BASE_URL = '/backend/api.php'; // Base URL for the new PHP backend
+
+// Assuming the existing User type from './types' is largely compatible
+// If not, a specific interface for PHP-backed user data might be needed:
+// interface PhpUser {
+//   id: number;
+//   username: string;
+//   email: string;
+//   first_name: string | null;
+//   last_name: string | null;
+//   role: 'admin' | 'client' | 'freelancer';
+//   // ... other fields as returned by PHP backend
+// }
+
+interface PhpApiResponse<T> {
+  status: 'success' | 'error';
+  data?: T;
+  message?: string;
+}
+
+/**
+ * Fetches all users from the NEW PHP backend.
+ */
+export const getUsersFromPhp = async (): Promise<User[]> => {
+  try {
+    const response = await fetch(`${PHP_API_BASE_URL}?action=getUsers`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      let errorMessage = `HTTP error ${response.status}: ${response.statusText}`;
+      try {
+        const errorResult: PhpApiResponse<null> = await response.json();
+        if (errorResult.message) {
+          errorMessage = errorResult.message;
+        }
+      } catch (e) {
+        // Ignore if error response is not JSON
+      }
+      throw new Error(errorMessage);
+    }
+
+    const result: PhpApiResponse<User[]> = await response.json();
+
+    if (result.status === 'success' && result.data) {
+      return result.data.map(user => ({
+        ...user,
+        // Perform any necessary transformations if PHP backend returns slightly different structure
+        // For example, if is_active is 0/1, map to boolean if your User type expects boolean
+        // is_active: user.is_active === 1, 
+      }));
+    } else {
+      throw new Error(result.message || 'Failed to fetch users from PHP backend');
+    }
+  } catch (error) {
+    console.error('Error in getUsersFromPhp:', error);
+    throw error;
+  }
+};
+
+interface CreateUserPhpPayload {
+  username: string;
+  email: string;
+  password: string; // Changed from password_hash to password
+  role: 'admin' | 'client' | 'freelancer';
+  first_name?: string;
+  last_name?: string;
+  // Add other necessary fields as expected by your PHP createUser action
+}
+
+/**
+ * Creates a new user via the NEW PHP backend.
+ */
+export const createUserInPhp = async (userData: CreateUserPhpPayload): Promise<User> => {
+  try {
+    const response = await fetch(`${PHP_API_BASE_URL}?action=createUser`, { // Assuming createUser action
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(userData), // userData now contains raw password
+    });
+
+    if (!response.ok) {
+      let errorMessage = `HTTP error ${response.status}: ${response.statusText}`;
+      try {
+        const errorResult: PhpApiResponse<null> = await response.json();
+        if (errorResult.message) {
+          errorMessage = errorResult.message;
+        }
+      } catch (e) {
+        // Ignore if error response is not JSON
+      }
+      throw new Error(errorMessage);
+    }
+
+    const result: PhpApiResponse<User> = await response.json(); // Assuming PHP returns the created user
+
+    if (result.status === 'success' && result.data) {
+      return {
+        ...result.data
+        // Perform any necessary transformations here as well
+      };
+    } else {
+      throw new Error(result.message || 'Failed to create user in PHP backend');
+    }
+  } catch (error) {
+    console.error('Error in createUserInPhp:', error);
+    throw error;
+  }
+};
+
+// Add other functions to interact with your PHP backend as needed.
+// Example:
+// export const getProjects = async (): Promise<Project[]> => { ... };
+// export const createProject = async (projectData: ProjectPayload): Promise<Project> => { ... };
+
+// You would also define interfaces for Project, ProjectPayload etc.
