@@ -10,12 +10,11 @@ import {
     // NEW Time Log APIs:
     logTimeAPI,
     fetchTimeLogsForJobCardAPI,
-    fetchTimeLogsForProjectAPI, // For admin/client project-wide view
-    updateTimeLogAPI, // Optional for edit
-    deleteTimeLogAPI, // Optional for delete
-    uploadFileAPI, deleteFileAPI, findOrCreateConversationAPI, sendMessageAPI,
+    fetchTimeLogsForProjectAPI,
+    updateTimeLogAPI,
+    deleteTimeLogAPI,
+    uploadFileAPI, deleteFileAPI, findOrCreateConversationAPI, sendMessageAPI, ApiError as ApiErrorType, // Import ApiErrorType
     CreateJobCardPayload, UpdateJobCardPayload, JobCardPHPResponse,
-    // New Time Log Types:
     LogTimePayload,
     UpdateTimeLogPayload,
     TimeLogPHPResponse,
@@ -24,8 +23,9 @@ import {
 import { NAV_LINKS, getMockFileIconPath, formatDurationToHHMMSS } from '../../constants';
 import LoadingSpinner from './shared/LoadingSpinner';
 import Button from './shared/Button';
-import { useAuth } from '../AuthContext';
+import { useAuth } from './AuthContext';
 import Modal from './shared/Modal';
+import ErrorMessage from './shared/ErrorMessage'; // Import ErrorMessage
 import { ClockIcon, CheckCircleIcon, PencilIcon as EditIcon, PlayIcon, StopIcon, PlusIcon, TrashIcon, ChatBubbleLeftRightIcon, FolderOpenIcon, PaperClipIcon, DownloadIcon, UploadIcon, EyeIcon, ArrowLeftIcon } from './shared/IconComponents'; 
 
 // Helper to format minutes to HH:MM string (Could be moved to a utils file)
@@ -39,64 +39,76 @@ const formatMinutesToHM = (minutes: number): string => {
 interface TimeLogModalProps {
   isOpen: boolean;
   onClose: () => void;
-  // Updated onSubmit to match the data structure ProjectDetailsPage.handleTimeLogSubmit expects
   onSubmit: (logData: Omit<TimeLog, 'id'|'jobCardId'|'architectId'|'createdAt'|'durationMinutes'|'manualEntry'> & {startTime: string, endTime: string, notes?:string}) => void;
   jobCardTitle: string;
+  initialError?: ApiErrorType | string | null; // For passing error state
 }
 
-const ManualTimeLogModal: React.FC<TimeLogModalProps> = ({isOpen, onClose, onSubmit, jobCardTitle}) => {
+const ManualTimeLogModal: React.FC<TimeLogModalProps> = ({isOpen, onClose, onSubmit, jobCardTitle, initialError}) => {
     const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
     const [startTime, setStartTime] = useState('09:00');
     const [endTime, setEndTime] = useState('10:00');
     const [notes, setNotes] = useState('');
+    const [modalError, setModalError] = useState<ApiErrorType | string | null>(initialError || null);
+
+    useEffect(() => { // Sync error from parent if it changes (e.g. new submit attempt)
+      setModalError(initialError || null);
+    }, [initialError]);
+
+    const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => { setDate(e.target.value); if(modalError) setModalError(null); };
+    const handleStartTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => { setStartTime(e.target.value); if(modalError) setModalError(null); };
+    const handleEndTimeChange = (e: React.ChangeEvent<HTMLInputElement>) => { setEndTime(e.target.value); if(modalError) setModalError(null); };
+    const handleNotesChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => { setNotes(e.target.value); if(modalError) setModalError(null); };
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
+        setModalError(null); // Clear error on new submit attempt
         const startDateTime = new Date(`${date}T${startTime}`);
         const endDateTime = new Date(`${date}T${endTime}`);
         if (endDateTime <= startDateTime) {
-            alert("End time must be after start time.");
+            setModalError("End time must be after start time.");
             return;
         }
-        // const durationMinutes = (endDateTime.getTime() - startDateTime.getTime()) / (1000 * 60); // Duration calculated by backend now
         
         onSubmit({ 
             startTime: startDateTime.toISOString(), 
             endTime: endDateTime.toISOString(), 
             notes: notes || undefined,
-            // manualEntry and durationMinutes are not part of this specific payload structure for logTimeAPI
         });
-        onClose(); 
+        // Keep modal open on error, close on success (handled by parent)
+        // If onSubmit itself can throw and be caught here, can setModalError based on that too.
+        // For now, assuming parent handles close on success.
     };
     
     return (
         <Modal isOpen={isOpen} onClose={onClose} title={`Log Time Manually for: ${jobCardTitle}`} size="md">
             <form onSubmit={handleSubmit} className="space-y-4">
+                <ErrorMessage error={modalError} />
                 <div>
                     <label htmlFor="logDate" className="block text-sm font-medium text-gray-700">Date</label>
-                    <input type="date" id="logDate" value={date} onChange={e => setDate(e.target.value)} required
-                           className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm"/>
+                    <input type="date" id="logDate" value={date} onChange={handleDateChange} required
+                           className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"/>
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                     <div>
                         <label htmlFor="logStartTime" className="block text-sm font-medium text-gray-700">Start Time</label>
-                        <input type="time" id="logStartTime" value={startTime} onChange={e => setStartTime(e.target.value)} required
-                               className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm"/>
+                        <input type="time" id="logStartTime" value={startTime} onChange={handleStartTimeChange} required
+                               className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"/>
                     </div>
                     <div>
                         <label htmlFor="logEndTime" className="block text-sm font-medium text-gray-700">End Time</label>
-                        <input type="time" id="logEndTime" value={endTime} onChange={e => setEndTime(e.target.value)} required
-                               className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm"/>
+                        <input type="time" id="logEndTime" value={endTime} onChange={handleEndTimeChange} required
+                               className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"/>
                     </div>
                 </div>
                 <div>
                     <label htmlFor="logNotes" className="block text-sm font-medium text-gray-700">Notes (Optional)</label>
-                    <textarea id="logNotes" value={notes} onChange={e => setNotes(e.target.value)} rows={3}
-                              className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm"/>
+                    <textarea id="logNotes" value={notes} onChange={handleNotesChange} rows={3}
+                              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"/>
                 </div>
-                <div className="flex justify-end space-x-2 pt-2">
-                    <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-                    <Button type="submit" variant="primary">Log Time</Button>
+                <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 mt-4">
+                    <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+                    <Button type="submit" variant="primary" size="md">Log Time</Button>
                 </div>
             </form>
         </Modal>
@@ -149,35 +161,35 @@ const JobCardDisplay: React.FC<JobCardDisplayProps> = ({
     return (
         <div className="bg-white p-4 rounded-lg shadow-md border border-gray-200 hover:shadow-lg transition-shadow flex flex-col justify-between">
             <div>
-                <div className="flex justify-between items-start mb-1">
-                    <h4 className="text-md font-semibold text-gray-700 flex-grow pr-2">{jobCard.title}</h4>
+                <div className="flex justify-between items-start mb-2">
+                    <h4 className="text-lg font-semibold text-gray-800 flex-grow pr-2">{jobCard.title}</h4>
                     {isAdminView && (
                         <div className="flex-shrink-0 space-x-1">
-                            <Button variant="ghost" size="sm" onClick={() => onEditJobCard(jobCard)} className="p-1" aria-label="Edit Task">
-                                <EditIcon className="w-3.5 h-3.5"/>
+                            <Button variant="ghost" size="xs" onClick={() => onEditJobCard(jobCard)} className="p-1 text-gray-500 hover:text-primary" aria-label="Edit Task">
+                                <EditIcon className="w-4 h-4"/>
                             </Button>
-                            <Button variant="ghost" size="sm" onClick={() => onDeleteJobCard(jobCard.id)} className="text-red-500 hover:text-red-700 p-1" aria-label="Delete Task">
-                                <TrashIcon className="w-3.5 h-3.5"/>
+                            <Button variant="ghost" size="xs" onClick={() => onDeleteJobCard(jobCard.id)} className="text-red-500 hover:text-red-700 p-1" aria-label="Delete Task">
+                                <TrashIcon className="w-4 h-4"/>
                             </Button>
                         </div>
                     )}
                 </div>
-                <p className="text-sm text-gray-600 mb-2 line-clamp-2 h-10">{jobCard.description}</p>
-                <div className="text-xs text-gray-500 space-y-1">
-                    {jobCard.assignedArchitectName && <div>Assigned: {jobCard.assignedArchitectName}</div>}
-                    {jobCard.estimatedTime && <div>Est. Time: {jobCard.estimatedTime}h</div>}
-                    <div className="font-medium">Logged: {formatMinutesToHM(totalMinutesLogged)}</div>
+                <p className="text-sm text-gray-600 mb-3 line-clamp-2 h-10">{jobCard.description}</p>
+                <div className="text-xs text-gray-500 space-y-1 mb-3">
+                    {jobCard.assignedArchitectName && <div>Assigned: <span className="font-medium text-gray-700">{jobCard.assignedArchitectName}</span></div>}
+                    {jobCard.estimatedTime && <div>Est. Time: <span className="font-medium text-gray-700">{jobCard.estimatedTime}h</span></div>}
+                    <div className="font-semibold text-gray-700">Logged: {formatMinutesToHM(totalMinutesLogged)}</div>
                 </div>
             </div>
 
             {jobCard.timeLogs && jobCard.timeLogs.length > 0 && (
-                <div className="mt-3 pt-3 border-t border-gray-100">
-                    <h5 className="text-xs font-semibold text-gray-500 mb-1">Logged Time:</h5>
-                    <ul className="space-y-1 max-h-20 overflow-y-auto text-xs">
+                <div className="mt-3 pt-3 border-t border-gray-200">
+                    <h5 className="text-xs font-semibold text-gray-600 mb-1.5">Logged Time:</h5>
+                    <ul className="space-y-1 max-h-24 overflow-y-auto text-xs">
                         {jobCard.timeLogs.map(log => (
-                            <li key={log.id} className="text-gray-600 p-1 bg-gray-50 rounded">
+                            <li key={log.id} className="text-gray-700 p-1.5 bg-gray-100 rounded-md">
                                 {new Date(log.startTime).toLocaleDateString()} ({formatMinutesToHM(log.durationMinutes)})
-                                {log.notes && <span className="italic truncate block" title={log.notes}> - {log.notes}</span>}
+                                {log.notes && <span className="italic truncate block text-gray-500" title={log.notes}> - {log.notes}</span>}
                                 {/* Add Edit/Delete buttons here if implementing */}
                             </li>
                         ))}
@@ -191,22 +203,22 @@ const JobCardDisplay: React.FC<JobCardDisplayProps> = ({
                     <label htmlFor={`status-${jobCard.id}`} className="block text-xs font-medium text-gray-600 mb-1">Status:</label>
                     <select id={`status-${jobCard.id}`} value={jobCard.status} onChange={handleStatusChange}
                         disabled={!isAdminView && !canLogTime && jobCard.status === JobCardStatus.COMPLETED} 
-                        className="block w-full p-1.5 text-xs border-gray-300 rounded-md shadow-sm focus:ring-blue-500 focus:border-blue-500 bg-gray-50">
+                        className="block w-full p-1.5 text-xs border-gray-300 rounded-md shadow-sm focus:ring-primary focus:border-primary bg-gray-50">
                         {Object.values(JobCardStatus).map(status => (
                             <option key={status} value={status}>{status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</option>
                         ))}
                     </select>
                 </div>
                 {canLogTime && isAssignedToCurrentUser && ( 
-                    <div className="flex flex-wrap gap-2 items-center">
+                    <div className="flex flex-wrap gap-2 items-center mt-2">
                         {!isTimerActiveForThisCard && !auth.activeTimerInfo && (
-                            <Button size="sm" variant="ghost" onClick={handleStartClick} leftIcon={<PlayIcon/>}>Start Timer</Button>
+                            <Button size="sm" variant="outline" onClick={handleStartClick} leftIcon={<PlayIcon/>}>Start Timer</Button>
                         )}
                         {isTimerActiveForThisCard && (
                              <Button size="sm" variant="danger" onClick={handleStopClick} leftIcon={<StopIcon/>}>Stop Timer</Button>
                         )}
-                        {!isTimerActiveForThisCard && auth.activeTimerInfo && (
-                            <Button size="sm" variant="ghost" disabled={true} leftIcon={<PlayIcon/>}>Start Timer</Button>
+                        {!isTimerActiveForThisCard && auth.activeTimerInfo && ( // Another timer is active globally
+                            <Button size="sm" variant="outline" disabled={true} leftIcon={<PlayIcon/>}>Start Timer</Button>
                         )}
                         <Button size="sm" variant="secondary" onClick={() => setIsManualLogModalOpen(true)} leftIcon={<PlusIcon/>}>Log Manually</Button>
                     </div>
@@ -260,65 +272,79 @@ interface JobCardFormModalProps {
     onClose: () => void;
     onSubmit: (jobCardData: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt' | 'projectId' | 'status' | 'assignedArchitectName' | 'timeLogs' | 'actualTimeLogged'> & {status?: JobCardStatus}) => void;
     editingJobCard?: JobCard | null;
-    projectAssignedFreelancerId?: string; 
+    projectAssignedFreelancerId?: string;
+    initialError?: ApiErrorType | string | null;
 }
 
-const JobCardFormModal: React.FC<JobCardFormModalProps> = ({ isOpen, onClose, onSubmit, editingJobCard, projectAssignedFreelancerId }) => {
+const JobCardFormModal: React.FC<JobCardFormModalProps> = ({ isOpen, onClose, onSubmit, editingJobCard, projectAssignedFreelancerId, initialError }) => {
     const [title, setTitle] = useState('');
     const [description, setDescription] = useState('');
     const [estimatedTime, setEstimatedTime] = useState<number | string>('');
     const [assignedArchitectId, setAssignedArchitectId] = useState<string | undefined>(projectAssignedFreelancerId);
     const [status, setStatus] = useState<JobCardStatus>(JobCardStatus.TODO);
-    
+    const [modalError, setModalError] = useState<ApiErrorType | string | null>(initialError || null);
+
     useEffect(() => {
-        if (editingJobCard) {
-            setTitle(editingJobCard.title);
-            setDescription(editingJobCard.description);
-            setEstimatedTime(editingJobCard.estimatedTime || '');
-            setAssignedArchitectId(editingJobCard.assignedArchitectId || projectAssignedFreelancerId);
-            setStatus(editingJobCard.status);
-        } else {
-            setTitle(''); setDescription(''); setEstimatedTime('');
-            setAssignedArchitectId(projectAssignedFreelancerId);
-            setStatus(JobCardStatus.TODO);
+        setModalError(initialError || null);
+        if (isOpen) { // Reset form only when modal opens or editingJobCard changes
+            if (editingJobCard) {
+                setTitle(editingJobCard.title);
+                setDescription(editingJobCard.description);
+                setEstimatedTime(editingJobCard.estimatedTime || '');
+                setAssignedArchitectId(editingJobCard.assignedArchitectId || projectAssignedFreelancerId);
+                setStatus(editingJobCard.status);
+            } else {
+                setTitle(''); setDescription(''); setEstimatedTime('');
+                setAssignedArchitectId(projectAssignedFreelancerId);
+                setStatus(JobCardStatus.TODO);
+            }
         }
-    }, [editingJobCard, isOpen, projectAssignedFreelancerId]);
+    }, [editingJobCard, isOpen, projectAssignedFreelancerId, initialError]);
+
+    const handleFormInputChange = (setter: React.Dispatch<React.SetStateAction<any>>) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
+        setter(e.target.value);
+        if (modalError) setModalError(null);
+    };
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        if (!title.trim()) { alert("Title is required."); return; }
+        setModalError(null);
+        if (!title.trim()) {
+            setModalError("Title is required.");
+            return;
+        }
         onSubmit({ 
             title, 
             description, 
             estimatedTime: estimatedTime ? Number(estimatedTime) : undefined,
             assignedArchitectId: assignedArchitectId,
-            status // Include status if it's part of the form
+            status
         });
-        onClose();
+        // Parent handles close on success
     };
 
     return (
-        <Modal isOpen={isOpen} onClose={onClose} title={editingJobCard ? "Edit Job Card" : "Add New Job Card"} size="lg">
+        <Modal isOpen={isOpen} onClose={onClose} title={editingJobCard ? "Edit Task" : "Add New Task"} size="lg">
             <form onSubmit={handleSubmit} className="space-y-4">
+                <ErrorMessage error={modalError} />
                 <div>
                     <label htmlFor="jcTitle" className="block text-sm font-medium text-gray-700">Title</label>
-                    <input type="text" id="jcTitle" value={title} onChange={e => setTitle(e.target.value)} required
-                           className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm"/>
+                    <input type="text" id="jcTitle" value={title} onChange={handleFormInputChange(setTitle)} required
+                           className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"/>
                 </div>
                 <div>
                     <label htmlFor="jcDescription" className="block text-sm font-medium text-gray-700">Description</label>
-                    <textarea id="jcDescription" value={description} onChange={e => setDescription(e.target.value)} rows={3}
-                              className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm"/>
+                    <textarea id="jcDescription" value={description} onChange={handleFormInputChange(setDescription)} rows={3}
+                              className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"/>
                 </div>
                 <div>
                     <label htmlFor="jcEstTime" className="block text-sm font-medium text-gray-700">Estimated Time (hours)</label>
-                    <input type="number" id="jcEstTime" value={estimatedTime} onChange={e => setEstimatedTime(e.target.value)} min="0" step="0.5"
-                           className="mt-1 block w-full p-2 border border-gray-300 rounded-md shadow-sm"/>
+                    <input type="number" id="jcEstTime" value={estimatedTime} onChange={handleFormInputChange(setEstimatedTime)} min="0" step="0.5"
+                           className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"/>
                 </div>
-                {/* Simplified: Status not editable in this form directly for now, default or handled by onStatusUpdate */}
-                <div className="flex justify-end space-x-2 pt-2">
-                    <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
-                    <Button type="submit" variant="primary">{editingJobCard ? "Save Changes" : "Add Job Card"}</Button>
+                <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 mt-4">
+                    <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+                    <Button type="submit" variant="primary" size="md">{editingJobCard ? "Save Changes" : "Add Task"}</Button>
                 </div>
             </form>
         </Modal>
@@ -332,10 +358,17 @@ const ProjectDetailsPage: React.FC = () => {
   const auth = useAuth(); 
   const { user, activeTimerInfo, startGlobalTimer, stopGlobalTimerAndLog } = auth;
   const navigate = useNavigate();
+  const location = useLocation();
   const [project, setProject] = useState<Project | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<ApiErrorType | string | null>(null); // Main page error
   const [currentTab, setCurrentTab] = useState<ProjectDetailTab>('details');
+
+  // Modal specific error states
+  const [applyError, setApplyError] = useState<ApiErrorType | string | null>(null);
+  const [jobCardModalError, setJobCardModalError] = useState<ApiErrorType | string | null>(null);
+  const [fileUploadError, setFileUploadError] = useState<ApiErrorType | string | null>(null);
+  const [timeLogError, setTimeLogError] = useState<ApiErrorType | string | null>(null); // For ManualTimeLogModal or general time log actions
 
   const [isApplyModalOpen, setIsApplyModalOpen] = useState(false);
   const [proposal, setProposal] = useState('');
@@ -353,12 +386,14 @@ const ProjectDetailsPage: React.FC = () => {
   const [isSubmittingFile, setIsSubmittingFile] = useState(false);
   
   const [allProjectTimeLogs, setAllProjectTimeLogs] = useState<(TimeLog & { jobCardTitle?: string, architectName?: string })[]>([]);
+  const [isManualLogModalOpen, setIsManualLogModalOpenForCardId] = useState<string | null>(null); // Stores ID of job card to log time for
+
 
 
   const loadProjectDetails = useCallback(async () => {
-    if (!projectId) { setError("Project ID is missing."); setIsLoading(false); return; }
+    if (!projectId) { setPageError("Project ID is missing."); setIsLoading(false); return; }
     setIsLoading(true);
-    setError(null);
+    setPageError(null);
     try {
       const fetchedProjectCore = await fetchProjectDetailsAPI(projectId);
 
@@ -455,19 +490,22 @@ const ProjectDetailsPage: React.FC = () => {
         setProjectFiles(fetchedFiles);
 
       } else {
-        setError("Project not found.");
+        setPageError("Project not found.");
         setProject(null);
       }
-    } catch (err: any) {
+    } catch (err) {
         console.error("Error loading project details:", err);
-        setError(err.message || "Failed to load project details. Please try again.");
+        if (err instanceof ApiErrorType) setPageError(err);
+        else if (err instanceof Error) setPageError(err.message);
+        else setPageError("Failed to load project details. Please try again.");
         setProject(null);
     } finally { setIsLoading(false); }
-  }, [projectId, user]);
+  }, [projectId, user]); // user dependency for hasApplied logic
 
   useEffect(() => { loadProjectDetails(); }, [loadProjectDetails, activeTimerInfo?.jobCardId]);
   
   const handleOpenJobCardModal = (jobCardToEdit: JobCard | null = null) => {
+    setJobCardModalError(null); // Clear previous errors
     setEditingJobCard(jobCardToEdit);
     setIsJobCardModalOpen(true);
   };
@@ -476,63 +514,59 @@ const ProjectDetailsPage: React.FC = () => {
       formData: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt' | 'projectId' | 'status' | 'assignedArchitectName' | 'timeLogs' | 'actualTimeLogged'> & {status?: JobCardStatus}
     ) => {
     if (!project || !projectId) return;
-
+    setJobCardModalError(null);
     try {
-      if (editingJobCard) { // UPDATE
-        const payload: UpdateJobCardPayload = {
-          title: formData.title,
-          description: formData.description || null,
-          status: formData.status ? formData.status.toLowerCase().replace('_', '-') : undefined, // Convert enum to backend string
-          assigned_freelancer_id: formData.assignedArchitectId ? parseInt(formData.assignedArchitectId, 10) : null,
-          estimated_hours: formData.estimatedTime !== undefined ? Number(formData.estimatedTime) : null,
-        };
+      if (editingJobCard) {
+        const payload: UpdateJobCardPayload = { /* ... */ title: formData.title, description: formData.description || null, status: formData.status ? formData.status.toLowerCase().replace('_', '-') : undefined, assigned_freelancer_id: formData.assignedArchitectId ? parseInt(formData.assignedArchitectId, 10) : null, estimated_hours: formData.estimatedTime !== undefined ? Number(formData.estimatedTime) : null};
         await updateJobCardAPI(editingJobCard.id, payload);
-      } else { // CREATE
-        const payload: CreateJobCardPayload = {
-          project_id: parseInt(projectId, 10),
-          title: formData.title,
-          description: formData.description || null,
-          status: formData.status ? formData.status.toLowerCase().replace('_', '-') : 'todo',
-          assigned_freelancer_id: formData.assignedArchitectId ?
-                                    parseInt(formData.assignedArchitectId, 10) :
-                                    (project.assignedFreelancerId ? parseInt(project.assignedFreelancerId, 10) : null),
-          estimated_hours: formData.estimatedTime !== undefined ? Number(formData.estimatedTime) : null,
-        };
+      } else {
+        const payload: CreateJobCardPayload = { /* ... */ project_id: parseInt(projectId, 10), title: formData.title, description: formData.description || null, status: formData.status ? formData.status.toLowerCase().replace('_', '-') : 'todo', assigned_freelancer_id: formData.assignedArchitectId ? parseInt(formData.assignedArchitectId, 10) : (project.assignedFreelancerId ? parseInt(project.assignedFreelancerId, 10) : null), estimated_hours: formData.estimatedTime !== undefined ? Number(formData.estimatedTime) : null};
         await createJobCardAPI(payload);
       }
-      await loadProjectDetails();
-    } catch (err: any) {
+      await loadProjectDetails(); // Refresh data
+      setIsJobCardModalOpen(false); // Close modal on success
+      setEditingJobCard(null);
+    } catch (err) {
         console.error("Failed to save job card:", err);
-        alert(err.message || "Failed to save job card.");
+        if (err instanceof ApiErrorType) setJobCardModalError(err);
+        else if (err instanceof Error) setJobCardModalError(err.message);
+        else setJobCardModalError("Failed to save job card.");
     }
-    setIsJobCardModalOpen(false);
-    setEditingJobCard(null);
   };
 
   const handleDeleteJobCard = async (jobCardId: string) => {
     if (!project || !projectId) return;
-    if (window.confirm("Are you sure you want to delete this job card?")) {
+    if (window.confirm("Are you sure you want to delete this job card? This action cannot be undone.")) {
+      setPageError(null);
       try {
         await deleteJobCardAPI(jobCardId);
-        await loadProjectDetails();
-      } catch (err: any) {
+        await loadProjectDetails(); // Refresh
+      } catch (err) {
           console.error("Failed to delete job card:", err);
-          alert(err.message || "Failed to delete job card.");
+          if (err instanceof ApiErrorType) setPageError(err);
+          else if (err instanceof Error) setPageError(err.message);
+          else setPageError("Failed to delete job card.");
       }
     }
   };
 
   const handleJobCardStatusUpdate = async (jobCardId: string, newStatus: JobCardStatus) => {
+    setPageError(null);
     try {
-      const payload: UpdateJobCardPayload = {
-        status: newStatus.toLowerCase().replace('_', '-')
-      };
+      const payload: UpdateJobCardPayload = { status: newStatus.toLowerCase().replace('_', '-') };
       await updateJobCardAPI(jobCardId, payload);
-      loadProjectDetails();
-    } catch (err: any) { 
+      loadProjectDetails(); // Refresh
+    } catch (err) {
         console.error("Failed to update job card status:", err); 
-        alert(err.message || "Failed to update status.");
+        if (err instanceof ApiErrorType) setPageError(err);
+        else if (err instanceof Error) setPageError(err.message);
+        else setPageError("Failed to update status.");
     }
+  };
+
+  const handleOpenManualLogModal = (jobCardId: string) => {
+    setTimeLogError(null); // Clear previous errors for this modal instance
+    setIsManualLogModalOpenForCardId(jobCardId);
   };
 
   const handleTimeLogSubmit = async (
@@ -540,48 +574,50 @@ const ProjectDetailsPage: React.FC = () => {
       logDataFromModal: Omit<TimeLog, 'id'|'jobCardId'|'architectId'|'createdAt'|'durationMinutes'|'manualEntry'> & {startTime: string, endTime: string, notes?:string}
   ) => {
     if (!user) return;
-
-    const payload: LogTimePayload = {
-      job_card_id: parseInt(jobCardIdToLog, 10),
-      start_time: logDataFromModal.startTime,
-      end_time: logDataFromModal.endTime,
-      notes: logDataFromModal.notes || null,
-    };
+    setTimeLogError(null);
+    const payload: LogTimePayload = { /* ... */ job_card_id: parseInt(jobCardIdToLog, 10), start_time: logDataFromModal.startTime, end_time: logDataFromModal.endTime, notes: logDataFromModal.notes || null };
     try {
       await logTimeAPI(payload);
-      loadProjectDetails();
-    } catch (err: any) { 
-        alert(err.message || "Failed to log time."); 
+      loadProjectDetails(); // Refresh
+      setIsManualLogModalOpenForCardId(null); // Close modal on success
+    } catch (err) {
         console.error("Failed to log time:", err);
+        if (err instanceof ApiErrorType) setTimeLogError(err);
+        else if (err instanceof Error) setTimeLogError(err.message);
+        else setTimeLogError("Failed to log time.");
     }
   };
 
   const handleApplyClick = () => {
     if (!project) return;
-    setBidAmount(project.budget * 0.9); setProposal(''); setIsApplyModalOpen(true);
+    setApplyError(null); // Clear previous errors
+    setBidAmount(project.budget * 0.9);
+    setProposal('');
+    setIsApplyModalOpen(true);
    };
-  const handleCloseApplyModal = () => { setIsApplyModalOpen(false); setProposal(''); setBidAmount(''); };
+  const handleCloseApplyModal = () => { setIsApplyModalOpen(false); setApplyError(null); /* Keep form data for re-edit? */ };
+
   const handleSubmitApplication = async (e: React.FormEvent) => { 
     e.preventDefault();
-    if (!project || !user || !proposal || !bidAmount) return;
+    if (!project || !user || !proposal || !bidAmount) {
+        setApplyError("Proposal and Bid Amount are required.");
+        return;
+    }
     setApplying(true);
+    setApplyError(null);
     try {
-      // submitApplicationAPI expects SubmitApplicationPayload
-      // Assuming project.id is string, user.id (AuthUser) is number
-      await submitApplicationAPI({
-        project_id: parseInt(project.id, 10),
-        proposal_text: proposal,
-        bid_amount: Number(bidAmount)
-      });
+      await submitApplicationAPI({ project_id: parseInt(project.id, 10), proposal_text: proposal, bid_amount: Number(bidAmount) });
       setHasApplied(true);
-      alert(`Application submitted for ${project.title}.`);
+      alert(`Application submitted for ${project.title}.`); // Keep alert for direct user feedback
       await loadProjectDetails(); 
-    } catch (err: any) {  
-        alert(err.message || "Failed to submit application. Please try again."); 
+      handleCloseApplyModal();
+    } catch (err) {
         console.error("Failed to submit application:", err);
+        if (err instanceof ApiErrorType) setApplyError(err);
+        else if (err instanceof Error) setApplyError(err.message);
+        else setApplyError("Failed to submit application. Please try again.");
     } finally { 
         setApplying(false); 
-        handleCloseApplyModal(); 
     }
   };
 
@@ -598,12 +634,15 @@ const ProjectDetailsPage: React.FC = () => {
         project.adminCreatorId ? String(project.adminCreatorId) : undefined
     ].filter(Boolean) as string[]));
     
+    setPageError(null);
     try {
-        const conversation = await findOrCreateConversationAPI(participantIds, project.id);
+        const conversation = await findOrCreateConversationAPI(participantIds, project.id); // Assuming backend handles project_id in this call
         navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.id }});
-    } catch (err: any) {
-        alert(err.message || "Could not open or create chat for this project.");
+    } catch (err) {
         console.error("Chat creation/navigation error:", err);
+        if (err instanceof ApiErrorType) setPageError(err);
+        else if (err instanceof Error) setPageError(err.message);
+        else setPageError("Could not open or create chat for this project.");
     }
   };
   
@@ -620,11 +659,13 @@ const ProjectDetailsPage: React.FC = () => {
             senderId: String(user.id), // Ensure senderId is string if API expects that
             content: `Client ${user.username} requests a status update for project '${project.title}'.`,
         });
-        alert("Status update request sent via messages.");
+        alert("Status update request sent via messages."); // Keep alert for direct feedback
         navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.id } });
-    } catch (err: any) {
-        alert(err.message || "Failed to send status update request.");
+    } catch (err) {
         console.error("Status update request error:", err);
+        if (err instanceof ApiErrorType) setPageError(err);
+        else if (err instanceof Error) setPageError(err.message);
+        else setPageError("Failed to send status update request.");
     }
   };
   
@@ -634,82 +675,104 @@ const ProjectDetailsPage: React.FC = () => {
     const formData = new FormData();
     formData.append('file', selectedFileForUpload);
     formData.append('projectId', project.id);
-    formData.append('uploaderId', String(user.id)); // Ensure uploaderId is string if API expects that
+    setFileUploadError(null);
+    formData.append('uploaderId', String(user.id));
 
     try {
-        await uploadFileAPI(project.id, formData); // projectId is string here
-        alert("File uploaded successfully.");
+        await uploadFileAPI(project.id, formData);
+        alert("File uploaded successfully."); // Keep alert for direct feedback
         await loadProjectDetails(); 
-    } catch (err: any) {
+        setIsFileUploadModalOpen(false);
+        setSelectedFileForUpload(null);
+    } catch (err) {
         console.error("File upload failed:", err);
-        alert(err.message || "File upload failed.");
+        if (err instanceof ApiErrorType) setFileUploadError(err);
+        else if (err instanceof Error) setFileUploadError(err.message);
+        else setFileUploadError("File upload failed.");
+    } finally {
+        setIsSubmittingFile(false);
     }
-    setIsFileUploadModalOpen(false);
-    setSelectedFileForUpload(null);
-    setIsSubmittingFile(false);
   };
 
   const handleFileDelete = async (fileId: string) => {
-    if(window.confirm("Are you sure you want to delete this file?")) {
+    if(window.confirm("Are you sure you want to delete this file? This action cannot be undone.")) {
+        setPageError(null);
         try {
             await deleteFileAPI(fileId);
             await loadProjectDetails(); 
-        } catch (err: any) {
+        } catch (err) {
             console.error("File deletion failed:", err);
-            alert(err.message || "File deletion failed.");
+            if (err instanceof ApiErrorType) setPageError(err);
+            else if (err instanceof Error) setPageError(err.message);
+            else setPageError("File deletion failed.");
         }
     }
   };
 
+  const currentJobCardForManualLog = project?.jobCards?.find(jc => jc.id === isManualLogModalOpenForCardId);
+
 
   if (isLoading) return <div className="flex justify-center items-center h-[calc(100vh-4rem)]"><LoadingSpinner text="Loading project details..." size="lg" /></div>;
-  if (error) return <div className="p-6 text-center text-red-500 text-xl">{error}</div>;
-  if (!project) return <div className="p-6 text-center text-gray-500 text-xl">Project data could not be loaded or found.</div>;
+  // Display pageError if it exists (and not for initial loading if project is null)
+  if (pageError && project) { /* Error occurred after initial load */ }
+  else if (pageError && !project) { // Initial load error
+    return <div className="container mx-auto p-4 md:p-6"><ErrorMessage error={pageError} /></div>;
+  }
+  if (!project) return <div className="p-6 text-center text-gray-600 text-xl bg-gray-50 rounded-lg">Project data could not be loaded or found.</div>;
   
-  const getStatusColor = (status: ProjectStatus | string) => { // Allow string for backend statuses not in enum yet
+  const getStatusColor = (status: ProjectStatus | string) => {
     switch (status) {
-      case ProjectStatus.PENDING_APPROVAL: return 'text-orange-600 bg-orange-100';
-      case ProjectStatus.OPEN: return 'text-green-600 bg-green-100';
-      case ProjectStatus.IN_PROGRESS: return 'text-yellow-600 bg-yellow-100';
-      case ProjectStatus.COMPLETED: return 'text-blue-600 bg-blue-100';
-      case ProjectStatus.CANCELLED: return 'text-red-600 bg-red-100';
-      default: return 'text-gray-600 bg-gray-100';
+      case ProjectStatus.PENDING_APPROVAL: return 'text-orange-700 bg-orange-100 border-orange-300';
+      case ProjectStatus.OPEN: return 'text-green-700 bg-green-100 border-green-300';
+      case ProjectStatus.IN_PROGRESS: return 'text-yellow-700 bg-yellow-100 border-yellow-300';
+      case ProjectStatus.COMPLETED: return 'text-blue-700 bg-blue-100 border-blue-300';
+      case ProjectStatus.CANCELLED: return 'text-red-700 bg-red-100 border-red-300';
+      default: return 'text-gray-700 bg-gray-100 border-gray-300';
     }
   };
 
   const tabButtonClasses = (tabName: ProjectDetailTab) => 
-    `px-4 py-2.5 font-medium text-sm rounded-t-lg transition-colors focus:outline-none -mb-px border-b-2
+    `px-4 py-3 font-medium text-sm rounded-t-md transition-colors focus:outline-none -mb-px border-b-2
      ${currentTab === tabName 
-        ? 'border-primary text-primary bg-white' 
+        ? 'border-primary text-primary bg-white shadow-sm'
         : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'}`;
 
   return (
-    <div className="container mx-auto p-4 md:p-8">
-      <Button onClick={() => navigate(-1)} variant="ghost" className="mb-6 text-sm" leftIcon={<ArrowLeftIcon />}>Back</Button>
+    <div className="container mx-auto p-4 md:p-6">
+      <Button
+        onClick={() => location.state?.from ? navigate(location.state.from) : navigate(-1)}
+        variant="ghost"
+        size="sm"
+        className="mb-6 text-gray-600 hover:text-primary"
+        leftIcon={<ArrowLeftIcon />}
+      >
+        Back
+      </Button>
+      {pageError && <ErrorMessage error={pageError} />} {/* Display page-level action errors */}
       <div className="bg-white shadow-xl rounded-lg overflow-hidden">
         <div className="p-6 md:p-8 border-b border-gray-200">
-          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-4">
-            <h1 className="text-3xl md:text-4xl font-bold text-gray-800 leading-tight">{project.title}</h1>
-            <span className={`mt-2 md:mt-0 px-4 py-1.5 text-sm font-semibold rounded-full ${getStatusColor(project.status)}`}>
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-3">
+            <h1 className="text-2xl md:text-3xl font-bold text-gray-900 leading-tight mb-2 md:mb-0">{project.title}</h1>
+            <span className={`px-3 py-1.5 text-xs font-semibold rounded-full border ${getStatusColor(project.status)}`}>
               {project.status.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
             </span>
           </div>
           
-          <div className="mb-6 text-sm text-gray-500">
+          <div className="mb-4 text-sm text-gray-500">
             Posted on: {new Date(project.createdAt).toLocaleDateString()} by {project.clientName || 'Unknown Client'}
             {project.adminCreatorId && ` (Managed by Admin ID: ${project.adminCreatorId})`}
           </div>
 
           {user?.role === UserRole.CLIENT && project.status === ProjectStatus.IN_PROGRESS && (
-            <Button onClick={handleRequestStatusUpdate} variant="secondary" size="sm" className="mb-4" leftIcon={<ChatBubbleLeftRightIcon className="w-4 h-4"/>}>
+            <Button onClick={handleRequestStatusUpdate} variant="outline" size="sm" className="mb-4" leftIcon={<ChatBubbleLeftRightIcon className="w-4 h-4"/>}>
                 Request Status Update
             </Button>
           )}
 
         </div>
         
-        <div className="border-b border-gray-200 px-6 md:px-8">
-            <nav className="flex space-x-1 flex-wrap">
+        <div className="border-b border-gray-200 px-6 md:px-8 bg-gray-50">
+            <nav className="flex space-x-1 flex-wrap -mb-px">
                 <button onClick={() => setCurrentTab('details')} className={tabButtonClasses('details')}>Details</button>
                 <button onClick={() => setCurrentTab('tasks')} className={tabButtonClasses('tasks')}>Tasks</button>
                 <button onClick={() => setCurrentTab('messages')} className={tabButtonClasses('messages')}>Messages</button>
@@ -721,23 +784,24 @@ const ProjectDetailsPage: React.FC = () => {
         <div className="p-6 md:p-8">
             {currentTab === 'details' && (
                 <>
-                    <p className="text-gray-700 text-lg leading-relaxed mb-6 whitespace-pre-line bg-gray-50 p-4 rounded-md">
+                    <h2 className="text-xl font-semibold text-gray-800 mb-3">Project Description</h2>
+                    <p className="text-gray-700 text-base leading-relaxed mb-6 whitespace-pre-line bg-gray-50 p-4 rounded-md border border-gray-200">
                         {project.description}
                     </p>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-x-8 gap-y-4 mb-6 text-gray-700">
-                        <div><strong className="font-medium text-gray-500">Budget:</strong> R {project.budget.toLocaleString()}</div>
-                        <div><strong className="font-medium text-gray-500">Deadline:</strong> {new Date(project.deadline).toLocaleDateString()}</div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-4 mb-6 text-gray-700">
+                        <div><strong className="font-medium text-gray-500 block text-sm">Budget:</strong> <span className="text-base">R {project.budget.toLocaleString()}</span></div>
+                        <div><strong className="font-medium text-gray-500 block text-sm">Deadline:</strong> <span className="text-base">{new Date(project.deadline).toLocaleDateString()}</span></div>
                         {project.assignedFreelancerName && (
-                            <div><strong className="font-medium text-gray-500">Assigned To:</strong> {project.assignedFreelancerName}</div>
+                            <div><strong className="font-medium text-gray-500 block text-sm">Assigned To:</strong> <span className="text-base">{project.assignedFreelancerName}</span></div>
                         )}
-                        <div><strong className="font-medium text-gray-500">Total Time Logged:</strong> {formatDurationToHHMMSS(totalProjectMinutesLogged * 60)}</div>
+                        <div><strong className="font-medium text-gray-500 block text-sm">Total Time Logged:</strong> <span className="text-base">{formatDurationToHHMMSS(totalProjectMinutesLogged * 60)}</span></div>
                     </div>
                     {project.skillsRequired && project.skillsRequired.length > 0 && (
                         <div className="mb-6">
-                            <h4 className="text-sm font-semibold text-gray-500 uppercase mb-2">Skills Required</h4>
+                            <h3 className="text-lg font-semibold text-gray-800 mb-2">Skills Required</h3>
                             <div className="flex flex-wrap gap-2">
                             {project.skillsRequired.map(skill => (
-                                <span key={skill} className="px-3 py-1 bg-accent text-secondary text-xs font-semibold rounded-full">{skill}</span>
+                                <span key={skill} className="px-3 py-1 bg-primary-extralight text-primary text-xs font-semibold rounded-full border border-primary-light">{skill}</span>
                             ))}
                             </div>
                         </div>
@@ -745,14 +809,14 @@ const ProjectDetailsPage: React.FC = () => {
                     <ProjectProgressBar jobCards={project.jobCards} projectStatus={project.status} />
                     {user && user.role === UserRole.FREELANCER && project.status === ProjectStatus.OPEN && !hasApplied && (
                         <div className="mt-8 pt-6 border-t border-gray-200">
-                            <Button variant="primary" size="lg" onClick={handleApplyClick} isLoading={applying}>
+                            <Button variant="primary" size="lg" onClick={handleApplyClick} isLoading={applying} className="w-full sm:w-auto">
                                 Apply for this Project
                             </Button>
                         </div>
                     )}
                     {user && user.role === UserRole.FREELANCER && hasApplied && (
                         <div className="mt-8 pt-6 border-t border-gray-200">
-                            <p className="text-green-600 bg-green-50 p-3 rounded-md font-semibold">You have applied for this project.</p>
+                            <p className="text-green-700 bg-green-100 p-3 rounded-md font-semibold border border-green-200">You have applied for this project.</p>
                         </div>
                     )}
                 </>
@@ -760,23 +824,24 @@ const ProjectDetailsPage: React.FC = () => {
 
             {currentTab === 'tasks' && (
                 <>
-                    <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-xl font-semibold text-gray-700">Project Tasks / Job Cards</h3>
+                    <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-xl font-semibold text-gray-800">Project Tasks</h2>
                     {isAdminView && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED && (
                         <Button onClick={() => handleOpenJobCardModal()} leftIcon={<PlusIcon/>} variant="primary" size="sm">
-                            Add Job Card
+                            Add Task
                         </Button>
                     )}
                     </div>
+                     {/* Error display for job card list actions can be here if needed, or rely on pageError above */}
                     {project.jobCards && project.jobCards.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                         {project.jobCards.map(jc => (
                         <JobCardDisplay 
                             key={jc.id} jobCard={jc} project={project}
                             isAssignedToCurrentUser={!!user && user.role === UserRole.FREELANCER && (jc.assignedArchitectId === String(user.id) || (!jc.assignedArchitectId && project.assignedFreelancerId === String(user.id)))}
                             isAdminView={isAdminView}
                             onStatusUpdate={handleJobCardStatusUpdate}
-                            onTimeLog={handleTimeLogSubmit}
+                            onTimeLog={() => handleOpenManualLogModal(jc.id)} // Updated to open modal
                             onEditJobCard={handleOpenJobCardModal}
                             onDeleteJobCard={handleDeleteJobCard}
                             activeTimerJobCardId={activeTimerInfo?.jobCardId}
@@ -786,23 +851,23 @@ const ProjectDetailsPage: React.FC = () => {
                         ))}
                     </div>
                     ) : (
-                        <p className="text-gray-500">No job cards have been added to this project yet. {isAdminView && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED ? "You can add them now." : ""}</p>
+                        <p className="text-gray-600 bg-gray-50 p-4 rounded-md border">No tasks have been added to this project yet. {isAdminView && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED ? "You can add them now." : ""}</p>
                     )}
                 </>
             )}
 
             {currentTab === 'messages' && (
                 <div>
-                    <h3 className="text-xl font-semibold text-gray-700 mb-4">Project Communication</h3>
-                    <Button onClick={handleOpenProjectChat} leftIcon={<ChatBubbleLeftRightIcon />}>Open Project Chat</Button>
-                    <p className="text-xs text-gray-500 mt-2">This will open the main messaging interface, attempting to filter for this project.</p>
+                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Project Communication</h2>
+                    <Button onClick={handleOpenProjectChat} leftIcon={<ChatBubbleLeftRightIcon />} variant="primary" size="md">Open Project Chat</Button>
+                    <p className="text-sm text-gray-500 mt-2">This will open the main messaging interface for this project.</p>
                 </div>
             )}
 
             {currentTab === 'files' && (
                  <div>
-                    <div className="flex justify-between items-center mb-4">
-                        <h3 className="text-xl font-semibold text-gray-700">Project Files</h3>
+                    <div className="flex justify-between items-center mb-6">
+                        <h2 className="text-xl font-semibold text-gray-800">Project Files</h2>
                         {(user?.role === UserRole.ADMIN || String(user?.id) === project.clientId || String(user?.id) === project.assignedFreelancerId ) && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED && (
                             <Button onClick={() => setIsFileUploadModalOpen(true)} variant="primary" size="sm" leftIcon={<UploadIcon />}>Upload File</Button>
                         )}
@@ -810,9 +875,9 @@ const ProjectDetailsPage: React.FC = () => {
                     {projectFiles.length > 0 ? (
                         <ul className="space-y-3">
                             {projectFiles.map(file => (
-                                <li key={file.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-md border hover:shadow-sm">
+                                <li key={file.id} className="flex items-center justify-between p-3 bg-white rounded-lg shadow-md border border-gray-200 hover:shadow-lg transition-shadow">
                                     <div className="flex items-center space-x-3 min-w-0">
-                                        <img src={getMockFileIconPath(file.type)} alt={file.type} className="w-7 h-7 flex-shrink-0"/>
+                                        <img src={getMockFileIconPath(file.type)} alt={file.type} className="w-8 h-8 flex-shrink-0"/>
                                         <div className="min-w-0">
                                             <p className="text-sm font-medium text-gray-800 truncate" title={file.name}>{file.name}</p>
                                             <p className="text-xs text-gray-500">
@@ -821,14 +886,12 @@ const ProjectDetailsPage: React.FC = () => {
                                         </div>
                                     </div>
                                     <div className="space-x-2 flex-shrink-0">
-                                        <a href={file.url} target="_blank" rel="noopener noreferrer" download={file.name}>
-                                          <Button variant="ghost" size="sm" className="p-1" leftIcon={<DownloadIcon className="w-4 h-4"/>}>
-                                              <span className="hidden sm:inline">Download</span>
-                                          </Button>
-                                        </a>
+                                        <Button asLink href={file.url} target="_blank" rel="noopener noreferrer" download={file.name} variant="ghost" size="sm" className="p-1 text-gray-600 hover:text-primary" leftIcon={<DownloadIcon/>}>
+                                            <span className="hidden sm:inline ml-1">Download</span>
+                                        </Button>
                                         {(isAdminView || String(user?.id) === file.uploadedBy) && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED && (
-                                            <Button variant="ghost" size="sm" onClick={() => handleFileDelete(file.id)} className="text-red-500 hover:text-red-700 p-1" leftIcon={<TrashIcon className="w-4 h-4"/>}>
-                                                 <span className="hidden sm:inline">Delete</span>
+                                            <Button variant="ghost" size="sm" onClick={() => handleFileDelete(file.id)} className="text-red-500 hover:text-red-700 p-1" leftIcon={<TrashIcon/>}>
+                                                 <span className="hidden sm:inline ml-1">Delete</span>
                                             </Button>
                                         )}
                                     </div>
@@ -836,42 +899,46 @@ const ProjectDetailsPage: React.FC = () => {
                             ))}
                         </ul>
                     ) : (
-                        <p className="text-gray-500">No files uploaded for this project yet.</p>
+                        <p className="text-gray-600 bg-gray-50 p-4 rounded-md border">No files uploaded for this project yet.</p>
                     )}
-                    <Modal isOpen={isFileUploadModalOpen} onClose={() => {setIsFileUploadModalOpen(false); setSelectedFileForUpload(null);}} title="Upload File">
-                        <input type="file" onChange={(e) => setSelectedFileForUpload(e.target.files ? e.target.files[0] : null)} className="mb-4 p-2 border rounded w-full"/>
-                        {selectedFileForUpload && <p className="text-sm text-gray-600 mb-2">Selected: {selectedFileForUpload.name}</p>}
-                        <Button onClick={handleFileUpload} disabled={!selectedFileForUpload || isSubmittingFile} isLoading={isSubmittingFile} className="mt-4">Upload Selected File</Button>
+                    <Modal isOpen={isFileUploadModalOpen} onClose={() => {setIsFileUploadModalOpen(false); setSelectedFileForUpload(null); setFileUploadError(null);}} title="Upload New File to Project">
+                        <ErrorMessage error={fileUploadError} />
+                        <input type="file" onChange={(e) => {setSelectedFileForUpload(e.target.files ? e.target.files[0] : null); setFileUploadError(null);}} className="mb-4 p-2 border border-gray-300 rounded-md w-full focus:ring-primary focus:border-primary"/>
+                        {selectedFileForUpload && <p className="text-sm text-gray-600 mb-3">Selected: {selectedFileForUpload.name} ({(selectedFileForUpload.size / 1024).toFixed(2)} KB)</p>}
+                        <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 mt-4">
+                            <Button variant="ghost" onClick={() => {setIsFileUploadModalOpen(false); setSelectedFileForUpload(null); setFileUploadError(null);}} disabled={isSubmittingFile}>Cancel</Button>
+                            <Button onClick={handleFileUpload} disabled={!selectedFileForUpload || isSubmittingFile} isLoading={isSubmittingFile} variant="primary" size="md">Upload File</Button>
+                        </div>
                     </Modal>
                 </div>
             )}
             
             {isAdminView && currentTab === 'adminLogs' && allProjectTimeLogs.length > 0 && (
-                <div className="mb-8 pt-6 border-t border-gray-200">
-                    <h3 className="text-xl font-semibold text-gray-700 mb-4">Detailed Time Logs for Project</h3>
-                    <div className="overflow-x-auto max-h-96 bg-gray-50 p-2 rounded-md">
+                <div className="mb-8 pt-6">
+                    <h2 className="text-xl font-semibold text-gray-800 mb-4">Detailed Time Logs</h2>
+                    <div className="overflow-x-auto max-h-[500px] bg-white p-1 rounded-md border border-gray-200 shadow-sm">
                         <table className="min-w-full text-sm">
-                            <thead className="bg-gray-100">
+                            <thead className="bg-gray-100 sticky top-0">
                                 <tr>
-                                    <th className="p-2 text-left font-medium text-gray-600">Task</th>
-                                    <th className="p-2 text-left font-medium text-gray-600">Architect</th>
-                                    <th className="p-2 text-left font-medium text-gray-600">Start</th>
-                                    <th className="p-2 text-left font-medium text-gray-600">End</th>
-                                    <th className="p-2 text-left font-medium text-gray-600">Duration</th>
-                                    <th className="p-2 text-left font-medium text-gray-600">Notes</th>
-                                    <th className="p-2 text-left font-medium text-gray-600">Manual</th>
+                                    <th className="p-2.5 text-left font-semibold text-gray-600">Task</th>
+                                    <th className="p-2.5 text-left font-semibold text-gray-600">Architect</th>
+                                    <th className="p-2.5 text-left font-semibold text-gray-600">Start</th>
+                                    <th className="p-2.5 text-left font-semibold text-gray-600">End</th>
+                                    <th className="p-2.5 text-left font-semibold text-gray-600">Duration</th>
+                                    <th className="p-2.5 text-left font-semibold text-gray-600">Notes</th>
+                                    <th className="p-2.5 text-left font-semibold text-gray-600">Manual</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-gray-200">
                                 {allProjectTimeLogs.map(log => (
-                                    <tr key={log.id} className="hover:bg-gray-100">
-                                        <td className="p-2 text-gray-700">{log.jobCardTitle}</td>
-                                        <td className="p-2 text-gray-700">{log.architectName || log.architectId}</td>
-                                        <td className="p-2 text-gray-700">{new Date(log.startTime).toLocaleString()}</td>
-                                        <td className="p-2 text-gray-700">{new Date(log.endTime).toLocaleString()}</td>
-                                        <td className="p-2 text-gray-700">{formatMinutesToHM(log.durationMinutes)}</td>
-                                        <td className="p-2 text-gray-700 text-xs max-w-xs truncate" title={log.notes}>{log.notes || '-'}</td>
-                                        <td className="p-2 text-gray-700">{log.manualEntry ? 'Yes' : 'No'}</td>
+                                    <tr key={log.id} className="hover:bg-gray-50 transition-colors">
+                                        <td className="p-2.5 text-gray-700">{log.jobCardTitle}</td>
+                                        <td className="p-2.5 text-gray-700">{log.architectName || log.architectId}</td>
+                                        <td className="p-2.5 text-gray-700">{new Date(log.startTime).toLocaleString()}</td>
+                                        <td className="p-2.5 text-gray-700">{new Date(log.endTime).toLocaleString()}</td>
+                                        <td className="p-2.5 text-gray-700">{formatMinutesToHM(log.durationMinutes)}</td>
+                                        <td className="p-2.5 text-gray-600 text-xs max-w-xs truncate" title={log.notes}>{log.notes || '-'}</td>
+                                        <td className="p-2.5 text-gray-700">{log.manualEntry ? 'Yes' : 'No'}</td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -880,7 +947,7 @@ const ProjectDetailsPage: React.FC = () => {
                 </div>
             )}
             {isAdminView && currentTab === 'adminLogs' && allProjectTimeLogs.length === 0 && (
-                <p className="text-gray-500">No time logs recorded for this project yet.</p>
+                <p className="text-gray-600 bg-gray-50 p-4 rounded-md border">No time logs recorded for this project yet.</p>
             )}
 
 
@@ -890,19 +957,20 @@ const ProjectDetailsPage: React.FC = () => {
        {isApplyModalOpen && project && ( 
          <Modal isOpen={isApplyModalOpen} onClose={handleCloseApplyModal} title={`Apply for: ${project.title}`} size="lg">
           <form onSubmit={handleSubmitApplication} className="space-y-4">
+            <ErrorMessage error={applyError} />
             <div><label htmlFor="proposal" className="block text-sm font-medium text-gray-700">Your Proposal</label>
-              <textarea id="proposal" rows={5} value={proposal} onChange={(e) => setProposal(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              <textarea id="proposal" rows={5} value={proposal} onChange={(e) => {setProposal(e.target.value); if(applyError) setApplyError(null);}}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"
                 placeholder="Explain why you are a good fit for this project..." required />
             </div>
             <div><label htmlFor="bidAmount" className="block text-sm font-medium text-gray-700">Your Bid Amount (R)</label>
-              <input type="number" id="bidAmount" value={bidAmount} onChange={(e) => setBidAmount(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              <input type="number" id="bidAmount" value={bidAmount} onChange={(e) => {setBidAmount(e.target.value); if(applyError) setApplyError(null);}}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"
                 placeholder={`Project budget is R ${project.budget.toLocaleString()}`} required min="1" />
             </div>
-            <div className="flex justify-end space-x-3 pt-4">
-              <Button type="button" variant="secondary" onClick={handleCloseApplyModal} disabled={applying}>Cancel</Button>
-              <Button type="submit" variant="primary" isLoading={applying} disabled={applying}>Submit Application</Button>
+            <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 mt-4">
+              <Button type="button" variant="ghost" onClick={handleCloseApplyModal} disabled={applying}>Cancel</Button>
+              <Button type="submit" variant="primary" size="md" isLoading={applying} disabled={applying}>Submit Application</Button>
             </div>
           </form>
         </Modal>
@@ -911,10 +979,20 @@ const ProjectDetailsPage: React.FC = () => {
         {isAdminView && isJobCardModalOpen && project && ( 
             <JobCardFormModal 
                 isOpen={isJobCardModalOpen}
-                onClose={() => { setIsJobCardModalOpen(false); setEditingJobCard(null); }}
+                onClose={() => { setIsJobCardModalOpen(false); setEditingJobCard(null); setJobCardModalError(null); }}
                 onSubmit={handleJobCardFormSubmit}
                 editingJobCard={editingJobCard}
                 projectAssignedFreelancerId={project?.assignedFreelancerId}
+                initialError={jobCardModalError}
+            />
+        )}
+        {isManualLogModalOpenForCardId && currentJobCardForManualLog && (
+            <ManualTimeLogModal
+                isOpen={!!isManualLogModalOpenForCardId}
+                onClose={() => {setIsManualLogModalOpenForCardId(null); setTimeLogError(null);}}
+                onSubmit={(logData) => handleTimeLogSubmit(isManualLogModalOpenForCardId, logData)}
+                jobCardTitle={currentJobCardForManualLog.title}
+                initialError={timeLogError}
             />
         )}
     </div>

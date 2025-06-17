@@ -11,7 +11,8 @@ import {
 import { NAV_LINKS, getMockFileIconPath } from '../../constants';
 import { Link } from 'react-router-dom';
 import { UsersIcon, BriefcaseIcon, ClockIcon, CheckCircleIcon, DocumentTextIcon, ListBulletIcon, CurrencyDollarIcon, IconProps, PencilIcon, ChatBubbleLeftRightIcon, FolderIcon } from './shared/IconComponents';
-import LoadingSpinner from '../shared/LoadingSpinner';
+import LoadingSpinner from './shared/LoadingSpinner'; // Corrected path
+import Button from './shared/Button'; // Import Button
 
 interface StatCardProps {
   title: string;
@@ -35,10 +36,10 @@ const StatCard: React.FC<StatCardProps> = ({ title, value, icon, linkTo, color =
   const content = (
     <div className={`bg-white p-5 md:p-6 rounded-xl shadow-lg flex items-center space-x-4 hover:shadow-xl transition-shadow duration-200 border-l-4 ${colorClasses[color]}`}>
       <div className={`p-3 rounded-full ${colorClasses[color].split(' ')[0]} ${colorClasses[color].split(' ')[1]}`}>
-        {React.cloneElement(icon as React.ReactElement<IconProps>, { className: "w-7 h-7 md:w-8 md:w-8" })}
+        {React.cloneElement(icon as React.ReactElement<IconProps>, { className: "w-7 h-7 md:w-8 md:h-8" })}
       </div>
       <div>
-        <p className="text-sm text-gray-500">{title}</p>
+        <p className="text-sm text-gray-600">{title}</p>
         <p className="text-xl md:text-2xl font-semibold text-gray-800">{value}</p>
       </div>
     </div>
@@ -186,8 +187,8 @@ const DashboardOverview: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      <h1 className="text-3xl font-bold text-gray-800">Dashboard Overview</h1>
-      <p className="text-gray-600">Welcome back, {user.name}! Here's a quick look at your platform activity.</p>
+      <h1 className="text-3xl font-bold text-gray-900">Dashboard Overview</h1>
+      <p className="text-lg text-gray-600 mb-6">Welcome back, {user.name}! Here's a quick look at your platform activity.</p>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 md:gap-6">
         {user.role === UserRole.ADMIN && renderAdminStats()}
@@ -195,78 +196,78 @@ const DashboardOverview: React.FC = () => {
         {user.role === UserRole.CLIENT && renderClientStats()}
       </div>
 
-      <div className="mt-10 p-6 bg-primary-extralight rounded-xl shadow">
-          <h2 className="text-xl font-semibold text-primary mb-3">Quick Actions</h2>
-          <div className="flex flex-wrap gap-3">
+      <div className="mt-10 p-6 bg-gray-50 rounded-lg shadow-md">
+          <h2 className="text-2xl font-semibold text-gray-700 mb-4">Quick Actions</h2>
+          <div className="flex flex-wrap gap-3 items-center">
               {user.role === UserRole.ADMIN && (
                   <>
-                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`}><button className="bg-primary hover:bg-primary-hover text-white px-4 py-2 rounded-lg text-sm">Manage Projects</button></Link>
-                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_USERS}`}><button className="bg-secondary hover:bg-primary text-white px-4 py-2 rounded-lg text-sm">Manage Users</button></Link>
-                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_TIME_REPORTS}`}><button className="bg-secondary hover:bg-primary text-white px-4 py-2 rounded-lg text-sm">View Time Reports</button></Link>
+                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`}><Button variant="primary" size="sm">Manage Projects</Button></Link>
+                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_USERS}`}><Button variant="secondary" size="sm">Manage Users</Button></Link>
+                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_TIME_REPORTS}`}><Button variant="secondary" size="sm">View Time Reports</Button></Link>
                   </>
               )}
                {user.role === UserRole.FREELANCER && (
                   <>
-                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.FREELANCER_BROWSE}`}><button className="bg-primary hover:bg-primary-hover text-white px-4 py-2 rounded-lg text-sm">Browse Projects</button></Link>
-                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.FREELANCER_JOB_CARDS}`}><button className="bg-secondary hover:bg-primary text-white px-4 py-2 rounded-lg text-sm">My Job Cards</button></Link>
+                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.FREELANCER_BROWSE}`}><Button variant="primary" size="sm">Browse Projects</Button></Link>
+                    <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.FREELANCER_JOB_CARDS}`}><Button variant="secondary" size="sm">My Job Cards</Button></Link>
                   </>
               )}
               {user.role === UserRole.CLIENT && (
-                  <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.CLIENT_MY_PROJECTS}`}><button className="bg-primary hover:bg-primary-hover text-white px-4 py-2 rounded-lg text-sm">View My Projects</button></Link>
+                  <Link to={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.CLIENT_MY_PROJECTS}`}><Button variant="primary" size="sm">View My Projects</Button></Link>
               )}
-              <Link to={`${NAV_LINKS.PROFILE}`}><button className="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm">Edit My Profile</button></Link>
+              <Link to={`${NAV_LINKS.PROFILE}`}><Button variant="outline" size="sm">Edit My Profile</Button></Link>
           </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 mt-10">
         <div>
-            <h2 className="text-xl font-semibold text-gray-700 mb-3">Recent Activity</h2>
-            <div className="bg-white p-4 md:p-6 rounded-xl shadow">
+            <h2 className="text-2xl font-semibold text-gray-700 mb-4">Recent Activity</h2>
+            <div className="bg-white p-4 md:p-6 rounded-lg shadow-md">
                 {recentActivity.length > 0 ? (
                     <ul className="space-y-4 max-h-72 overflow-y-auto">
-                        {recentActivity.map(activity => ( // Assuming activity has an 'iconName' or similar to map to an IconComponent
+                        {recentActivity.map(activity => (
                             <li key={activity.id} className="flex items-start space-x-3 pb-3 border-b border-gray-100 last:border-b-0">
                                 <div className="flex-shrink-0 mt-1 text-primary">
                                     {activity.iconName === 'CheckCircleIcon' ? <CheckCircleIcon className="w-5 h-5"/> : 
                                      activity.iconName === 'PencilIcon' ? <PencilIcon className="w-5 h-5"/> :
-                                     <BriefcaseIcon className="w-5 h-5"/> /* Default icon */
+                                     <BriefcaseIcon className="w-5 h-5"/>
                                     }
                                 </div>
                                 <div>
                                     <p className="text-sm text-gray-700">{activity.text}</p>
-                                    <p className="text-xs text-gray-400">{activity.time || new Date(activity.timestamp).toLocaleString()}</p>
+                                    <p className="text-xs text-gray-500">{activity.time || new Date(activity.timestamp).toLocaleString()}</p>
                                 </div>
                             </li>
                         ))}
                     </ul>
                 ) : (
-                    <p className="text-gray-500">No recent activity to display.</p>
+                    <p className="text-gray-600">No recent activity to display.</p>
                 )}
             </div>
         </div>
 
         {user.role === UserRole.ADMIN && (
             <div>
-                <h2 className="text-xl font-semibold text-gray-700 mb-3">Recent File Uploads</h2>
-                <div className="bg-white p-4 md:p-6 rounded-xl shadow">
+                <h2 className="text-2xl font-semibold text-gray-700 mb-4">Recent File Uploads</h2>
+                <div className="bg-white p-4 md:p-6 rounded-lg shadow-md">
                     {recentFiles.length > 0 ? (
                         <ul className="space-y-3 max-h-72 overflow-y-auto">
                             {recentFiles.map(file => (
                                 <li key={file.id} className="flex items-center space-x-3 pb-2 border-b border-gray-100 last:border-b-0">
                                     <img src={getMockFileIconPath(file.type)} alt={file.type} className="w-6 h-6 flex-shrink-0"/>
-                                    <div className="flex-grow">
+                                    <div className="flex-grow min-w-0"> {/* Added min-w-0 for truncate to work */}
                                         <p className="text-sm text-gray-700 truncate" title={file.name}>{file.name}</p>
-                                        <p className="text-xs text-gray-400">
+                                        <p className="text-xs text-gray-500">
                                             Uploaded by {file.uploadedByName || 'Unknown User'} 
                                             {file.projectId ? ` to project ID: ${file.projectId}`: ''}
                                         </p>
                                     </div>
-                                    <span className="text-xs text-gray-400 flex-shrink-0">{new Date(file.uploadedAt).toLocaleDateString()}</span>
+                                    <span className="text-xs text-gray-500 flex-shrink-0">{new Date(file.uploadedAt).toLocaleDateString()}</span>
                                 </li>
                             ))}
                         </ul>
                     ) : (
-                         <p className="text-gray-500">No files uploaded recently.</p>
+                         <p className="text-gray-600">No files uploaded recently.</p>
                     )}
                 </div>
             </div>

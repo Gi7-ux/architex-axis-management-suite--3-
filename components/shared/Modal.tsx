@@ -32,8 +32,9 @@ const Modal: React.FC<ModalProps> = ({ isOpen, onClose, title, children, size = 
           <h3 className="text-xl font-semibold text-primary">{title}</h3>
           <button
             onClick={onClose}
-            className="text-gray-500 hover:text-primary transition-colors p-1 rounded-full hover:bg-gray-200"
+            className="text-gray-500 hover:text-primary transition-colors p-1 rounded-full hover:bg-gray-200 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-1"
             aria-label="Close modal"
+            title="Close" // Added tooltip
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M6 18L18 6M6 6l12 12"></path>

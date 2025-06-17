@@ -221,207 +221,6 @@ if ($action === 'register_user' && $method === 'POST') {
 
 }
 
-// NEW: Get My Profile Details (Authenticated User)
-elseif ($action === 'get_my_profile_details' && $method === 'GET') {
-    $authenticated_user = require_authentication($conn);
-    $user_id = (int)$authenticated_user['id'];
-
-    // Fetch full user details from users table
-    $sql_user = "SELECT id, username, email, role, name, phone_number, company, experience, hourly_rate, avatar_url, is_active, created_at, updated_at
-                 FROM users
-                 WHERE id = ?";
-    $stmt_user = $conn->prepare($sql_user);
-    if ($stmt_user === false) {
-        error_log("Prepare failed (get_my_profile_details - user): " . $conn->error);
-        send_json_response(500, ['error' => 'Failed to prepare statement for user details.']);
-    }
-    $stmt_user->bind_param("i", $user_id);
-    if (!$stmt_user->execute()) {
-        error_log("Execute failed (get_my_profile_details - user): " . $stmt_user->error);
-        send_json_response(500, ['error' => 'Failed to execute statement for user details.']);
-    }
-    $result_user = $stmt_user->get_result();
-    $user_details = $result_user->fetch_assoc();
-    $stmt_user->close();
-
-    if (!$user_details) {
-        send_json_response(404, ['error' => 'User profile not found.']); // Should not happen if authenticated
-    }
-
-    // Cast numeric types and boolean
-    if (isset($user_details['hourly_rate'])) {
-        $user_details['hourly_rate'] = $user_details['hourly_rate'] === null ? null : (float)$user_details['hourly_rate'];
-    }
-    $user_details['is_active'] = (bool)$user_details['is_active'];
-    $user_details['id'] = (int)$user_details['id'];
-
-
-    // Fetch user's skills
-    $user_details['skills'] = [];
-    $sql_skills = "SELECT s.id, s.name
-                   FROM user_skills us
-                   JOIN skills s ON us.skill_id = s.id
-                   WHERE us.user_id = ?
-                   ORDER BY s.name ASC";
-    $stmt_skills = $conn->prepare($sql_skills);
-    if ($stmt_skills) {
-        $stmt_skills->bind_param("i", $user_id);
-        if ($stmt_skills->execute()) {
-            $result_skills = $stmt_skills->get_result();
-            while ($skill_row = $result_skills->fetch_assoc()) {
-                $user_details['skills'][] = [
-                    'id' => (int)$skill_row['id'],
-                    'name' => $skill_row['name']
-                ];
-            }
-        } else {
-            error_log("Execute failed (get_my_profile_details - skills): " . $stmt_skills->error);
-            // Non-critical, proceed without skills if this fails
-        }
-        $stmt_skills->close();
-    } else {
-        error_log("Prepare failed (get_my_profile_details - skills): " . $conn->error);
-    }
-
-    send_json_response(200, $user_details);
-
-} // END NEW: Get My Profile Details
-
-// NEW: Update My Profile (Authenticated User)
-elseif ($action === 'update_my_profile' && ($method === 'POST' || $method === 'PUT')) {
-    $authenticated_user = require_authentication($conn);
-    $user_id = (int)$authenticated_user['id'];
-    $user_role = $authenticated_user['role'];
-
-    $data = json_decode(file_get_contents('php://input'), true);
-    if (empty($data) && !isset($data['skill_ids'])) { // Allow skill_ids to be an empty array for removing all skills
-        send_json_response(400, ['error' => 'No update data provided or invalid JSON.']);
-    }
-
-    $fields_to_update_sql = [];
-    $params_for_bind = [];
-    $param_types = "";
-
-    // Updatable string fields
-    foreach (['name', 'phone_number', 'company', 'avatar_url'] as $field) {
-        if (array_key_exists($field, $data)) {
-            $fields_to_update_sql[] = "$field = ?"; $params_for_bind[] = $data[$field]; $param_types .= "s";
-        }
-    }
-    // Updatable text field
-    if (array_key_exists('experience', $data)) {
-        $fields_to_update_sql[] = "experience = ?"; $params_for_bind[] = $data['experience']; $param_types .= "s";
-    }
-
-    // Hourly rate (only for freelancers)
-    if (array_key_exists('hourly_rate', $data)) {
-        if ($user_role === 'freelancer') {
-            $hourlyRate = $data['hourly_rate'] === null || $data['hourly_rate'] === '' ? null : (float)$data['hourly_rate'];
-            if ($hourlyRate !== null && $hourlyRate < 0) {
-                send_json_response(400, ['error'=>'Hourly rate cannot be negative.']);
-            }
-            $fields_to_update_sql[] = "hourly_rate = ?"; $params_for_bind[] = $hourlyRate; $param_types .= "d";
-        } else {
-            // Non-freelancers trying to set hourly_rate - ignore or send error. Let's ignore for now.
-            // send_json_response(400, ['error'=>'Hourly rate can only be set by freelancers.']);
-        }
-    }
-
-    $conn->begin_transaction();
-    try {
-        $user_table_updated = false;
-        if (!empty($fields_to_update_sql)) {
-            $fields_to_update_sql[] = "updated_at = NOW()"; // Always update this timestamp
-
-            $sql_update_user = "UPDATE users SET " . implode(", ", $fields_to_update_sql) . " WHERE id = ?";
-            $current_params_for_user = $params_for_bind; // Use a copy for user table update
-            $current_params_for_user[] = $user_id;
-            $current_types_for_user = $param_types . "i";
-
-            $stmt_update_user = $conn->prepare($sql_update_user);
-            if ($stmt_update_user === false) {
-                throw new Exception('Failed to prepare user profile update statement: ' . $conn->error);
-            }
-            if (strlen($current_types_for_user) !== count($current_params_for_user)){
-                 throw new Exception('Param count mismatch for users table update. Types: '.$current_types_for_user.' Params: '.count($current_params_for_user));
-            }
-            $stmt_update_user->bind_param($current_types_for_user, ...$current_params_for_user);
-
-            if (!$stmt_update_user->execute()) {
-                throw new Exception('Failed to update user profile: ' . $stmt_update_user->error);
-            }
-            if($stmt_update_user->affected_rows > 0) $user_table_updated = true;
-            $stmt_update_user->close();
-        }
-
-        $skills_updated = false;
-        if (isset($data['skill_ids']) && is_array($data['skill_ids'])) {
-            $skill_ids = array_map('intval', $data['skill_ids']);
-
-            // Delete existing skills for this user
-            $stmt_delete_skills = $conn->prepare("DELETE FROM user_skills WHERE user_id = ?");
-            if (!$stmt_delete_skills) { throw new Exception('Failed to prepare deleting user skills: ' . $conn->error); }
-            $stmt_delete_skills->bind_param("i", $user_id);
-            if (!$stmt_delete_skills->execute()) { throw new Exception('Failed to delete user skills: ' . $stmt_delete_skills->error); }
-            // We consider skills updated if the key 'skill_ids' is present, even if it's empty or same as before.
-            // More precise check would involve comparing old and new skill sets.
-            $skills_updated = true; // Mark as attempt to update skills
-            $stmt_delete_skills->close();
-
-            if (!empty($skill_ids)) {
-                // Validate skill IDs
-                $placeholders = implode(',', array_fill(0, count($skill_ids), '?'));
-                $stmt_check_skills = $conn->prepare("SELECT id FROM skills WHERE id IN ($placeholders)");
-                if (!$stmt_check_skills) { throw new Exception('Failed to prepare skill ID validation: ' . $conn->error); }
-                $types_skills = str_repeat('i', count($skill_ids));
-                $stmt_check_skills->bind_param($types_skills, ...$skill_ids);
-                if (!$stmt_check_skills->execute()) { throw new Exception('Failed to execute skill ID validation: ' . $stmt_check_skills->error); }
-                $valid_skill_result = $stmt_check_skills->get_result();
-                if ($valid_skill_result->num_rows !== count($skill_ids)) {
-                    throw new Exception('One or more provided skill IDs are invalid.');
-                }
-                $stmt_check_skills->close();
-
-                // Insert new skills
-                $sql_insert_skill = "INSERT INTO user_skills (user_id, skill_id) VALUES (?, ?)";
-                $stmt_insert_skill = $conn->prepare($sql_insert_skill);
-                if (!$stmt_insert_skill) { throw new Exception('Failed to prepare adding user skill: ' . $conn->error); }
-                foreach ($skill_ids as $skill_id) {
-                    $stmt_insert_skill->bind_param("ii", $user_id, $skill_id);
-                    if (!$stmt_insert_skill->execute()) {
-                        // Check for duplicate entry error specifically (MySQL error code 1062)
-                        if ($conn->errno === 1062) {
-                            // Potentially ignore duplicate skill if desired, or log it
-                            // For now, let it be part of a general failure for this skill
-                        }
-                        throw new Exception('Failed to add skill ID ' . $skill_id . ': ' . $stmt_insert_skill->error);
-                    }
-                }
-                $stmt_insert_skill->close();
-            }
-        }
-
-        if (!$user_table_updated && !$skills_updated) {
-             // This means skill_ids key was not present AND no other user fields were updated.
-             // If skill_ids was present but empty (to remove all skills), $skills_updated would be true.
-            $conn->rollback(); // Nothing to commit
-            send_json_response(200, ['message' => 'No profile data provided or no changes made.']);
-        } else {
-            $conn->commit();
-            send_json_response(200, ['message' => 'Profile updated successfully.']);
-        }
-
-    } catch (Exception $e) {
-        $conn->rollback();
-        // Check for specific error types if needed, e.g., duplicate entry for skills if not handled above
-        if (strpos($e->getMessage(), 'invalid') !== false || strpos($e->getMessage(), 'cannot be negative') !== false ) {
-             send_json_response(400, ['error' => $e->getMessage()]);
-        } else {
-             send_json_response(500, ['error' => 'Failed to update profile: ' . $e->getMessage()]);
-        }
-    }
-} // END NEW: Update My Profile
-
 // NEW: Admin - Get All Users
 elseif ($action === 'get_all_users' && $method === 'GET') {
     $authenticated_user = require_authentication($conn);
@@ -965,6 +764,138 @@ elseif ($action === 'get_admin_dashboard_stats' && $method === 'GET') {
     send_json_response(200, $stats);
 
 } // END NEW: Admin - Get Dashboard Statistics
+
+// NEW: Admin - Get Project Financials Report
+elseif ($action === 'get_admin_project_financials_report' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can access this report.']);
+    }
+
+    // Optional filters
+    $start_date_filter = $_GET['start_date'] ?? null;
+    $end_date_filter = $_GET['end_date'] ?? null;
+    $client_id_filter = isset($_GET['client_id']) ? (int)$_GET['client_id'] : null;
+    $freelancer_id_filter = isset($_GET['freelancer_id']) ? (int)$_GET['freelancer_id'] : null;
+    $project_status_filter = $_GET['project_status'] ?? null;
+
+    $sql = "SELECT
+                p.id AS project_id, p.title AS project_title, p.status AS project_status,
+                p.created_at AS project_created_at,
+                uc.username AS client_name,
+                uf.username AS freelancer_name,
+                pb.budget_amount, pb.currency AS budget_currency
+            FROM projects p
+            LEFT JOIN users uc ON p.client_id = uc.id
+            LEFT JOIN users uf ON p.freelancer_id = uf.id
+            LEFT JOIN Project_Budgets pb ON p.id = pb.project_id";
+
+    $where_conditions = [];
+    $bind_params_list = [];
+    $param_types = "";
+
+    if ($start_date_filter) {
+        if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $start_date_filter)) { send_json_response(400, ['error' => 'Invalid start_date format. Use YYYY-MM-DD.']); }
+        $where_conditions[] = "DATE(p.created_at) >= ?";
+        $bind_params_list[] = $start_date_filter;
+        $param_types .= "s";
+    }
+    if ($end_date_filter) {
+        if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $end_date_filter)) { send_json_response(400, ['error' => 'Invalid end_date format. Use YYYY-MM-DD.']); }
+        $where_conditions[] = "DATE(p.created_at) <= ?";
+        $bind_params_list[] = $end_date_filter;
+        $param_types .= "s";
+    }
+    if ($client_id_filter) {
+        $where_conditions[] = "p.client_id = ?";
+        $bind_params_list[] = $client_id_filter;
+        $param_types .= "i";
+    }
+    if ($freelancer_id_filter) {
+        $where_conditions[] = "p.freelancer_id = ?";
+        $bind_params_list[] = $freelancer_id_filter;
+        $param_types .= "i";
+    }
+    if ($project_status_filter) {
+        $where_conditions[] = "p.status = ?";
+        $bind_params_list[] = $project_status_filter;
+        $param_types .= "s";
+    }
+
+    if (!empty($where_conditions)) {
+        $sql .= " WHERE " . implode(" AND ", $where_conditions);
+    }
+    $sql .= " ORDER BY p.created_at DESC";
+
+    $stmt_projects = $conn->prepare($sql);
+    if ($stmt_projects === false) {
+        error_log("Prepare failed (admin_project_financials - projects): " . $conn->error);
+        send_json_response(500, ['error' => 'Failed to prepare statement for projects.']);
+    }
+    if (!empty($param_types)) {
+        $stmt_projects->bind_param($param_types, ...$bind_params_list);
+    }
+    if (!$stmt_projects->execute()) {
+        error_log("Execute failed (admin_project_financials - projects): " . $stmt_projects->error);
+        send_json_response(500, ['error' => 'Failed to execute statement for projects.']);
+    }
+    $result_projects = $stmt_projects->get_result();
+
+    $report_data = [];
+
+    $stmt_invoiced = $conn->prepare("SELECT SUM(total_amount) AS total_invoiced_paid_to_platform FROM Client_Invoices WHERE project_id = ? AND status = 'paid'");
+    if(!$stmt_invoiced) { error_log("Prepare failed (stmt_invoiced): ".$conn->error); send_json_response(500, ['error'=>'DB error preparing invoice sum.']); }
+
+    $stmt_paid_freelancer = $conn->prepare("SELECT SUM(amount_paid) AS total_paid_to_freelancer FROM Freelancer_Payments WHERE project_id = ?");
+    if(!$stmt_paid_freelancer) { error_log("Prepare failed (stmt_paid_freelancer): ".$conn->error); send_json_response(500, ['error'=>'DB error preparing payments sum.']); }
+
+    while ($project_row = $result_projects->fetch_assoc()) {
+        $project_id = (int)$project_row['project_id'];
+        $total_invoiced_paid = 0.00;
+        $total_paid_to_freelancer = 0.00;
+
+        $stmt_invoiced->bind_param("i", $project_id);
+        if (!$stmt_invoiced->execute()) {
+            error_log("Execute failed (stmt_invoiced for project {$project_id}): ".$stmt_invoiced->error);
+        } else {
+            $res_invoiced_sum = $stmt_invoiced->get_result()->fetch_assoc();
+            if ($res_invoiced_sum && $res_invoiced_sum['total_invoiced_paid_to_platform'] !== null) {
+                $total_invoiced_paid = (float)$res_invoiced_sum['total_invoiced_paid_to_platform'];
+            }
+        }
+
+        $stmt_paid_freelancer->bind_param("i", $project_id);
+        if (!$stmt_paid_freelancer->execute()) {
+            error_log("Execute failed (stmt_paid_freelancer for project {$project_id}): ".$stmt_paid_freelancer->error);
+        } else {
+            $res_paid_freelancer_sum = $stmt_paid_freelancer->get_result()->fetch_assoc();
+            if ($res_paid_freelancer_sum && $res_paid_freelancer_sum['total_paid_to_freelancer'] !== null) {
+                $total_paid_to_freelancer = (float)$res_paid_freelancer_sum['total_paid_to_freelancer'];
+            }
+        }
+
+        $platform_profit = $total_invoiced_paid - $total_paid_to_freelancer;
+
+        $report_data[] = [
+            "project_id" => $project_id,
+            "project_title" => $project_row['project_title'],
+            "client_name" => $project_row['client_name'],
+            "freelancer_name" => $project_row['freelancer_name'],
+            "project_status" => $project_row['project_status'],
+            "budget_amount" => $project_row['budget_amount'] ? (float)$project_row['budget_amount'] : null,
+            "budget_currency" => $project_row['budget_currency'],
+            "total_invoiced_paid_to_platform" => $total_invoiced_paid,
+            "total_paid_to_freelancer" => $total_paid_to_freelancer,
+            "platform_profit" => $platform_profit
+        ];
+    }
+    $stmt_projects->close();
+    $stmt_invoiced->close();
+    $stmt_paid_freelancer->close();
+
+    send_json_response(200, $report_data);
+
+} // END NEW: Admin - Get Project Financials Report
 
 // NEW: Admin - Get Own Notifications
 elseif ($action === 'get_admin_notifications' && $method === 'GET') {
@@ -1658,120 +1589,6 @@ elseif ($action === 'withdraw_application' && ($method === 'POST' || $method ===
 
 } // END NEW: Freelancer Withdraws an Application
 
-// NEW: Get Freelancer Dashboard Stats
-elseif ($action === 'get_freelancer_dashboard_stats' && $method === 'GET') {
-    $authenticated_user = require_authentication($conn);
-    $freelancer_id = (int)$authenticated_user['id'];
-
-    if ($authenticated_user['role'] !== 'freelancer') {
-        send_json_response(403, ['error' => 'Forbidden: Only freelancers can access these statistics.']);
-    }
-
-    $stats = [
-        'myTotalJobCards' => 0,
-        'myInProgressJobCards' => 0,
-        'openProjectsCount' => 0,
-        'myApplicationsCount' => 0
-    ];
-
-    // My Total Job Cards
-    $stmt_total_jc = $conn->prepare("SELECT COUNT(*) AS total FROM job_cards WHERE assigned_freelancer_id = ?");
-    if ($stmt_total_jc) {
-        $stmt_total_jc->bind_param("i", $freelancer_id);
-        if ($stmt_total_jc->execute()) {
-            $result = $stmt_total_jc->get_result()->fetch_assoc();
-            $stats['myTotalJobCards'] = (int)$result['total'];
-        } else { error_log("Execute failed (myTotalJobCards): " . $stmt_total_jc->error); }
-        $stmt_total_jc->close();
-    } else { error_log("Prepare failed (myTotalJobCards): " . $conn->error); }
-
-    // My In-Progress Job Cards
-    $stmt_inprogress_jc = $conn->prepare("SELECT COUNT(*) AS total FROM job_cards WHERE assigned_freelancer_id = ? AND status = 'in_progress'");
-    if ($stmt_inprogress_jc) {
-        $stmt_inprogress_jc->bind_param("i", $freelancer_id);
-        if ($stmt_inprogress_jc->execute()) {
-            $result = $stmt_inprogress_jc->get_result()->fetch_assoc();
-            $stats['myInProgressJobCards'] = (int)$result['total'];
-        } else { error_log("Execute failed (myInProgressJobCards): " . $stmt_inprogress_jc->error); }
-        $stmt_inprogress_jc->close();
-    } else { error_log("Prepare failed (myInProgressJobCards): " . $conn->error); }
-
-    // Open Projects Count (system-wide)
-    $stmt_open_proj = $conn->prepare("SELECT COUNT(*) AS total FROM projects WHERE status = 'open'");
-    if ($stmt_open_proj) {
-        if ($stmt_open_proj->execute()) {
-            $result = $stmt_open_proj->get_result()->fetch_assoc();
-            $stats['openProjectsCount'] = (int)$result['total'];
-        } else { error_log("Execute failed (openProjectsCount): " . $stmt_open_proj->error); }
-        $stmt_open_proj->close();
-    } else { error_log("Prepare failed (openProjectsCount): " . $conn->error); }
-
-    // My Applications Count
-    $stmt_my_apps = $conn->prepare("SELECT COUNT(*) AS total FROM applications WHERE freelancer_id = ?");
-    if ($stmt_my_apps) {
-        $stmt_my_apps->bind_param("i", $freelancer_id);
-        if ($stmt_my_apps->execute()) {
-            $result = $stmt_my_apps->get_result()->fetch_assoc();
-            $stats['myApplicationsCount'] = (int)$result['total'];
-        } else { error_log("Execute failed (myApplicationsCount): " . $stmt_my_apps->error); }
-        $stmt_my_apps->close();
-    } else { error_log("Prepare failed (myApplicationsCount): " . $conn->error); }
-
-    send_json_response(200, $stats);
-
-} // END NEW: Get Freelancer Dashboard Stats
-
-// NEW: Get My Job Cards (Freelancer)
-elseif ($action === 'get_my_job_cards' && $method === 'GET') {
-    $authenticated_user = require_authentication($conn);
-    $freelancer_id = (int)$authenticated_user['id'];
-
-    if ($authenticated_user['role'] !== 'freelancer') {
-        send_json_response(403, ['error' => 'Forbidden: Only freelancers can access their job cards.']);
-    }
-
-    $sql = "SELECT
-                jc.id, jc.project_id, jc.title, jc.description, jc.status,
-                jc.assigned_freelancer_id, jc.estimated_hours,
-                jc.created_at, jc.updated_at,
-                p.title AS project_title
-            FROM job_cards jc
-            JOIN projects p ON jc.project_id = p.id
-            WHERE jc.assigned_freelancer_id = ?
-            ORDER BY jc.updated_at DESC";
-
-    $stmt = $conn->prepare($sql);
-    if ($stmt === false) {
-        error_log("Prepare failed (get_my_job_cards): " . $conn->error);
-        send_json_response(500, ['error' => 'Failed to prepare statement for fetching job cards.']);
-    }
-
-    $stmt->bind_param("i", $freelancer_id);
-
-    if (!$stmt->execute()) {
-        error_log("Execute failed (get_my_job_cards): " . $stmt->error);
-        send_json_response(500, ['error' => 'Failed to execute statement for fetching job cards.']);
-    }
-
-    $result = $stmt->get_result();
-    $my_job_cards = [];
-    while ($row = $result->fetch_assoc()) {
-        // Ensure numeric types are correctly typed if necessary, e.g., from strings
-        if (isset($row['estimated_hours'])) {
-            $row['estimated_hours'] = $row['estimated_hours'] === null ? null : (float)$row['estimated_hours'];
-        }
-        $row['id'] = (int)$row['id'];
-        $row['project_id'] = (int)$row['project_id'];
-        // assigned_freelancer_id will also be an int, but it's the current user, so less critical to cast for response here.
-
-        $my_job_cards[] = $row;
-    }
-    $stmt->close();
-
-    send_json_response(200, $my_job_cards);
-
-} // END NEW: Get My Job Cards (Freelancer)
-
 // NEW: Create Job Card
 elseif ($action === 'create_job_card' && $method === 'POST') {
     $authenticated_user = require_authentication($conn);
@@ -2345,6 +2162,69 @@ elseif ($action === 'get_project_time_logs' && $method === 'GET') {
     send_json_response(200, $project_time_logs_list);
 
 } // END NEW: Get All Time Logs for a Specific Project
+
+
+// NEW: Freelancer Dashboard - Get Stats
+elseif ($action === 'get_freelancer_dashboard_stats' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'freelancer') {
+        send_json_response(403, ['error' => 'Forbidden: Only freelancers can access these statistics.']);
+    }
+    $freelancer_id = (int)$authenticated_user['id'];
+
+    $stats = [
+        'myTotalJobCards' => 0,
+        'myInProgressJobCards' => 0,
+        'openProjectsCount' => 0,
+        'myApplicationsCount' => 0
+    ];
+
+    // myTotalJobCards: Total count of job cards where assigned_freelancer_id is the freelancer's ID.
+    $stmt_total_jc = $conn->prepare("SELECT COUNT(*) AS count FROM job_cards WHERE assigned_freelancer_id = ?");
+    if ($stmt_total_jc) {
+        $stmt_total_jc->bind_param("i", $freelancer_id);
+        if ($stmt_total_jc->execute()) {
+            $result = $stmt_total_jc->get_result()->fetch_assoc();
+            $stats['myTotalJobCards'] = (int)$result['count'];
+        } else { error_log("Error executing myTotalJobCards: " . $stmt_total_jc->error); }
+        $stmt_total_jc->close();
+    } else { error_log("Error preparing myTotalJobCards: " . $conn->error); }
+
+    // myInProgressJobCards: Count of job cards assigned to the freelancer that have a status of 'in_progress'.
+    $stmt_inprogress_jc = $conn->prepare("SELECT COUNT(*) AS count FROM job_cards WHERE assigned_freelancer_id = ? AND status = 'in_progress'");
+    if ($stmt_inprogress_jc) {
+        $stmt_inprogress_jc->bind_param("i", $freelancer_id);
+        if ($stmt_inprogress_jc->execute()) {
+            $result = $stmt_inprogress_jc->get_result()->fetch_assoc();
+            $stats['myInProgressJobCards'] = (int)$result['count'];
+        } else { error_log("Error executing myInProgressJobCards: " . $stmt_inprogress_jc->error); }
+        $stmt_inprogress_jc->close();
+    } else { error_log("Error preparing myInProgressJobCards: " . $conn->error); }
+
+    // openProjectsCount: Total count of all projects in the system with a status of 'open'.
+    $stmt_open_proj = $conn->prepare("SELECT COUNT(*) AS count FROM projects WHERE status = 'open'");
+    if ($stmt_open_proj) {
+        if ($stmt_open_proj->execute()) {
+            $result = $stmt_open_proj->get_result()->fetch_assoc();
+            $stats['openProjectsCount'] = (int)$result['count'];
+        } else { error_log("Error executing openProjectsCount: " . $stmt_open_proj->error); }
+        $stmt_open_proj->close();
+    } else { error_log("Error preparing openProjectsCount: " . $conn->error); }
+
+    // myApplicationsCount: Total count of applications submitted by the freelancer from the applications table.
+    $stmt_my_apps = $conn->prepare("SELECT COUNT(*) AS count FROM applications WHERE freelancer_id = ?");
+    if ($stmt_my_apps) {
+        $stmt_my_apps->bind_param("i", $freelancer_id);
+        if ($stmt_my_apps->execute()) {
+            $result = $stmt_my_apps->get_result()->fetch_assoc();
+            $stats['myApplicationsCount'] = (int)$result['count'];
+        } else { error_log("Error executing myApplicationsCount: " . $stmt_my_apps->error); }
+        $stmt_my_apps->close();
+    } else { error_log("Error preparing myApplicationsCount: " . $conn->error); }
+
+    send_json_response(200, $stats);
+
+} // END NEW: Freelancer Dashboard - Get Stats
 
 // NEW: Update a Specific Time Log
 elseif ($action === 'update_time_log' && ($method === 'PUT' || $method === 'POST')) {

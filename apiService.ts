@@ -6,6 +6,7 @@ export interface UserRegistrationData {
   email: string;
   password: string;
   role: UserRole; // 'freelancer', 'client', or 'admin'
+  recaptcha_token?: string; // Added for reCAPTCHA
 }
 
 // Response from successful registration (message only)
@@ -17,6 +18,7 @@ export interface RegistrationResponse {
 export interface UserLoginData {
   email: string;
   password: string;
+  recaptcha_token?: string; // Added for reCAPTCHA
 }
 
 // User object returned by PHP login/profile (subset of main User type)
@@ -142,6 +144,79 @@ export interface MyJobCardItem {
   // Add any other relevant fields returned by the backend if necessary
 }
 // --- Freelancer Specific Types --- END
+
+// --- Job Card Messaging Service Types --- START
+export interface MessageAttachmentPHP {
+  id: number;
+  message_id?: number | null; // Nullable if created before message_id is known
+  uploader_id?: number | null;
+  file_name: string; // System-generated unique filename
+  original_file_name: string;
+  file_path: string; // Relative path for client to construct full URL
+  file_type: string;
+  file_size_bytes: number;
+  created_at: string; // ISO8601
+}
+
+// Re-evaluating MessagePHP based on its current usage and new needs
+// It seems MessagePHP is already defined for general messaging.
+// We might need a more specific one for Job Card Messages if backend returns different fields,
+// or augment existing one if they are compatible.
+// For now, let's assume the existing MessagePHP can be augmented or is compatible.
+// If MessagePHP was defined like this:
+// export interface MessagePHP {
+//   id: number;
+//   conversation_id: number;
+//   sender_id: number;
+//   sender_username: string;
+//   content: string;
+//   created_at: string;
+//   read_at: string | null;
+// }
+// We will enhance it (or create a new specific type like JobCardMessagePHP)
+// For the purpose of this task, let's update MessagePHP if it exists, or define it with these fields.
+// Assuming MessagePHP is already defined and we are adding to it or ensuring fields exist:
+export interface MessagePHP { // This might need to be merged with an existing MessagePHP
+  id: number;
+  conversation_id: number;
+  sender_id: number;
+  sender_username: string;
+  sender_avatar_url?: string | null;
+  content: string;
+  created_at: string; // ISO8601
+  read_at?: string | null; // ISO8601 or null
+  attachments?: MessageAttachmentPHP[];
+  moderation_status?: 'pending_approval' | 'approved' | 'rejected' | 'not_applicable';
+  is_visible_to_client?: boolean;
+}
+
+
+export interface SendJobCardMessagePayload {
+  job_card_id: number; // Or string
+  content: string;
+  attachment_ids?: number[];
+}
+
+export interface GetJobCardMessagesParams {
+  job_card_id: number; // Or string
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminModerateMessagePayload {
+  message_id: number; // Or string
+  new_moderation_status: 'approved' | 'rejected';
+}
+
+export interface UploadMessageAttachmentResponse {
+  id: number;
+  original_file_name: string;
+  file_type: string;
+  file_size_bytes: number;
+  file_path: string;
+  message?: string; // Backend includes a success message
+}
+// --- Job Card Messaging Service Types --- END
 
 
 // const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api'; // Example if using build-time env vars
@@ -871,17 +946,17 @@ export interface ConversationPreviewPHP {
 }
 
 // For individual messages within a conversation
-export interface MessagePHP {
-  id: number; // message_id from backend
-  conversation_id: number;
-  sender_id: number;
-  sender_username: string;
-  content: string;
-  created_at: string; // ISO8601
-  read_at: string | null; // ISO8601 or null
-}
+// export interface MessagePHP { // Original definition - REMOVED/COMMENTED to be replaced by the one above for Job Card messages or a merged one
+//   id: number; // message_id from backend
+//   conversation_id: number;
+//   sender_id: number;
+//   sender_username: string;
+//   content: string;
+//   created_at: string; // ISO8601
+//   read_at: string | null; // ISO8601 or null
+// }
 
-// Payload for sending a message
+// Payload for sending a message (General, not job-card specific)
 export interface SendMessagePayload {
   conversation_id: number; // Or string if frontend uses string IDs and converts
   content: string;
@@ -950,6 +1025,46 @@ export const markConversationAsReadAPI = (conversationId: number | string): Prom
     body: JSON.stringify({ conversation_id: conversationId }),
   }, true); // Requires Auth
 };
+
+// --- Job Card Messaging Service ---
+
+export const uploadMessageAttachmentAPI = (formData: FormData): Promise<UploadMessageAttachmentResponse> => {
+  // FormData should contain 'job_card_id' and 'attachment_file'
+  return apiFetch<UploadMessageAttachmentResponse>(`/api.php?action=upload_message_attachment`, {
+    method: 'POST',
+    body: formData,
+    headers: { 'Content-Type': undefined }, // Let browser set Content-Type for FormData
+  }, true); // Requires Auth
+};
+
+export const sendJobCardMessageAPI = (payload: SendJobCardMessagePayload): Promise<MessagePHP> => {
+  return apiFetch<MessagePHP>(`/api.php?action=send_job_card_message`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, true); // Requires Auth
+};
+
+export const getJobCardMessagesAPI = (params: GetJobCardMessagesParams): Promise<MessagePHP[]> => {
+  const queryParams = new URLSearchParams();
+  // job_card_id is mandatory and part of the main URL segment
+  if (params.limit) queryParams.append('limit', String(params.limit));
+  if (params.offset) queryParams.append('offset', String(params.offset));
+
+  const queryString = queryParams.toString();
+  const endpoint = `/api.php?action=get_job_card_messages&job_card_id=${params.job_card_id}${queryString ? '&' + queryString : ''}`;
+
+  return apiFetch<MessagePHP[]>(endpoint, {
+    method: 'GET',
+  }, true); // Requires Auth
+};
+
+export const adminModerateMessageAPI = (payload: AdminModerateMessagePayload): Promise<AdminActionResponse> => {
+  return apiFetch<AdminActionResponse>(`/api.php?action=admin_moderate_message`, {
+    method: 'POST', // Or 'PUT' as per backend
+    body: JSON.stringify(payload),
+  }, true); // Requires Admin Auth
+};
+
 
 // Comment out or remove old messaging APIs from types.ts if they are fully superseded
 /*

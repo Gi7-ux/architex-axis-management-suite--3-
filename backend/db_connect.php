@@ -101,9 +101,11 @@ Time Logs Table:
 
 Conversations Table:
 - id: INT, Primary Key, Auto Increment
+- job_card_id: INT, Nullable, FK to job_cards.id (ON DELETE SET NULL) - For linking a conversation directly to a job card task.
 - created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
 - updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 - last_message_at: TIMESTAMP, Nullable, INDEX
+- INDEX (job_card_id) - For efficient querying by job_card_id.
 
 Conversation Participants Table:
 - id: INT, Primary Key, Auto Increment
@@ -117,8 +119,22 @@ Messages Table:
 - conversation_id: INT, Foreign Key (references conversations.id ON DELETE CASCADE), Not Null
 - sender_id: INT, Foreign Key (references users.id ON DELETE CASCADE), Not Null
 - content: TEXT, Not Null
+- moderation_status: VARCHAR(25), Not Null, Default 'not_applicable' (e.g., 'not_applicable', 'pending_approval', 'approved', 'rejected')
+- is_visible_to_client: BOOLEAN, Not Null, Default TRUE
 - created_at: TIMESTAMP, Default CURRENT_TIMESTAMP, INDEX
 - read_at: TIMESTAMP, Nullable
+
+Message_Attachments Table:
+- id: INT, PK, Auto Increment
+- message_id: INT, Nullable, FK to messages.id (ON DELETE CASCADE)
+- uploader_id: INT, FK to users.id (ON DELETE SET NULL), Nullable
+- file_name: VARCHAR(255), Not Null (Stored file name, possibly sanitized or system-generated)
+- original_file_name: VARCHAR(255), Not Null (Original name of the uploaded file)
+- file_path: VARCHAR(1024), Not Null (Path to the stored file on the server)
+- file_type: VARCHAR(100), Not Null (MIME type of the file)
+- file_size_bytes: INT, Not Null
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- INDEX (message_id) - For efficient lookup of attachments for a message.
 
 Skills Table:
 - id: INT, Primary Key, Auto Increment
@@ -137,12 +153,62 @@ Project Skills Table (Junction Table):
 
 Notifications Table:
 - id: INT, Primary Key, Auto Increment
-- user_id: INT, Foreign Key (references users.id ON DELETE CASCADE), Nullable (Specific admin if assigned, or for user-specific notifications later)
-- message_key: VARCHAR(255), Not Null (e.g., 'new_user_registered', 'project_awaits_approval')
-- related_entity_type: VARCHAR(50), Nullable (e.g., 'user', 'project', 'application')
+- user_id: INT, FK to users.id (ON DELETE CASCADE), Nullable (Recipient of the notification, if specific. Nullable.)
+- actor_id: INT, Nullable, FK to users.id (ON DELETE SET NULL) (User who performed the action that triggered the notification)
+- message_key: VARCHAR(255), Not Null (e.g., 'new_user_registered', 'project_awaits_approval', 'message_needs_moderation')
+- related_entity_type: VARCHAR(50), Nullable (e.g., 'user', 'project', 'application', 'message')
 - related_entity_id: INT, Nullable
+- context_details: TEXT, Nullable (JSON or serialized string for extra context, e.g., old/new values for a status change, snippet of a message)
 - is_read: BOOLEAN, Not Null, Default 0
 - created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+
+Project_Budgets Table:
+- id: INT, PK, Auto Increment
+- project_id: INT, FK to projects.id (ON DELETE CASCADE), Unique, Not Null
+- budget_amount: DECIMAL(12,2), Not Null
+- currency: VARCHAR(3), Not Null, Default 'USD'
+- type: ENUM('fixed', 'hourly_estimate', 'not_set'), Not Null, Default 'not_set'
+- notes: TEXT, Nullable
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+
+Client_Invoices Table:
+- id: INT, PK, Auto Increment
+- project_id: INT, FK to projects.id (ON DELETE CASCADE), Not Null
+- client_id: INT, FK to users.id (ON DELETE CASCADE), Not Null
+- invoice_number: VARCHAR(50), Unique, Not Null
+- issue_date: DATE, Not Null
+- due_date: DATE, Not Null
+- total_amount: DECIMAL(12,2), Not Null
+- status: ENUM('draft', 'sent', 'paid', 'overdue', 'cancelled', 'void'), Not Null, Default 'draft'
+- payment_details: TEXT, Nullable (e.g., bank transfer info, payment link)
+- notes_to_client: TEXT, Nullable
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+
+Invoice_Line_Items Table:
+- id: INT, PK, Auto Increment
+- invoice_id: INT, FK to Client_Invoices.id (ON DELETE CASCADE), Not Null
+- description: TEXT, Not Null
+- quantity: DECIMAL(10,2), Not Null, Default 1.00
+- unit_price: DECIMAL(10,2), Not Null
+- total_price: DECIMAL(12,2), Not Null (quantity * unit_price)
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+
+Freelancer_Payments Table:
+- id: INT, PK, Auto Increment
+- freelancer_id: INT, FK to users.id (ON DELETE CASCADE), Not Null
+- project_id: INT, FK to projects.id (ON DELETE SET NULL), Nullable
+- job_card_id: INT, FK to job_cards.id (ON DELETE SET NULL), Nullable
+- related_invoice_id: INT, FK to Client_Invoices.id (ON DELETE SET NULL), Nullable (If payment is for a client invoice)
+- payment_date: DATE, Not Null
+- amount_paid: DECIMAL(12,2), Not Null
+- currency: VARCHAR(3), Not Null, Default 'USD'
+- payment_method_details: TEXT, Nullable (e.g., PayPal transaction ID, check number)
+- notes: TEXT, Nullable
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+- updated_at: TIMESTAMP, Default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 */
 
 // --- Database Connection ---

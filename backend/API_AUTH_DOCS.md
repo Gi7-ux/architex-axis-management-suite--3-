@@ -76,6 +76,193 @@ Requests are typically made by appending a `?action=some_action` query parameter
   }
   ```
 
+## Job Card Messaging Endpoints
+
+These endpoints facilitate communication specifically tied to Job Cards. Messages sent via these endpoints are linked to a Job Card and have specific visibility rules.
+
+### 1. Send Job Card Message
+- **Action**: `send_job_card_message`
+- **Method**: `POST`
+- **URL**: `/backend/api.php?action=send_job_card_message`
+- **Authentication**: **Required**. User must be authorized for the job card (admin, client, project freelancer, or job card assigned freelancer).
+- **Request Body (JSON)**:
+  ```json
+  {
+    "job_card_id": 123, // Required: ID of the job card
+    "content": "This is a message about the task.", // Required if no attachments
+    "attachment_ids": [1, 2] // Optional: Array of pre-uploaded attachment IDs
+  }
+  ```
+- **Description**:
+  - Sends a message linked to a specific job card.
+  - Creates or uses an existing conversation tied to the `job_card_id`.
+  - Participants (client, project freelancer, job card freelancer) are automatically managed for new conversations.
+  - **Visibility Rules**:
+    - If sender is 'freelancer': `moderation_status` is 'pending_approval', `is_visible_to_client` is `FALSE`.
+    - Otherwise (client/admin): `moderation_status` is 'approved', `is_visible_to_client` is `TRUE`.
+  - If `attachment_ids` are provided, they are linked to the newly created message. Attachments must be uploaded first via `upload_message_attachment` and their `message_id` must be `NULL`.
+- **Response (Success - 201 Created)**: The newly created message object, including any linked attachments.
+  ```json
+  {
+    "id": 105,
+    "conversation_id": 15,
+    "sender_id": 789,
+    "content": "This is a message about the task.",
+    "created_at": "YYYY-MM-DD HH:MM:SS",
+    "moderation_status": "pending_approval", // Example if sent by freelancer
+    "is_visible_to_client": false,        // Example if sent by freelancer
+    "attachments": [
+      {
+        "id": 1,
+        "original_file_name": "brief.pdf",
+        "file_path": "message_attachments/unique_id_brief.pdf",
+        "file_type": "application/pdf",
+        "file_size_bytes": 102400,
+        "created_at": "YYYY-MM-DD HH:MM:SS"
+      }
+      // ... other attachments
+    ]
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Job Card ID and content/attachments are required, Forbidden, Job Card not found, One or more attachments could not be linked)."
+  }
+  ```
+
+### 2. Get Job Card Messages
+- **Action**: `get_job_card_messages`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_job_card_messages&job_card_id=<id>&limit=50&offset=0`
+- **Authentication**: **Required**. User must be authorized for the job card.
+- **Query Parameters**:
+  - `job_card_id`: Required.
+  - `limit`: Optional, number of messages (default 50).
+  - `offset`: Optional, for pagination (default 0).
+- **Description**:
+  - Fetches messages for a conversation linked to a `job_card_id`.
+  - **Role-based Visibility**:
+    - Admins: See all messages.
+    - Clients: See messages where `is_visible_to_client = TRUE`.
+    - Freelancers: See their own messages OR messages where `is_visible_to_client = TRUE`.
+  - Messages are ordered by `created_at ASC`.
+  - Each message includes sender details (`sender_username`, `sender_avatar_url`) and an `attachments` array.
+  - `moderation_status` and `is_visible_to_client` fields are included for relevant users (admins, or sender for their own messages).
+- **Response (Success - 200 OK)**: Array of message objects.
+  ```json
+  [
+    {
+      "id": 101,
+      "conversation_id": 15,
+      "sender_id": 456, // Client ID
+      "sender_username": "clientUser",
+      "sender_avatar_url": "path/to/avatar.png",
+      "content": "Please check the attached design file.",
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "moderation_status": "approved",
+      "is_visible_to_client": true,
+      "attachments": [
+        {
+          "id": 1,
+          "original_file_name": "design_v1.pdf",
+          "file_path": "message_attachments/unique_design.pdf",
+          "file_type": "application/pdf",
+          "file_size_bytes": 123456,
+          "created_at": "YYYY-MM-DD HH:MM:SS"
+        }
+      ]
+    },
+    {
+      "id": 102,
+      "sender_id": 789, // Freelancer ID
+      "sender_username": "freelancerUser",
+      "sender_avatar_url": "path/to/f_avatar.png",
+      "content": "Thanks, reviewing it now. My feedback is attached.",
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "moderation_status": "pending_approval", // If viewed by admin or this freelancer
+      "is_visible_to_client": false,         // If viewed by admin or this freelancer
+      "attachments": [
+         {
+          "id": 2,
+          "original_file_name": "feedback.txt",
+          "file_path": "message_attachments/unique_feedback.txt",
+          "file_type": "text/plain",
+          "file_size_bytes": 1024,
+          "created_at": "YYYY-MM-DD HH:MM:SS"
+        }
+      ]
+    }
+    // ... more messages
+  ]
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Job Card ID required, Forbidden, Job Card not found)."
+  }
+  ```
+
+### 3. Upload Message Attachment
+- **Action**: `upload_message_attachment`
+- **Method**: `POST`
+- **URL**: `/backend/api.php?action=upload_message_attachment`
+- **Authentication**: **Required**. User must be authorized for the job card.
+- **Request Body**: `multipart/form-data`
+  - `job_card_id`: (Integer) ID of the job card for context and permission checking.
+  - `attachment_file`: (File) The file to upload.
+- **Description**:
+  - Uploads a file intended to be an attachment for a job card message.
+  - Validates file type (common images, PDF, text, Office documents) and size (e.g., up to 10MB).
+  - Stores the file with a unique name in `uploads/message_attachments/`.
+  - Creates a record in `message_attachments` with `message_id` initially `NULL`.
+- **Response (Success - 201 Created)**: Details of the temporarily stored attachment.
+  ```json
+  {
+    "id": 3, // ID of the entry in message_attachments table
+    "original_file_name": "brief.docx",
+    "file_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "file_size_bytes": 25600,
+    "file_path": "message_attachments/attachment_uniqueid.docx",
+    "message": "File uploaded successfully and pending association with a message."
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Job Card ID required, No file uploaded, File too large, Unsupported file type, Failed to move file, Server error)."
+  }
+  ```
+
+### 4. Admin Moderate Message
+- **Action**: `admin_moderate_message`
+- **Method**: `POST` (or `PUT`)
+- **URL**: `/backend/api.php?action=admin_moderate_message`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON)**:
+  ```json
+  {
+    "message_id": 102,
+    "new_moderation_status": "approved" // or "rejected"
+  }
+  ```
+- **Description**:
+  - Allows an admin to change the moderation status of a message.
+  - If `new_moderation_status` is 'approved', `is_visible_to_client` is set to `TRUE`.
+  - If `new_moderation_status` is 'rejected', `is_visible_to_client` is set to `FALSE`.
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "Message moderation status updated successfully."
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Message ID and status required, Invalid status, Message not found, Forbidden)."
+  }
+  ```
+
 ### 3. Get User Profile
 
 - **Action**: `get_user_profile`
@@ -623,6 +810,10 @@ These endpoints are typically restricted to users with the 'admin' role.
 - **URL**: `/backend/api.php?action=get_freelancer_dashboard_stats`
 - **Authentication**: **Required** (Bearer Token), Role: `freelancer`.
 - **Description**: Retrieves key statistics for the authenticated freelancer's dashboard.
+  - `myTotalJobCards`: Total count of job cards where `assigned_freelancer_id` is the freelancer's ID.
+  - `myInProgressJobCards`: Count of job cards assigned to the freelancer that have a status of 'in_progress'.
+  - `openProjectsCount`: Total count of all projects in the system with a status of 'open'.
+  - `myApplicationsCount`: Total count of applications submitted by the freelancer from the `applications` table.
 - **Response (Success - 200 OK)**:
   ```json
   {
@@ -643,6 +834,12 @@ These endpoints are typically restricted to users with the 'admin' role.
   {
     "error": "Invalid or expired session token. Please log in again."
     // or "Forbidden: Only freelancers can access these statistics."
+  }
+  ```
+- **Response (Error - 500 Server Error)**:
+  ```json
+  {
+    "error": "Server error message if database queries fail."
   }
   ```
 
@@ -1494,11 +1691,13 @@ Stores time log entries against job cards.
 - `updated_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 
 ### `conversations` Table (New)
-Facilitates messaging between users.
+Facilitates messaging between users. Can be a general 1-on-1 conversation or linked to a specific `job_card_id`.
 - `id`: INT, PK, Auto Increment
+- `job_card_id`: INT, Nullable, FK to `job_cards.id` (ON DELETE SET NULL) - Links conversation to a job card.
 - `created_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP
 - `updated_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 - `last_message_at`: TIMESTAMP, NULLABLE (indexed, updated by trigger or backend logic on new message)
+- Index on `job_card_id`.
 
 ### `conversation_participants` Table (New)
 Links users to conversations, forming a many-to-many relationship.
@@ -1514,8 +1713,23 @@ Stores individual messages within conversations.
 - `conversation_id`: INT, FK to `conversations.id` (ON DELETE CASCADE), NOT NULL
 - `sender_id`: INT, FK to `users.id` (ON DELETE CASCADE), NOT NULL
 - `content`: TEXT, NOT NULL
+- `moderation_status`: VARCHAR(25), Not Null, Default 'not_applicable' (e.g., 'not_applicable', 'pending_approval', 'approved', 'rejected')
+- `is_visible_to_client`: BOOLEAN, Not Null, Default TRUE
 - `created_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP (indexed)
-- `read_at`: TIMESTAMP, NULLABLE (indicates when a recipient last read messages in this conversation up to this point, or individual message read receipts if more granular)
+- `read_at`: TIMESTAMP, NULLABLE
+
+### `message_attachments` Table (New)
+Stores files attached to messages.
+- `id`: INT, PK, Auto Increment
+- `message_id`: INT, Nullable, FK to `messages.id` (ON DELETE CASCADE) - Initially NULL, updated when message is sent.
+- `uploader_id`: INT, FK to `users.id` (ON DELETE SET NULL), Nullable
+- `file_name`: VARCHAR(255), Not Null (Stored system file name)
+- `original_file_name`: VARCHAR(255), Not Null (Original uploaded name)
+- `file_path`: VARCHAR(1024), Not Null
+- `file_type`: VARCHAR(100), Not Null
+- `file_size_bytes`: INT, Not Null
+- `created_at`: TIMESTAMP, Default CURRENT_TIMESTAMP
+- Index on `message_id`.
 
 ### `skills` Table (New)
 Stores a global list of definable skills.
