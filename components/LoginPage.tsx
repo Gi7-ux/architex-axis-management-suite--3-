@@ -23,11 +23,13 @@ const LoginPage: React.FC = () => {
       return;
     }
     try {
-        const user = await login(email, password);
-        if (user) {
-          if (user.role === UserRole.ADMIN) { 
-            setError('Administrators must use the Admin Portal login.');
-            // Optionally, could redirect to admin login: navigate(NAV_LINKS.ADMIN_LOGIN);
+       // The login function from useAuth now expects UserLoginData: {email, password}
+       const user = await login({ email, password }); // Pass as an object
+       if (user) {
+         // User object here is AuthUser
+         if (user.role === UserRole.ADMIN) {
+           setError('Administrators must use the Admin Portal login.');
+           // navigate(NAV_LINKS.ADMIN_LOGIN); // Keep if admin login is separate
             return;
           }
           navigate(from, { replace: true });
@@ -103,7 +105,7 @@ const LoginPage: React.FC = () => {
           Administrator? <Link to={NAV_LINKS.ADMIN_LOGIN} className="font-medium text-primary hover:text-primary-hover">Admin Login</Link>
         </p>
         <p className="mt-2 text-center text-sm text-gray-500">
-          Don't have an account? <a href="#" className="font-medium text-primary hover:text-primary-hover">Sign up</a>
+          Don't have an account? <Link to="/register" className="font-medium text-primary hover:text-primary-hover">Sign up</Link>
         </p>
       </div>
     </div>
