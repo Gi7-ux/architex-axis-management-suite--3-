@@ -95,7 +95,7 @@ const DashboardOverview: React.FC = () => {
         } else if (user.role === UserRole.FREELANCER) {
           fetchedStats = await fetchFreelancerDashboardStatsAPI(user.id);
         } else if (user.role === UserRole.CLIENT) {
-          fetchedStats = await fetchClientDashboardStatsAPI(user.id);
+          fetchedStats = await fetchClientDashboardStatsAPI();
         }
         setStats(fetchedStats);
 

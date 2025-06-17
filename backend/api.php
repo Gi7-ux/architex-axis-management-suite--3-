@@ -997,6 +997,71 @@ elseif ($action === 'get_client_projects' && $method === 'GET') {
 
 } // END NEW: Get Client's Own Projects
 
+// NEW: Get Client Dashboard Stats
+elseif ($action === 'get_client_dashboard_stats' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+
+    if ($authenticated_user['role'] !== 'client') {
+        send_json_response(403, ['error' => 'Forbidden: This action is for clients only.']);
+    }
+
+    $client_id = (int)$authenticated_user['id'];
+    $stats = [
+        'myProjectsCount' => 0,
+        'openProjectsCount' => 0,
+        'myInProgressProjectsCount' => 0,
+        'myCompletedProjectsCount' => 0
+    ];
+
+    try {
+        // My Projects Count
+        $stmt_my_total = $conn->prepare("SELECT COUNT(*) AS count FROM projects WHERE client_id = ?");
+        if (!$stmt_my_total) throw new Exception("DB error preparing myProjectsCount: " . $conn->error);
+        $stmt_my_total->bind_param("i", $client_id);
+        if (!$stmt_my_total->execute()) throw new Exception("DB error executing myProjectsCount: " . $stmt_my_total->error);
+        $result_my_total = $stmt_my_total->get_result()->fetch_assoc();
+        $stats['myProjectsCount'] = (int)$result_my_total['count'];
+        $stmt_my_total->close();
+
+        // My In-Progress Projects Count
+        $status_in_progress = 'in_progress';
+        $stmt_my_inprogress = $conn->prepare("SELECT COUNT(*) AS count FROM projects WHERE client_id = ? AND status = ?");
+        if (!$stmt_my_inprogress) throw new Exception("DB error preparing myInProgressProjectsCount: " . $conn->error);
+        $stmt_my_inprogress->bind_param("is", $client_id, $status_in_progress);
+        if (!$stmt_my_inprogress->execute()) throw new Exception("DB error executing myInProgressProjectsCount: " . $stmt_my_inprogress->error);
+        $result_my_inprogress = $stmt_my_inprogress->get_result()->fetch_assoc();
+        $stats['myInProgressProjectsCount'] = (int)$result_my_inprogress['count'];
+        $stmt_my_inprogress->close();
+
+        // My Completed Projects Count
+        $status_completed = 'completed';
+        $stmt_my_completed = $conn->prepare("SELECT COUNT(*) AS count FROM projects WHERE client_id = ? AND status = ?");
+        if (!$stmt_my_completed) throw new Exception("DB error preparing myCompletedProjectsCount: " . $conn->error);
+        $stmt_my_completed->bind_param("is", $client_id, $status_completed);
+        if (!$stmt_my_completed->execute()) throw new Exception("DB error executing myCompletedProjectsCount: " . $stmt_my_completed->error);
+        $result_my_completed = $stmt_my_completed->get_result()->fetch_assoc();
+        $stats['myCompletedProjectsCount'] = (int)$result_my_completed['count'];
+        $stmt_my_completed->close();
+
+        // Open Projects Count (Platform-wide)
+        $status_open = 'open';
+        $stmt_open_platform = $conn->prepare("SELECT COUNT(*) AS count FROM projects WHERE status = ?");
+        if (!$stmt_open_platform) throw new Exception("DB error preparing openProjectsCount: " . $conn->error);
+        $stmt_open_platform->bind_param("s", $status_open);
+        if (!$stmt_open_platform->execute()) throw new Exception("DB error executing openProjectsCount: " . $stmt_open_platform->error);
+        $result_open_platform = $stmt_open_platform->get_result()->fetch_assoc();
+        $stats['openProjectsCount'] = (int)$result_open_platform['count'];
+        $stmt_open_platform->close();
+
+        send_json_response(200, $stats);
+
+    } catch (Exception $e) {
+        error_log("Error in get_client_dashboard_stats: " . $e->getMessage());
+        send_json_response(500, ['error' => 'An error occurred while fetching dashboard statistics.']);
+    }
+
+} // END NEW: Get Client Dashboard Stats
+
 // NEW: Get Applications for a Specific Project
 elseif ($action === 'get_project_applications' && $method === 'GET') {
     $authenticated_user = require_authentication($conn);
@@ -2368,6 +2433,99 @@ elseif ($action === 'get_conversation_messages' && $method === 'GET') {
     send_json_response(200, array_reverse($messages_list)); // Reverse to get oldest of the batch first for typical chat UI
 
 } // END NEW: Get Messages for a Conversation
+
+// NEW: Send Message to a Conversation
+elseif ($action === 'send_message' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $sender_id = (int)$authenticated_user['id'];
+    $sender_username = $authenticated_user['username']; // For response
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $conversation_id = isset($data['conversation_id']) ? (int)$data['conversation_id'] : null;
+    $content = $data['content'] ?? null;
+
+    if (!$conversation_id || $content === null || $content === '') { // Content can be "0", so check for null or empty string explicitly
+        send_json_response(400, ['error' => 'Conversation ID and message content are required.']);
+    }
+    if (mb_strlen($content) > 10000) { // Basic content length validation (e.g. 10k chars)
+        send_json_response(400, ['error' => 'Message content is too long.']);
+    }
+
+    // Start transaction
+    $conn->begin_transaction();
+
+    try {
+        // 1. Authorization: Check if current user is part of this conversation AND conversation exists
+        $stmt_auth_convo = $conn->prepare(
+            "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+             FROM conversations c
+             LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+             WHERE c.id = ?"
+        );
+        if (!$stmt_auth_convo) { throw new Exception('Server error preparing conversation participation check. ' . $conn->error); }
+        $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+        if (!$stmt_auth_convo->execute()) { throw new Exception('Server error executing conversation participation check. ' . $stmt_auth_convo->error); }
+        $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+        $stmt_auth_convo->close();
+
+        if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+            throw new Exception('Conversation not found.', 404);
+        }
+        if (!$result_auth_convo['participant_exists']) {
+            throw new Exception('Forbidden: You are not a participant in this conversation.', 403);
+        }
+
+        // 2. Insert the new message
+        $current_timestamp_mysql = date('Y-m-d H:i:s'); // For consistent timestamp
+        $stmt_insert_message = $conn->prepare(
+            "INSERT INTO messages (conversation_id, sender_id, content, created_at)
+             VALUES (?, ?, ?, ?)"
+        );
+        if (!$stmt_insert_message) { throw new Exception('Server error preparing message insertion. ' . $conn->error); }
+        $stmt_insert_message->bind_param("iiss", $conversation_id, $sender_id, $content, $current_timestamp_mysql);
+        if (!$stmt_insert_message->execute()) { throw new Exception('Server error executing message insertion. ' . $stmt_insert_message->error); }
+        $new_message_id = $conn->insert_id;
+        $stmt_insert_message->close();
+
+        if (!$new_message_id) {
+            throw new Exception('Failed to create message or get new message ID.');
+        }
+
+        // 3. Update last_message_at in conversations table
+        $stmt_update_convo = $conn->prepare("UPDATE conversations SET last_message_at = ? WHERE id = ?");
+        if (!$stmt_update_convo) { throw new Exception('Server error preparing conversation update. ' . $conn->error); }
+        $stmt_update_convo->bind_param("si", $current_timestamp_mysql, $conversation_id);
+        if (!$stmt_update_convo->execute()) { throw new Exception('Server error executing conversation update. ' . $stmt_update_convo->error); }
+        $stmt_update_convo->close();
+
+        // Commit transaction
+        $conn->commit();
+
+        // Prepare and send response
+        $new_message_data = [
+            'id' => $new_message_id,
+            'conversation_id' => $conversation_id,
+            'sender_id' => $sender_id,
+            'sender_username' => $sender_username, // Added for immediate use by frontend
+            'content' => $content,
+            'created_at' => $current_timestamp_mysql,
+            'read_at' => null // New messages are unread by default for others
+        ];
+        send_json_response(201, $new_message_data);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        $error_code = $e->getCode() >= 400 && $e->getCode() < 500 ? $e->getCode() : 500; // Use specific client error codes if set
+        if ($error_code === 403) {
+            send_json_response(403, ['error' => $e->getMessage()]);
+        } elseif ($error_code === 404) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response($error_code, ['error' => 'Failed to send message: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Send Message to a Conversation
+
 // --- Projects API ---
 // MODIFIED: get_projects to handle single project fetch and join user tables
 elseif ($action === 'get_projects' && $method === 'GET') {
