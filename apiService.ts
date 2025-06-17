@@ -199,11 +199,15 @@ export const registerAPI = (userData: UserRegistrationData): Promise<Registratio
   }); // Authentication not required for registration
 };
 
-export const loginAPI = (credentials: UserLoginData): Promise<LoginResponse> => {
-  return apiFetch<LoginResponse>(`/api.php?action=login_user`, {
+export const loginAPI = async (credentials: UserLoginData): Promise<LoginResponse> => {
+  const response = await apiFetch<LoginResponse>(`/api.php?action=login_user`, {
     method: 'POST',
     body: JSON.stringify(credentials),
   }); // Authentication not required for login
+  if (response.token) {
+    localStorage.setItem('authToken', response.token);
+  }
+  return response;
 };
 
 export const fetchUserProfileAPI = (): Promise<UserProfileResponse> => {
