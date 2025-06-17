@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ProjectStatus, UserRole, Application } from '../../types'; // Removed Project, JobCardStatus
+import { useToast } from '../shared/toast/useToast';
 import { 
     fetchProjectsAPI,
     fetchProjectDetailsAPI,
@@ -43,6 +44,7 @@ const calculateProjectSpend = (project: ProjectPHPResponse, users: AdminUserView
 
 const ProjectManagement: React.FC = () => {
   const { user: adminUser } = useAuth();
+  const { addToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
   const [projects, setProjects] = useState<ProjectPHPResponse[]>([]); // Use ProjectPHPResponse
@@ -101,9 +103,11 @@ const ProjectManagement: React.FC = () => {
           }
       } catch (error: any) {
           console.error("Failed to load initial project management data:", error);
+          addToast(error.message || 'Failed to load initial project management data.', 'error');
+          // setFormError might still be useful if there's a dedicated error display area on the main page, not just toasts
           setFormError(error.message || "Failed to load necessary data. Please try refreshing.");
       } finally { setIsLoading(false); }
-  }, [location.pathname]);
+  }, [location.pathname, addToast]);
 
   useEffect(() => { loadInitialData(); }, [loadInitialData]);
 
@@ -125,7 +129,8 @@ const ProjectManagement: React.FC = () => {
         setIsDetailModalOpen(true);
     } catch (error: any) {
         console.error("Error fetching project details:", error);
-        setFormError(error.message || "Could not load project details.");
+        addToast(error.message || 'Could not load project details.', 'error');
+        setFormError(error.message || "Could not load project details."); // Keep for modal error display
     } finally {
         setIsSubmitting(false); // Stop loading indicator
     }
@@ -192,12 +197,13 @@ const ProjectManagement: React.FC = () => {
       }
 
       await createProjectAPI(projectPayload);
-      alert("Project created successfully.");
+      addToast('Project created successfully.', 'success');
       await loadInitialData(); 
       handleCloseCreateModal();
     } catch (err: any) {
       console.error("Failed to create project", err);
-      setFormError(err.message || "Failed to create project. Please try again.");
+      addToast(err.message || 'Failed to create project. Please try again.', 'error');
+      // setFormError(err.message || "Failed to create project. Please try again."); // Keep for modal error display if needed
     } finally {
       setIsSubmitting(false);
     }
@@ -207,15 +213,15 @@ const ProjectManagement: React.FC = () => {
     setIsSubmitting(true); setFormError(null);
     try {
         await updateProjectAPI(String(projectId), { status: ProjectStatus.OPEN });
-        alert("Project approved and is now open for applications.");
+        addToast('Project approved and is now open for applications.', 'success');
         await loadInitialData();
         if (selectedProject?.id === projectId) { 
             const details = await fetchProjectDetailsAPI(projectId);
             setSelectedProject(details || null);
         }
     } catch (err: any) {
-        alert(err.message || "Failed to approve project.");
-        setFormError(err.message || "Failed to approve project.");
+        addToast(err.message || 'Failed to approve project.', 'error');
+        // setFormError(err.message || "Failed to approve project."); // Removed as toast is primary
     } finally {
         setIsSubmitting(false);
     }
@@ -226,7 +232,7 @@ const ProjectManagement: React.FC = () => {
     setIsSubmitting(true); setFormError(null);
     try {
         await updateApplicationStatusAPI(applicationId, { status: 'accepted' });
-        alert("Application accepted. Freelancer assigned and project is In Progress.");
+        addToast('Application accepted. Freelancer assigned and project is In Progress.', 'success');
         await loadInitialData();
         if (selectedProject?.id === projectIdToRefresh) {
             const details = await fetchProjectDetailsAPI(projectIdToRefresh);
@@ -241,8 +247,8 @@ const ProjectManagement: React.FC = () => {
             handleCloseDetailModal();
         }
     } catch (err: any) {
-        alert(err.message || "Failed to accept application.");
-        setFormError(err.message || "Failed to accept application.");
+        addToast(err.message || 'Failed to accept application.', 'error');
+        // setFormError(err.message || "Failed to accept application."); // Removed as toast is primary
     } finally {
         setIsSubmitting(false);
     }
@@ -263,13 +269,13 @@ const ProjectManagement: React.FC = () => {
         skill_ids: Array.from(selectedProjectSkillIds) // Use the state for selected skills
       };
       await updateProjectAPI(String(selectedProject.id), payload);
-      // alert("Project details updated successfully."); // Consider a more subtle notification
+      addToast('Project details updated successfully.', 'success');
       await loadInitialData(); // Refresh list
       handleCloseDetailModal();
     } catch (err: any) {
       console.error("Failed to update project details", err);
-      // Set error to be displayed within the modal
-      setFormError(err.message || "Failed to update project details. Please check inputs or try again.");
+      addToast(err.message || 'Failed to update project details. Please check inputs or try again.', 'error');
+      // setFormError(err.message || "Failed to update project details. Please check inputs or try again."); // Keep for modal error display
     } finally {
       setIsSubmitting(false);
     }
@@ -287,10 +293,11 @@ const ProjectManagement: React.FC = () => {
         setFormError(null);
         try {
             await deleteProjectAPI(String(projectId));
+            addToast('Project deleted successfully.', 'success');
             await loadInitialData();
         } catch (err: any) {
-            alert(err.message || "Failed to delete project.");
-            setFormError(err.message || "Failed to delete project.");
+            addToast(err.message || 'Failed to delete project.', 'error');
+            // setFormError(err.message || "Failed to delete project."); // Removed as toast is primary
         } finally {
             setIsSubmitting(false);
         }
@@ -303,10 +310,11 @@ const ProjectManagement: React.FC = () => {
         const currentIsArchived = project.status === 'archived'; // Determine if currently archived
         const newStatus = currentIsArchived ? ProjectStatus.OPEN : 'archived' as ProjectStatus;
         await updateProjectAPI(String(project.id), { status: newStatus });
+        addToast('Project archive status updated successfully.', 'success');
         await loadInitialData(); 
     } catch (err: any) {
-        alert(err.message || "Failed to update archive status.");
-        setFormError(err.message || "Failed to update archive status.");
+        addToast(err.message || 'Failed to update archive status.', 'error');
+        // setFormError(err.message || "Failed to update archive status."); // Removed as toast is primary
     } finally {
         setIsSubmitting(false);
     }
@@ -397,7 +405,8 @@ const ProjectManagement: React.FC = () => {
           Create Project
         </Button>
       </div>
-      {formError && !isModalOpen && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
+      {formError && !isDetailModalOpen && !isCreateModalOpen && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
+      {/* Note: formError for modals is handled inside the modal now. The above is for page-level form errors if any. */}
       <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
         <div>
           <label className="block text-xs font-medium text-gray-700">Search</label>
@@ -493,7 +502,8 @@ const ProjectManagement: React.FC = () => {
       {selectedProject && isDetailModalOpen && ( // Ensure modal only renders if selectedProject and isDetailModalOpen are true
         <Modal isOpen={isDetailModalOpen} onClose={handleCloseDetailModal} title={`Edit Project: ${editFormData?.title || selectedProject.title}`} size="2xl">
           <form onSubmit={(e) => { e.preventDefault(); handleUpdateProjectDetails(); }} className="space-y-4 max-h-[75vh] overflow-y-auto p-1">
-            {formError && <div className="mb-3 p-2 bg-red-100 text-red-600 rounded-md text-sm">{formError}</div>}
+            {/* Modal-specific formError display */}
+            {formError && isDetailModalOpen && <div className="mb-3 p-2 bg-red-100 text-red-600 rounded-md text-sm">{formError}</div>}
 
             <div>
               <label htmlFor="edit_proj_title" className="block text-sm font-medium text-gray-700">Title*</label>
@@ -643,8 +653,8 @@ const ProjectManagement: React.FC = () => {
                   {freelancers.map(freelancer => <option key={freelancer.id} value={freelancer.id}>{freelancer.username} (ID: {freelancer.id})</option>)}
                 </select>
               </div>
-
-            {formError && <p className="text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
+            {/* Modal-specific formError display for create modal */}
+            {formError && isCreateModalOpen && <p className="text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
             <div className="pt-4 flex justify-end space-x-3 border-t mt-4">
                 <Button type="button" variant="secondary" onClick={handleCloseCreateModal} disabled={isSubmitting}>Cancel</Button>
                 <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting}>Create Project</Button>
