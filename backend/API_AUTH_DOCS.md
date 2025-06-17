@@ -42,6 +42,7 @@ Requests are typically made by appending a `?action=some_action` query parameter
     "error": "Error message describing the issue (e.g., Username or email already exists, Invalid email format)."
   }
   ```
+  *Triggers an admin notification (`new_user_registered`).*
 
 ### 2. User Login
 
@@ -161,6 +162,165 @@ These endpoints are typically restricted to users with the 'admin' role.
   }
   ```
 
+### 3. Admin Create User
+- **Action**: `admin_create_user`
+- **Method**: `POST`
+- **URL**: `/backend/api.php?action=admin_create_user`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON)**:
+  ```json
+  {
+    "username": "newadminuser",
+    "email": "newadmin@example.com",
+    "password": "securePassword123",
+    "role": "client", // Role to assign
+    "name": "New User Full Name", // Optional
+    "phone_number": "123-456-7890", // Optional
+    "company": "New User Company", // Optional
+    "experience": "Some initial experience details.", // Optional
+    "hourly_rate": 50.00, // Optional, for freelancers
+    "avatar_url": "https://example.com/avatar.jpg" // Optional
+  }
+  ```
+- **Response (Success - 201 Created)**:
+  ```json
+  {
+    "message": "User created successfully by admin.",
+    "user_id": 125
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Username or email already exists, Missing required fields)."
+  }
+  ```
+
+### 4. Admin Get User Details
+- **Action**: `admin_get_user_details`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=admin_get_user_details&user_id=<user_id>`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Response (Success - 200 OK)**: Full user details object.
+  ```json
+  {
+    "id": 123,
+    "username": "testuser",
+    "email": "test@example.com",
+    "role": "freelancer",
+    "name": "Test User Full Name",
+    "phone_number": "555-1234",
+    "company": "Test Inc.",
+    "experience": "5 years in web development.",
+    "hourly_rate": 60.50,
+    "avatar_url": "https://example.com/avatars/testuser.png",
+    "is_active": true,
+    "created_at": "YYYY-MM-DD HH:MM:SS",
+    "updated_at": "YYYY-MM-DD HH:MM:SS",
+    "skills": [
+      {"id": 1, "name": "PHP"},
+      {"id": 2, "name": "React"}
+    ]
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., User ID required, User not found, Forbidden)."
+  }
+  ```
+
+### 5. Admin Update User Details
+- **Action**: `admin_update_user_details`
+- **Method**: `POST` (or `PUT`)
+- **URL**: `/backend/api.php?action=admin_update_user_details&user_id=<user_id>`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON) - Include only fields to update**:
+  ```json
+  {
+    "username": "updateduser",
+    "email": "updated@example.com",
+    "role": "client",
+    "name": "Updated Full Name",
+    "phone_number": "555-5678",
+    "company": "Updated Company LLC",
+    "experience": "Updated bio and experience.",
+    "hourly_rate": 75.00,
+    "avatar_url": "https://example.com/avatars/updateduser.png",
+    "is_active": false,
+    "skill_ids": [1, 3]
+  }
+  ```
+  *If `skill_ids` is provided, existing skills for the user will be replaced with this new set.*
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "User details updated successfully."
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., User ID required, User not found, Forbidden, Username or email already taken)."
+  }
+  ```
+
+### 6. Admin Delete User (Soft Deactivate)
+- **Action**: `admin_delete_user`
+- **Method**: `POST` (or `DELETE`)
+- **URL**: `/backend/api.php?action=admin_delete_user&user_id=<user_id>`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (Optional if user_id in URL)**:
+  ```json
+  {
+    "user_id": 123
+  }
+  ```
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "User deactivated successfully."
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., User ID required, User not found, Cannot deactivate self, Forbidden)."
+  }
+  ```
+
+### 7. Admin Get Dashboard Stats
+- **Action**: `get_admin_dashboard_stats`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_admin_dashboard_stats`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "total_users": 150,
+    "users_by_role": {
+      "admin": 2,
+      "client": 50,
+      "freelancer": 98
+    },
+    "total_projects": 75,
+    "projects_by_status": {
+      "open": 20,
+      "in_progress": 30,
+      "completed": 20,
+      "pending_approval": 5
+      // ... other statuses
+    },
+    "total_applications_pending": 45
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message."
+  }
+  ```
+
 ## Project Endpoints
 
 ### 1. Create Project
@@ -193,6 +353,7 @@ These endpoints are typically restricted to users with the 'admin' role.
     "error": "Error message (e.g., Missing required fields, Forbidden)."
   }
   ```
+  *If project status is set to 'Pending Approval' (or similar), triggers an admin notification (`project_awaits_approval`).*
 
 ### 2. Get Client's Own Projects
 - **Action**: `get_client_projects`
@@ -237,9 +398,11 @@ These endpoints are typically restricted to users with the 'admin' role.
     "title": "Updated Project Title",
     "description": "Updated description.",
     "freelancer_id": 789, // Can be null to remove freelancer
-    "status": "completed"
+    "status": "completed",
+    "skill_ids": [2, 7]
   }
   ```
+  *If `skill_ids` is provided, existing required skills for the project will be replaced with this new set.*
 - **Response (Success - 200 OK)**:
   ```json
   {
@@ -280,8 +443,10 @@ These endpoints are typically restricted to users with the 'admin' role.
 - **Authentication**: **Not Required**.
 - **Query Parameters (Optional)**:
   - `status`: Filter projects by status. Defaults to 'open'. Use `status=all` to retrieve all projects regardless of status.
-- **Response (Success - 200 OK)**: Array of project objects.
+  - `id`: If provided, fetches a single project by its ID.
+- **Response (Success - 200 OK)**: Array of project objects (if no `id` param) or a single project object (if `id` param is used).
   ```json
+  // Example for list of projects (action=get_projects&status=open)
   [
     {
       "id": 123,
@@ -291,9 +456,31 @@ These endpoints are typically restricted to users with the 'admin' role.
       "freelancer_id": null,
       "status": "open",
       "created_at": "YYYY-MM-DD HH:MM:SS",
-      "updated_at": "YYYY-MM-DD HH:MM:SS"
+      "updated_at": "YYYY-MM-DD HH:MM:SS",
+      "client_username": "client_user_for_project_123",
+      "freelancer_username": null
     }
+    // ... more projects
   ]
+  ```
+  ```json
+  // Example for single project fetch (action=get_projects&id=123)
+  {
+    "id": 123,
+    "title": "Specific Project Title",
+    "description": "Detailed description of project 123.",
+    "client_id": 456,
+    "freelancer_id": 789, // or null
+    "status": "open", // or any other status
+    "created_at": "YYYY-MM-DD HH:MM:SS",
+    "updated_at": "YYYY-MM-DD HH:MM:SS",
+    "client_username": "client_user_for_project_123",
+    "freelancer_username": "freelancer_assigned_to_123_or_null",
+    "skills_required": [
+      {"id": 2, "name": "React"},
+      {"id": 5, "name": "Graphic Design"}
+    ]
+  }
   ```
 
 ## Freelancer Specific Project Endpoints
@@ -414,6 +601,7 @@ Endpoints for managing project applications.
     "error": "Error message (e.g., Project ID and proposal text are required, Project not found, Project not open for applications, Already applied)."
   }
   ```
+  *Triggers an admin notification (`application_submitted`).*
 
 ### 4. Get Freelancer's Own Applications
 - **Action**: `get_freelancer_applications`
@@ -902,6 +1090,154 @@ Endpoints for 1-on-1 user communication.
     "error": "Error message (e.g., Conversation ID required, Forbidden)."
   }
   ```
+
+## Skills Endpoints
+
+Endpoints for managing and retrieving skills.
+
+### 1. Get All Skills
+- **Action**: `get_all_skills`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_all_skills`
+- **Authentication**: **Required** (Any logged-in user).
+- **Response (Success - 200 OK)**: Array of skill objects.
+  ```json
+  [
+    {
+      "id": 1,
+      "name": "PHP",
+      "created_at": "YYYY-MM-DD HH:MM:SS"
+    },
+    {
+      "id": 2,
+      "name": "React",
+      "created_at": "YYYY-MM-DD HH:MM:SS"
+    }
+    // ... more skills
+  ]
+  ```
+- **Response (Error - 403 Forbidden / 5xx Server Error)**:
+  ```json
+  {
+    "error": "Error message."
+  }
+  ```
+
+### 2. Admin Add Skill
+- **Action**: `admin_add_skill`
+- **Method**: `POST`
+- **URL**: `/backend/api.php?action=admin_add_skill`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON)**:
+  ```json
+  {
+    "name": "New Skill Name"
+  }
+  ```
+- **Response (Success - 201 Created)**:
+  ```json
+  {
+    "message": "Skill added successfully.",
+    "skill": {
+      "id": 3,
+      "name": "New Skill Name",
+      "created_at": "YYYY-MM-DD HH:MM:SS"
+    }
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Skill name is required, Skill already exists)."
+  }
+  ```
+
+## Notification Endpoints (Admin Focus)
+
+Endpoints for administrators to manage and view system notifications.
+
+### 1. Get Admin Notifications
+- **Action**: `get_admin_notifications`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_admin_notifications&limit=25&offset=0`
+  - `limit`: Optional, number of notifications to fetch (default 25).
+  - `offset`: Optional, for pagination.
+- **Authentication**: **Required** (User role must be 'admin').
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "notifications": [
+      {
+        "id": 1,
+        "message_key": "new_user_registered",
+        "related_entity_type": "user",
+        "related_entity_id": 125,
+        "is_read": false,
+        "created_at": "YYYY-MM-DD HH:MM:SS"
+      },
+      {
+        "id": 2,
+        "message_key": "project_awaits_approval",
+        "related_entity_type": "project",
+        "related_entity_id": 77,
+        "is_read": true,
+        "created_at": "YYYY-MM-DD HH:MM:SS"
+      }
+      // ... more notifications
+    ],
+    "total_unread": 5
+  }
+  ```
+- **Response (Error - 403 Forbidden / 5xx Server Error)**:
+  ```json
+  {
+    "error": "Error message."
+  }
+  ```
+
+### 2. Mark Notification(s) as Read
+- **Action**: `mark_notification_as_read`
+- **Method**: `POST` (or `PUT`)
+- **URL**: `/backend/api.php?action=mark_notification_as_read`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON)**:
+  ```json
+  {
+    "notification_id": 1 // or "notification_ids": [1, 2, 3]
+  }
+  ```
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "X notification(s) marked as read.",
+    "marked_read_count": X
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Notification ID(s) required, Forbidden)."
+  }
+  ```
+
+### 3. Mark All Admin Notifications as Read
+- **Action**: `mark_all_admin_notifications_as_read`
+- **Method**: `POST` (or `PUT`)
+- **URL**: `/backend/api.php?action=mark_all_admin_notifications_as_read`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "All X unread notification(s) marked as read.",
+    "marked_read_count": X
+  }
+  ```
+- **Response (Error - 403 Forbidden / 5xx Server Error)**:
+  ```json
+  {
+    "error": "Error message."
+  }
+  ```
 ---
 
 ## Database Schemas Overview
@@ -991,3 +1327,31 @@ Stores individual messages within conversations.
 - `content`: TEXT, NOT NULL
 - `created_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP (indexed)
 - `read_at`: TIMESTAMP, NULLABLE (indicates when a recipient last read messages in this conversation up to this point, or individual message read receipts if more granular)
+
+### `skills` Table (New)
+Stores a global list of definable skills.
+- `id`: INT, PK, Auto Increment
+- `name`: VARCHAR(255), UNIQUE, NOT NULL
+- `created_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP
+
+### `user_skills` Table (New - Junction)
+Links users to skills (many-to-many).
+- `user_id`: INT, FK to `users.id` (ON DELETE CASCADE), NOT NULL
+- `skill_id`: INT, FK to `skills.id` (ON DELETE CASCADE), NOT NULL
+- PRIMARY KEY (`user_id`, `skill_id`)
+
+### `project_skills` Table (New - Junction)
+Links projects to required skills (many-to-many).
+- `project_id`: INT, FK to `projects.id` (ON DELETE CASCADE), NOT NULL
+- `skill_id`: INT, FK to `skills.id` (ON DELETE CASCADE), NOT NULL
+- PRIMARY KEY (`project_id`, `skill_id`)
+
+### `notifications` Table (New)
+Stores system notifications, primarily for administrators initially.
+- `id`: INT, PK, Auto Increment
+- `user_id`: INT, FK to `users.id` (ON DELETE CASCADE), NULLABLE (Recipient of the notification)
+- `message_key`: VARCHAR(255), NOT NULL (Identifier for the type of notification message)
+- `related_entity_type`: VARCHAR(50), NULLABLE (e.g., 'user', 'project', 'application' - the type of entity this notification is about)
+- `related_entity_id`: INT, NULLABLE (The ID of the related entity)
+- `is_read`: BOOLEAN, NOT NULL, DEFAULT 0 (0 for unread, 1 for read)
+- `created_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP

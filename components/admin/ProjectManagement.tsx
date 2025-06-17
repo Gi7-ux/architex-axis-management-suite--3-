@@ -11,7 +11,9 @@ import {
     updateProjectAPI,
     AdminUserView,
     CreateProjectPHPData,
-    ProjectPHPResponse // Import new type
+    ProjectPHPResponse, // Import new type
+    Skill, // Import Skill
+    fetchAllSkillsAPI // Import fetchAllSkillsAPI
     // ProjectApplicationPHPResponse is also available if needed for projectApplications state
 } from '../../apiService';
 import { NAV_LINKS } from '../../constants';
@@ -48,6 +50,9 @@ const ProjectManagement: React.FC = () => {
   const [clients, setClients] = useState<AdminUserView[]>([]);
   const [freelancers, setFreelancers] = useState<AdminUserView[]>([]);
 
+  const [allGlobalSkills, setAllGlobalSkills] = useState<Skill[]>([]); // For skill selection
+  const [selectedProjectSkillIds, setSelectedProjectSkillIds] = useState<Set<number>>(new Set()); // For modal skill selection
+
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [selectedProject, setSelectedProject] = useState<ProjectPHPResponse | null>(null); // Use ProjectPHPResponse
@@ -62,6 +67,9 @@ const ProjectManagement: React.FC = () => {
   const [assignedClientId, setAssignedClientId] = useState<string>(''); // For admin to select client
   const [assignedFreelancerIdModal, setAssignedFreelancerIdModal] = useState<string>(''); // For admin to select freelancer
 
+  // State for the Edit Project Modal form
+  const [editFormData, setEditFormData] = useState<Partial<ProjectPHPResponse>>({});
+
   const [formError, setFormError] = useState<string | null>(null);
 
   const [filterStatus, setFilterStatus] = useState<ProjectStatus | 'ALL'>('ALL');
@@ -75,13 +83,18 @@ const ProjectManagement: React.FC = () => {
       setIsLoading(true);
       setFormError(null);
       try {
-          const fetchedProjects = await fetchProjectsAPI({ status: 'all' });
-          const fetchedAdminUsersView = await adminFetchAllUsersAPI();
+          const [fetchedProjects, fetchedAdminUsersView, fetchedSkills] = await Promise.all([
+            fetchProjectsAPI({ status: 'all' }),
+            adminFetchAllUsersAPI(),
+            fetchAllSkillsAPI() // Fetch skills
+          ]);
 
           setProjects(fetchedProjects); // Directly use ProjectPHPResponse
           setAllUsers(fetchedAdminUsersView);
           setClients(fetchedAdminUsersView.filter(u => u.role === UserRole.CLIENT));
           setFreelancers(fetchedAdminUsersView.filter(u => u.role === UserRole.FREELANCER));
+          setAllGlobalSkills(fetchedSkills.sort((a,b) => a.name.localeCompare(b.name)));
+
 
           if (location.pathname.endsWith(NAV_LINKS.ADMIN_CREATE_PROJECT)) {
               handleOpenCreateModal();
@@ -95,16 +108,17 @@ const ProjectManagement: React.FC = () => {
   useEffect(() => { loadInitialData(); }, [loadInitialData]);
 
   const handleViewDetails = async (project: ProjectPHPResponse) => { // Param is ProjectPHPResponse
-    setIsSubmitting(true);
+    setIsSubmitting(true); // Use for loading indicator in modal trigger button or initial modal load
     setFormError(null);
     try {
-        // fetchProjectDetailsAPI now returns ProjectPHPResponse
-        const details = await fetchProjectDetailsAPI(project.id);
+        const details = await fetchProjectDetailsAPI(project.id); // This should include skills_required
         setSelectedProject(details); 
-        // Assuming Application type is compatible or ProjectApplicationPHPResponse is used
+        setEditFormData(details); // Initialize edit form data with project details
+        setSelectedProjectSkillIds(new Set(details.skills_required?.map(s => s.id) || []));
+
         if (details && (details.status === ProjectStatus.OPEN || details.status === ProjectStatus.PENDING_APPROVAL) && !details.freelancer_id) {
             const apps = await fetchApplicationsForProjectAPI(String(details.id));
-            setProjectApplications(apps as Application[]); // Cast if types differ significantly
+            setProjectApplications(apps as Application[]);
         } else {
             setProjectApplications([]);
         }
@@ -113,7 +127,7 @@ const ProjectManagement: React.FC = () => {
         console.error("Error fetching project details:", error);
         setFormError(error.message || "Could not load project details.");
     } finally {
-        setIsSubmitting(false);
+        setIsSubmitting(false); // Stop loading indicator
     }
   };
 
@@ -121,6 +135,14 @@ const ProjectManagement: React.FC = () => {
     setIsDetailModalOpen(false);
     setSelectedProject(null);
     setProjectApplications([]);
+    setSelectedProjectSkillIds(new Set());
+    setEditFormData({}); // Clear edit form data
+    setFormError(null); // Clear modal-specific errors
+  };
+
+  const handleEditFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setEditFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const resetCreateForm = () => {
@@ -210,6 +232,8 @@ const ProjectManagement: React.FC = () => {
             const details = await fetchProjectDetailsAPI(projectIdToRefresh);
             setSelectedProject(details || null);
              if (details) {
+                // If the modal is being enhanced for editing, re-populate skills
+                setSelectedProjectSkillIds(new Set(details.skills_required?.map(s => s.id) || []));
                 const apps = await fetchApplicationsForProjectAPI(String(details.id));
                 setProjectApplications(apps as Application[]);
             }
@@ -223,6 +247,34 @@ const ProjectManagement: React.FC = () => {
         setIsSubmitting(false);
     }
   };
+
+  // This function will be for saving changes from the enhanced "Edit Details" modal
+  const handleUpdateProjectDetails = async () => { // No direct formData param, reads from editFormData and selectedProjectSkillIds
+    if (!selectedProject || !editFormData) return;
+
+    setIsSubmitting(true); setFormError(null);
+    try {
+      const payload: UpdateProjectPHPData = {
+        title: editFormData.title,
+        description: editFormData.description,
+        status: editFormData.status as ProjectStatus, // Ensure status is of ProjectStatus type
+        client_id: editFormData.client_id ? Number(editFormData.client_id) : undefined,
+        freelancer_id: editFormData.freelancer_id ? Number(editFormData.freelancer_id) : undefined,
+        skill_ids: Array.from(selectedProjectSkillIds) // Use the state for selected skills
+      };
+      await updateProjectAPI(String(selectedProject.id), payload);
+      // alert("Project details updated successfully."); // Consider a more subtle notification
+      await loadInitialData(); // Refresh list
+      handleCloseDetailModal();
+    } catch (err: any) {
+      console.error("Failed to update project details", err);
+      // Set error to be displayed within the modal
+      setFormError(err.message || "Failed to update project details. Please check inputs or try again.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
 
   const handleNavigateToEditProjectTasks = (project: ProjectPHPResponse) => { // Param is ProjectPHPResponse
     navigate(NAV_LINKS.PROJECT_DETAILS.replace(':id', String(project.id)));
@@ -438,18 +490,76 @@ const ProjectManagement: React.FC = () => {
         </div>
       )}
 
-      {selectedProject && (
-        <Modal isOpen={isDetailModalOpen} onClose={handleCloseDetailModal} title={`Details: ${selectedProject.title}`} size="2xl">
-          <div className="space-y-4">
-            <p><strong className="font-medium text-gray-700">Description:</strong> {selectedProject.description}</p>
-            {/* Budget and Deadline removed as they are not in ProjectPHPResponse consistently */}
-            <p><strong className="font-medium text-gray-700">Client:</strong> {selectedProject.client_username || 'N/A'}</p>
-            <p><strong className="font-medium text-gray-700">Status:</strong> <span className={`px-2 py-0.5 text-xs rounded-full ${getStatusClass(selectedProject.status)}`}>{selectedProject.status}</span></p>
-            {selectedProject.freelancer_username && <p><strong className="font-medium text-gray-700">Assigned Freelancer:</strong> {selectedProject.freelancer_username}</p>}
-            {/* Skills display removed as not in ProjectPHPResponse */}
+      {selectedProject && isDetailModalOpen && ( // Ensure modal only renders if selectedProject and isDetailModalOpen are true
+        <Modal isOpen={isDetailModalOpen} onClose={handleCloseDetailModal} title={`Edit Project: ${editFormData?.title || selectedProject.title}`} size="2xl">
+          <form onSubmit={(e) => { e.preventDefault(); handleUpdateProjectDetails(); }} className="space-y-4 max-h-[75vh] overflow-y-auto p-1">
+            {formError && <div className="mb-3 p-2 bg-red-100 text-red-600 rounded-md text-sm">{formError}</div>}
 
-            { (selectedProject.status === ProjectStatus.OPEN || selectedProject.status === ProjectStatus.PENDING_APPROVAL) &&
-              projectApplications.length > 0 && !selectedProject.freelancer_id && (
+            <div>
+              <label htmlFor="edit_proj_title" className="block text-sm font-medium text-gray-700">Title*</label>
+              <input type="text" name="title" id="edit_proj_title" value={editFormData?.title || ''} onChange={handleEditFormChange} required
+                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary"/>
+            </div>
+            <div>
+              <label htmlFor="edit_proj_desc" className="block text-sm font-medium text-gray-700">Description*</label>
+              <textarea name="description" id="edit_proj_desc" rows={3} value={editFormData?.description || ''} onChange={handleEditFormChange} required
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary"/>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="edit_proj_status" className="block text-sm font-medium text-gray-700">Status</label>
+                <select name="status" id="edit_proj_status" value={editFormData?.status || ''} onChange={handleEditFormChange}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
+                  {Object.values(ProjectStatus).map(s => <option key={s} value={s}>{s}</option>)}
+                  <option value="archived">Archived</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="edit_proj_client" className="block text-sm font-medium text-gray-700">Client</label>
+                <select name="client_id" id="edit_proj_client" value={editFormData?.client_id || ''} onChange={handleEditFormChange}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
+                  <option value="">None (Admin is Client)</option>
+                  {clients.map(c => <option key={c.id} value={c.id}>{c.username} (ID: {c.id})</option>)}
+                </select>
+              </div>
+            </div>
+            <div>
+              <label htmlFor="edit_proj_freelancer" className="block text-sm font-medium text-gray-700">Assigned Freelancer</label>
+              <select name="freelancer_id" id="edit_proj_freelancer" value={editFormData?.freelancer_id || ''} onChange={handleEditFormChange}
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
+                <option value="">Not Assigned</option>
+                {freelancers.map(f => <option key={f.id} value={f.id}>{f.username} (ID: {f.id})</option>)}
+              </select>
+            </div>
+
+            {/* Skills Selection UI */}
+            <div className="pt-3">
+              <label className="block text-sm font-medium text-gray-700">Required Skills</label>
+              <div className="mt-1 max-h-40 overflow-y-auto border rounded p-2 space-y-1 bg-gray-50">
+                {allGlobalSkills.map(skill => (
+                  <div key={skill.id} className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id={`edit-proj-skill-${skill.id}`}
+                      checked={selectedProjectSkillIds.has(skill.id)}
+                      onChange={(e) => {
+                        const newSet = new Set(selectedProjectSkillIds);
+                        if (e.target.checked) newSet.add(skill.id);
+                        else newSet.delete(skill.id);
+                        setSelectedProjectSkillIds(newSet);
+                      }}
+                      className="h-4 w-4 text-primary border-gray-300 rounded mr-2 focus:ring-primary-focus"
+                    />
+                    <label htmlFor={`edit-proj-skill-${skill.id}`} className="text-sm text-gray-700">{skill.name}</label>
+                  </div>
+                ))}
+                {allGlobalSkills.length === 0 && <p className="text-xs text-gray-400">No global skills available.</p>}
+              </div>
+            </div>
+
+            {/* Display Applications if relevant (read-only part of the form) */}
+            { (editFormData?.status === ProjectStatus.OPEN || editFormData?.status === ProjectStatus.PENDING_APPROVAL) &&
+              projectApplications.length > 0 && !editFormData?.freelancer_id && (
                 <div className="pt-4 border-t mt-4">
                     <h4 className="text-md font-semibold text-gray-700 mb-2">
                         Pending Applications ({projectApplications.filter(app => app.status === 'pending').length})
@@ -480,15 +590,20 @@ const ProjectManagement: React.FC = () => {
             {selectedProject.status === ProjectStatus.OPEN && projectApplications.filter(app => app.status === 'pending').length === 0 && !selectedProject.freelancer_id && (
                  <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open but has no pending applications yet.</p>
             )}
+            {editFormData?.status === ProjectStatus.OPEN && projectApplications.filter(app => app.status === 'pending').length === 0 && !editFormData?.freelancer_id && (
+                 <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open but has no pending applications yet.</p>
+            )}
 
-             <div className="mt-6 flex justify-end space-x-2">
-                <Button onClick={() => handleNavigateToEditProjectTasks(selectedProject)} variant="secondary">Manage Tasks</Button>
-                <Button onClick={handleCloseDetailModal} variant="outline">Close</Button>
+
+            <div className="mt-6 flex justify-end space-x-3 pt-4 border-t">
+                <Button type="button" variant="secondary" onClick={handleCloseDetailModal} disabled={isSubmitting}>Cancel</Button>
+                <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting}>Save Changes</Button>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
 
+      {/* Create Project Modal - Skills are deferred for creation */}
       {isCreateModalOpen && (
         <Modal isOpen={isCreateModalOpen} onClose={handleCloseCreateModal} title="Create New Project (Admin)" size="xl">
            <form onSubmit={handleCreateProject} className="space-y-4 p-1">

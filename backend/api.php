@@ -53,6 +53,62 @@ function send_json_response($status_code, $data) {
     exit;
 }
 
+// --- NEW: Notification Helper Function ---
+function create_admin_notification($conn, $message_key, $related_entity_type = null, $related_entity_id = null) {
+    $stmt_get_admins = $conn->prepare("SELECT id FROM users WHERE role = 'admin' AND is_active = 1");
+    if (!$stmt_get_admins) {
+        error_log("Error preparing to get admins for notification: " . $conn->error);
+        return false;
+    }
+    if (!$stmt_get_admins->execute()) {
+        error_log("Error executing get admins for notification: " . $stmt_get_admins->error);
+        $stmt_get_admins->close();
+        return false;
+    }
+    $admin_results = $stmt_get_admins->get_result();
+    $admin_ids = [];
+    while ($admin_row = $admin_results->fetch_assoc()) {
+        $admin_ids[] = (int)$admin_row['id'];
+    }
+    $stmt_get_admins->close();
+
+    if (empty($admin_ids)) {
+        error_log("No active admins found to send notification: " . $message_key);
+        return false; // No admins to notify
+    }
+
+    $sql_insert_notification = "INSERT INTO notifications (user_id, message_key, related_entity_type, related_entity_id, is_read, created_at)
+                                  VALUES (?, ?, ?, ?, 0, NOW())";
+    $stmt_insert_notification = $conn->prepare($sql_insert_notification);
+    if (!$stmt_insert_notification) {
+        error_log("Error preparing notification insert: " . $conn->error);
+        return false;
+    }
+
+    $success_count = 0;
+    foreach ($admin_ids as $admin_id) {
+        // Bind params: i (user_id), s (message_key), s (related_entity_type), i (related_entity_id)
+        if ($related_entity_type === null && $related_entity_id === null) {
+             // This case might occur if we only have a message key without related entities.
+             // Prepare a version of bind_param that only includes user_id and message_key.
+             // However, the table schema for related_entity_type and related_entity_id allows NULL.
+             // So, we can always bind them as null.
+            $stmt_insert_notification->bind_param("issi", $admin_id, $message_key, $related_entity_type, $related_entity_id);
+        } else {
+             $stmt_insert_notification->bind_param("issi", $admin_id, $message_key, $related_entity_type, $related_entity_id);
+        }
+
+        if ($stmt_insert_notification->execute()) {
+            $success_count++;
+        } else {
+            error_log("Failed to insert notification for admin_id {$admin_id} with message_key '{$message_key}': " . $stmt_insert_notification->error);
+        }
+    }
+    $stmt_insert_notification->close();
+    return $success_count > 0;
+}
+// --- END NEW Notification Helper Function ---
+
 // --- API Endpoint Logic ---
 $action = isset($_GET['action']) ? $_GET['action'] : null;
 $method = $_SERVER['REQUEST_METHOD'];
@@ -101,7 +157,10 @@ if ($action === 'register_user' && $method === 'POST') {
     }
     $stmt->bind_param("ssss", $username, $email, $hashed_password, $role);
     if ($stmt->execute()) {
+        $new_user_id_for_notification = $stmt->insert_id; // Get new user ID
         send_json_response(201, ['message' => 'User registered successfully.']);
+        // Create notification for admins
+        create_admin_notification($conn, 'new_user_registered', 'user', $new_user_id_for_notification);
     } else {
         send_json_response(500, ['error' => 'Server error: Could not register user. ' . $stmt->error]);
     }
@@ -357,33 +416,62 @@ elseif ($action === 'admin_get_user_details' && $method === 'GET') {
         send_json_response(400, ['error' => 'User ID is required.']);
     }
 
-    // Select all relevant fields. Exclude password, session_token, session_token_expires_at for security.
-    $sql = "SELECT id, username, email, role, name, phone_number, company, experience, hourly_rate, avatar_url, is_active, created_at, updated_at
-            FROM users
-            WHERE id = ?";
-    $stmt = $conn->prepare($sql);
-    if ($stmt === false) {
-        send_json_response(500, ['error' => 'Failed to prepare statement for getting user details: ' . $conn->error]);
+    // Fetch core user details
+    $sql_user = "SELECT id, username, email, role, name, phone_number, company, experience, hourly_rate, avatar_url, is_active, created_at, updated_at
+                 FROM users
+                 WHERE id = ?";
+    $stmt_user = $conn->prepare($sql_user);
+    if ($stmt_user === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for user details: ' . $conn->error]);
     }
-    $stmt->bind_param("i", $user_id_to_fetch);
-
-    if (!$stmt->execute()) {
-        send_json_response(500, ['error' => 'Failed to execute statement for getting user details: ' . $stmt->error]);
+    $stmt_user->bind_param("i", $user_id_to_fetch);
+    if (!$stmt_user->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for user details: ' . $stmt_user->error]);
     }
+    $result_user = $stmt_user->get_result();
 
-    $result = $stmt->get_result();
-    if ($user_details = $result->fetch_assoc()) {
-        // Cast numeric types if necessary (though fetch_assoc usually handles it for MySQL with PHP)
+    if ($user_details = $result_user->fetch_assoc()) {
+        $stmt_user->close();
+
+        // Cast numeric types
         if (isset($user_details['hourly_rate'])) {
             $user_details['hourly_rate'] = $user_details['hourly_rate'] === null ? null : (float)$user_details['hourly_rate'];
         }
-        $user_details['is_active'] = (bool)$user_details['is_active']; // Ensure boolean
+        $user_details['is_active'] = (bool)$user_details['is_active'];
+
+        // Fetch user's skills
+        $user_details['skills'] = []; // Initialize as empty array
+        $sql_skills = "SELECT s.id, s.name
+                       FROM user_skills us
+                       JOIN skills s ON us.skill_id = s.id
+                       WHERE us.user_id = ?
+                       ORDER BY s.name ASC";
+        $stmt_skills = $conn->prepare($sql_skills);
+        if ($stmt_skills) { // Proceed if statement prepared successfully
+            $stmt_skills->bind_param("i", $user_id_to_fetch);
+            if ($stmt_skills->execute()) {
+                $result_skills = $stmt_skills->get_result();
+                while ($skill_row = $result_skills->fetch_assoc()) {
+                    $user_details['skills'][] = [
+                        'id' => (int)$skill_row['id'],
+                        'name' => $skill_row['name']
+                    ];
+                }
+            } else {
+                // Log error, but don't fail the whole request just for skills
+                error_log("Failed to execute statement for user skills: " . $stmt_skills->error);
+            }
+            $stmt_skills->close();
+        } else {
+            error_log("Failed to prepare statement for user skills: " . $conn->error);
+        }
+
         send_json_response(200, $user_details);
+
     } else {
+        $stmt_user->close();
         send_json_response(404, ['error' => 'User not found.']);
     }
-    $stmt->close();
-
 } // END NEW: Admin - Get Specific User Details
 
 // NEW: Admin - Update Specific User Details
@@ -606,6 +694,261 @@ elseif ($action === 'admin_delete_user' && ($method === 'POST' || $method === 'D
     $stmt_deactivate->close();
 
 } // END NEW: Admin - Soft Delete User (Deactivate)
+
+// NEW: Admin - Get Dashboard Statistics
+elseif ($action === 'get_admin_dashboard_stats' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can access dashboard statistics.']);
+    }
+
+    $stats = [];
+
+    // --- User Stats ---
+    // Total users
+    $result_total_users = $conn->query("SELECT COUNT(*) AS total_users FROM users WHERE is_active = 1");
+    $stats['total_active_users'] = $result_total_users ? (int)$result_total_users->fetch_assoc()['total_users'] : 0;
+
+    // Users by role
+    $stats['users_by_role'] = [];
+    $roles_to_count = ['admin', 'client', 'freelancer'];
+    $stmt_roles = $conn->prepare("SELECT COUNT(*) AS count FROM users WHERE role = ? AND is_active = 1");
+    if (!$stmt_roles) { send_json_response(500, ['error' => 'DB error preparing role count.']);}
+    foreach ($roles_to_count as $role) {
+        $stmt_roles->bind_param("s", $role);
+        $stmt_roles->execute();
+        $result_role = $stmt_roles->get_result();
+        $stats['users_by_role'][$role] = $result_role ? (int)$result_role->fetch_assoc()['count'] : 0;
+    }
+    $stmt_roles->close();
+
+    // --- Project Stats ---
+    // Total projects
+    $result_total_projects = $conn->query("SELECT COUNT(*) AS total_projects FROM projects");
+    $stats['total_projects'] = $result_total_projects ? (int)$result_total_projects->fetch_assoc()['total_projects'] : 0;
+
+    // Projects by status
+    $stats['projects_by_status'] = [];
+    // These should match the exact strings used in your database for projects.status
+    $project_statuses_to_count = ['pending_approval', 'open', 'in_progress', 'completed', 'cancelled', 'archived'];
+
+    $stmt_proj_status = $conn->prepare("SELECT COUNT(*) AS count FROM projects WHERE status = ?");
+    if (!$stmt_proj_status) { send_json_response(500, ['error' => 'DB error preparing project status count.']);}
+    foreach ($project_statuses_to_count as $p_status) {
+        $stmt_proj_status->bind_param("s", $p_status);
+        $stmt_proj_status->execute();
+        $result_p_status = $stmt_proj_status->get_result();
+        // Use a consistent key format for frontend, e.g., capitalize and replace underscores
+        $display_status_key = ucwords(str_replace('_', ' ', $p_status));
+        $stats['projects_by_status'][$display_status_key] = $result_p_status ? (int)$result_p_status->fetch_assoc()['count'] : 0;
+    }
+    $stmt_proj_status->close();
+
+    // --- Application Stats ---
+    // Total "active" applications (e.g., pending)
+    $active_app_statuses = ['pending'];
+    $status_placeholders_app = implode(',', array_fill(0, count($active_app_statuses), '?'));
+    $sql_open_apps = "SELECT COUNT(*) AS total_open_applications FROM applications WHERE status IN (" . $status_placeholders_app . ")";
+
+    $stmt_open_apps = $conn->prepare($sql_open_apps);
+    if (!$stmt_open_apps) { send_json_response(500, ['error' => 'DB error preparing open applications count.']);}
+
+    $types_app = str_repeat('s', count($active_app_statuses));
+    $stmt_open_apps->bind_param($types_app, ...$active_app_statuses);
+
+    $stmt_open_apps->execute();
+    $result_open_apps = $stmt_open_apps->get_result();
+    $stats['total_open_applications'] = $result_open_apps ? (int)$result_open_apps->fetch_assoc()['total_open_applications'] : 0;
+    $stmt_open_apps->close();
+
+    send_json_response(200, $stats);
+
+} // END NEW: Admin - Get Dashboard Statistics
+
+// NEW: Admin - Get Own Notifications
+elseif ($action === 'get_admin_notifications' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can view these notifications.']);
+    }
+    $admin_user_id = (int)$authenticated_user['id'];
+
+    // Pagination parameters
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 25; // Default limit
+    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0;
+    // Alternative: older_than_id for cursor-based pagination on 'id' or 'created_at'
+
+    // Fetch notifications for this admin user
+    // Or, if user_id in notifications can be NULL for "all admins", adjust query.
+    // For now, assumes notifications are targeted to specific admin user_ids.
+    $sql = "SELECT id, message_key, related_entity_type, related_entity_id, is_read, created_at
+            FROM notifications
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            LIMIT ? OFFSET ?";
+
+    $stmt = $conn->prepare($sql);
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for getting notifications: ' . $conn->error]);
+    }
+    $stmt->bind_param("iii", $admin_user_id, $limit, $offset);
+
+    if (!$stmt->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for getting notifications: ' . $stmt->error]);
+    }
+
+    $result = $stmt->get_result();
+    $notifications_list = [];
+    while ($row = $result->fetch_assoc()) {
+        $notifications_list[] = [
+            'id' => (int)$row['id'],
+            'message_key' => $row['message_key'],
+            'related_entity_type' => $row['related_entity_type'],
+            'related_entity_id' => $row['related_entity_id'] === null ? null : (int)$row['related_entity_id'],
+            'is_read' => (bool)$row['is_read'], // Cast to boolean
+            'created_at' => $row['created_at']
+        ];
+    }
+    $stmt->close();
+
+    // Optionally, also return total unread count or total notifications count for pagination UI
+    $stmt_count = $conn->prepare("SELECT COUNT(*) as total_unread FROM notifications WHERE user_id = ? AND is_read = 0");
+    $total_unread = 0;
+    if($stmt_count){
+        $stmt_count->bind_param("i", $admin_user_id);
+        if($stmt_count->execute()){
+            $count_result = $stmt_count->get_result()->fetch_assoc();
+            $total_unread = (int)$count_result['total_unread'];
+        }
+        $stmt_count->close();
+    }
+
+
+    send_json_response(200, ['notifications' => $notifications_list, 'total_unread' => $total_unread]);
+
+} // END NEW: Admin - Get Own Notifications
+
+// NEW: Admin - Mark Notification(s) as Read
+elseif ($action === 'mark_notification_as_read' && ($method === 'POST' || $method === 'PUT')) {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can mark these notifications as read.']);
+    }
+    $admin_user_id = (int)$authenticated_user['id'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $notification_ids_input = $data['notification_id'] ?? ($data['notification_ids'] ?? null);
+
+    if (empty($notification_ids_input)) {
+        send_json_response(400, ['error' => 'Notification ID(s) (notification_id or notification_ids) are required.']);
+    }
+
+    // Ensure it's an array
+    if (!is_array($notification_ids_input)) {
+        $notification_ids = [(int)$notification_ids_input];
+    } else {
+        $notification_ids = array_map('intval', $notification_ids_input);
+    }
+
+    if (empty($notification_ids)) { // After potential filtering of non-ints if not using intval strictly
+        send_json_response(400, ['error' => 'Valid Notification ID(s) are required.']);
+    }
+
+    // Create placeholders for IN clause
+    $id_placeholders = implode(',', array_fill(0, count($notification_ids), '?'));
+
+    // Update is_read for notifications belonging to this admin
+    $sql = "UPDATE notifications
+            SET is_read = 1
+            WHERE user_id = ? AND id IN (" . $id_placeholders . ") AND is_read = 0";
+
+    $stmt = $conn->prepare($sql);
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for marking notifications read: ' . $conn->error]);
+    }
+
+    // Bind parameters: first admin_user_id, then all notification_ids
+    $types = 'i' . str_repeat('i', count($notification_ids));
+    $bind_params = array_merge([$admin_user_id], $notification_ids);
+
+    $stmt->bind_param($types, ...$bind_params);
+
+    if (!$stmt->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for marking notifications read: ' . $stmt->error]);
+    }
+
+    $affected_rows = $stmt->affected_rows;
+    $stmt->close();
+
+    send_json_response(200, [
+        'message' => "{$affected_rows} notification(s) marked as read.",
+        'marked_read_count' => $affected_rows
+    ]);
+
+} // END NEW: Admin - Mark Notification(s) as Read
+
+// NEW: Admin - Mark All Own Notifications as Read
+elseif ($action === 'mark_all_admin_notifications_as_read' && ($method === 'POST' || $method === 'PUT')) {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can mark all their notifications as read.']);
+    }
+    $admin_user_id = (int)$authenticated_user['id'];
+
+    // Update is_read for all unread notifications belonging to this admin
+    $sql = "UPDATE notifications
+            SET is_read = 1
+            WHERE user_id = ? AND is_read = 0";
+
+    $stmt = $conn->prepare($sql);
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for marking all notifications read: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("i", $admin_user_id);
+
+    if (!$stmt->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for marking all notifications read: ' . $stmt->error]);
+    }
+
+    $affected_rows = $stmt->affected_rows;
+    $stmt->close();
+
+    send_json_response(200, [
+        'message' => "All {$affected_rows} unread notification(s) marked as read.",
+        'marked_read_count' => $affected_rows
+    ]);
+
+} // END NEW: Admin - Mark All Own Notifications as Read
+
+// NEW: Skills Endpoints
+elseif ($action === 'get_all_skills' && $method === 'GET') {
+    require_authentication($conn); // Any authenticated user can fetch skills
+
+    $sql = "SELECT id, name, created_at FROM skills ORDER BY name ASC";
+    $stmt = $conn->prepare($sql);
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for getting skills: ' . $conn->error]);
+    }
+
+    if (!$stmt->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for getting skills: ' . $stmt->error]);
+    }
+
+    $result = $stmt->get_result();
+    $skills_list = [];
+    while ($row = $result->fetch_assoc()) {
+        $skills_list[] = [
+            'id' => (int)$row['id'],
+            'name' => $row['name'],
+            'created_at' => $row['created_at']
+        ];
+    }
+    $stmt->close();
+
+    send_json_response(200, $skills_list);
+
+} // END NEW: Get All Skills
 // --- END NEW User Authentication API ---
 
 // NEW: Get Client's Own Projects
@@ -923,11 +1266,13 @@ elseif ($action === 'submit_application' && $method === 'POST') {
     $stmt_insert_app->bind_param("iisd", $project_id, $freelancer_id, $proposal_text, $bid_amount);
 
     if ($stmt_insert_app->execute()) {
-        $new_application_id = $stmt_insert_app->insert_id;
+        $new_application_id_for_notification = $stmt_insert_app->insert_id;
         send_json_response(201, [
             'message' => 'Application submitted successfully.',
-            'application_id' => $new_application_id
+            'application_id' => $new_application_id_for_notification
         ]);
+        // Create notification for admins about a new application
+        create_admin_notification($conn, 'application_submitted', 'application', $new_application_id_for_notification);
     } else {
         send_json_response(500, ['error' => 'Failed to submit application. ' . $stmt_insert_app->error]);
     }
@@ -2048,6 +2393,21 @@ elseif ($action === 'get_projects' && $method === 'GET') {
         if ($project = $result->fetch_assoc()) {
             if (isset($project['client_id'])) $project['client_id'] = (int)$project['client_id'];
             if (isset($project['freelancer_id'])) $project['freelancer_id'] = $project['freelancer_id'] === null ? null : (int)$project['freelancer_id'];
+
+            // Fetch skills for the single project
+            $project['skills_required'] = [];
+            $stmt_skills_proj = $conn->prepare("SELECT s.id, s.name FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ? ORDER BY s.name ASC");
+            if ($stmt_skills_proj) {
+                $stmt_skills_proj->bind_param("i", $project_id_filter);
+                if ($stmt_skills_proj->execute()) {
+                    $result_skills_proj = $stmt_skills_proj->get_result();
+                    while ($skill_row_proj = $result_skills_proj->fetch_assoc()) {
+                        $project['skills_required'][] = ['id' => (int)$skill_row_proj['id'], 'name' => $skill_row_proj['name']];
+                    }
+                } else { error_log("Failed to execute skills fetch for single project: " . $stmt_skills_proj->error); }
+                $stmt_skills_proj->close();
+            } else { error_log("Failed to prepare skills fetch for single project: " . $conn->error); }
+
             send_json_response(200, $project); // Return single project object
         } else {
             send_json_response(404, ['error' => 'Project not found.']);
@@ -2177,12 +2537,19 @@ elseif ($action === 'create_project' && $method === 'POST') {
     $stmt->bind_param("ssiis", $title, $description, $final_client_id, $freelancer_id, $status);
 
     if ($stmt->execute()) {
-        $new_project_id = $stmt->insert_id;
+        $new_project_id_for_notification = $stmt->insert_id;
+        $current_project_status = $status; // $status variable from create_project scope
+
+        // Send response first, then notify
         send_json_response(201, [
             'message' => 'Project created successfully.',
-            'project_id' => $new_project_id,
+            'project_id' => $new_project_id_for_notification,
             'client_id' => $final_client_id
         ]);
+
+        if ($current_project_status === 'pending_approval' || $current_project_status === 'Pending Approval') { // Case consistency
+             create_admin_notification($conn, 'project_awaits_approval', 'project', $new_project_id_for_notification);
+        }
     } else {
         send_json_response(500, ['error' => 'Failed to create project: ' . $stmt->error]);
     }
@@ -2196,7 +2563,7 @@ elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST'
     $user_role = $authenticated_user['role'];
 
     $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
-    // Allow project_id in payload as well for POST
+
     $data = json_decode(file_get_contents('php://input'), true);
     if (!$project_id && isset($data['project_id_to_update'])) { // Use a distinct name to avoid conflict
         $project_id = (int)$data['project_id_to_update'];
@@ -2206,8 +2573,12 @@ elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST'
     if (!$project_id) {
         send_json_response(400, ['error' => 'Project ID is required for update.']);
     }
-    if (empty($data)) {
-        send_json_response(400, ['error' => 'Invalid JSON or no data provided for update.']);
+    // Remove project_id_to_update from $data if it exists, as it's not a table field
+    if (isset($data['project_id_to_update'])) {
+        unset($data['project_id_to_update']);
+    }
+    if (empty($data) && !isset($data['skill_ids'])) { // Check if $data is empty OR only skill_ids is set (which means no project table fields)
+        send_json_response(400, ['error' => 'Invalid JSON or no data provided for project table update. If only updating skills, ensure skill_ids is provided.']);
     }
 
     $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
@@ -2224,91 +2595,157 @@ elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST'
         send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this project.']);
     }
 
-    $fields_to_update = [];
-    $params = [];
-    $types = "";
+    $conn->begin_transaction();
+    try {
+        $fields_to_update = [];
+        $params = [];
+        $types = "";
 
-    // NEW: Allow admin to update client_id
-    if ($user_role === 'admin' && isset($data['client_id'])) {
-        $new_client_id = (int)$data['client_id'];
-        // Validate the new client_id
-        $stmt_new_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
-        if (!$stmt_new_client_check) { send_json_response(500, ['error' => 'Server error preparing new client validation.']); }
-        $stmt_new_client_check->bind_param("i", $new_client_id);
-        if (!$stmt_new_client_check->execute()) { send_json_response(500, ['error' => 'Server error executing new client validation.']); }
-        $result_new_client_check = $stmt_new_client_check->get_result();
-        if ($result_new_client_check->num_rows === 0) {
-            send_json_response(404, ['error' => "New client_id '{$new_client_id}' not found."]);
+        if ($user_role === 'admin' && isset($data['client_id'])) {
+            $new_client_id = (int)$data['client_id'];
+            $stmt_new_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_new_client_check) { throw new Exception('Server error preparing new client validation.'); }
+            $stmt_new_client_check->bind_param("i", $new_client_id);
+            if (!$stmt_new_client_check->execute()) { throw new Exception('Server error executing new client validation.'); }
+            $result_new_client_check = $stmt_new_client_check->get_result();
+            if ($result_new_client_check->num_rows === 0) {
+                throw new Exception("New client_id '{$new_client_id}' not found.");
+            }
+            $new_client_data = $result_new_client_check->fetch_assoc();
+            if ($new_client_data['role'] !== 'client') {
+                throw new Exception("User '{$new_client_id}' is not a client. Project can only be assigned to a client user.");
+            }
+            $stmt_new_client_check->close();
+            $fields_to_update[] = "client_id = ?"; $params[] = $new_client_id; $types .= "i";
         }
-        $new_client_data = $result_new_client_check->fetch_assoc();
-        if ($new_client_data['role'] !== 'client') {
-            send_json_response(400, ['error' => "User '{$new_client_id}' is not a client. Project can only be assigned to a client user."]);
+
+        if (isset($data['title'])) {
+            $fields_to_update[] = "title = ?"; $params[] = $data['title']; $types .= "s";
         }
-        $stmt_new_client_check->close();
-
-        $fields_to_update[] = "client_id = ?";
-        $params[] = $new_client_id;
-        $types .= "i";
-    }
-
-    if (isset($data['title'])) {
-        $fields_to_update[] = "title = ?"; $params[] = $data['title']; $types .= "s";
-    }
-    if (isset($data['description'])) {
-        $fields_to_update[] = "description = ?"; $params[] = $data['description']; $types .= "s";
-    }
-    if (array_key_exists('freelancer_id', $data)) {
-        $assign_freelancer_id = $data['freelancer_id'] === null ? null : (int)$data['freelancer_id'];
-        if ($assign_freelancer_id !== null) { // Validate if not null
-            $stmt_f_check_update = $conn->prepare("SELECT role FROM users WHERE id = ?");
-            if (!$stmt_f_check_update) { send_json_response(500, ['error' => 'Server error: Freelancer validation prep failed.']);}
-            $stmt_f_check_update->bind_param("i", $assign_freelancer_id);
-            if (!$stmt_f_check_update->execute()) { send_json_response(500, ['error' => 'Server error: Freelancer validation exec failed.']);}
-            $res_f_check_update = $stmt_f_check_update->get_result();
-            if ($res_f_check_update->num_rows === 0) { send_json_response(404, ['error' => 'Assigned freelancer for update not found.']); }
-            if ($res_f_check_update->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'Assigned user for update is not a freelancer.']);}
-            $stmt_f_check_update->close();
+        if (isset($data['description'])) {
+            $fields_to_update[] = "description = ?"; $params[] = $data['description']; $types .= "s";
         }
-        $fields_to_update[] = "freelancer_id = ?"; $params[] = $assign_freelancer_id; $types .= "i";
-    }
-    if (isset($data['status'])) {
-        $valid_project_statuses_update = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled']; // Extend as needed
-        if (!in_array($data['status'], $valid_project_statuses_update)) {
-            send_json_response(400, ['error' => 'Invalid project status for update.']);
+        if (array_key_exists('freelancer_id', $data)) {
+            $assign_freelancer_id = $data['freelancer_id'] === null ? null : (int)$data['freelancer_id'];
+            if ($assign_freelancer_id !== null) {
+                $stmt_f_check_update = $conn->prepare("SELECT role FROM users WHERE id = ?");
+                if (!$stmt_f_check_update) { throw new Exception('Server error: Freelancer validation prep failed.');}
+                $stmt_f_check_update->bind_param("i", $assign_freelancer_id);
+                if (!$stmt_f_check_update->execute()) { throw new Exception('Server error: Freelancer validation exec failed.');}
+                $res_f_check_update = $stmt_f_check_update->get_result();
+                if ($res_f_check_update->num_rows === 0) { throw new Exception('Assigned freelancer for update not found.'); }
+                if ($res_f_check_update->fetch_assoc()['role'] !== 'freelancer') { throw new Exception('Assigned user for update is not a freelancer.');}
+                $stmt_f_check_update->close();
+            }
+            $fields_to_update[] = "freelancer_id = ?"; $params[] = $assign_freelancer_id; $types .= "i";
         }
-        $fields_to_update[] = "status = ?"; $params[] = $data['status']; $types .= "s";
-    }
+        if (isset($data['status'])) {
+            $valid_project_statuses_update = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled', 'archived'];
+            if (!in_array($data['status'], $valid_project_statuses_update)) {
+                throw new Exception('Invalid project status for update.');
+            }
+            $fields_to_update[] = "status = ?"; $params[] = $data['status']; $types .= "s";
+        }
 
+        $project_table_updated = false;
+        if (!empty($fields_to_update)) {
+            $fields_to_update[] = "updated_at = NOW()";
+            $sql_update_project_table = "UPDATE projects SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+            $current_params_for_project = $params;
+            $current_params_for_project[] = $project_id;
+            $current_types_for_project = $types . "i";
 
-    if (empty($fields_to_update)) {
-         send_json_response(400, ['error' => 'No valid fields provided for project update.']);
-    }
-    $fields_to_update[] = "updated_at = NOW()";
-    $sql = "UPDATE projects SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
-    $params[] = $project_id;
-    $types .= "i";
-
-    $stmt = $conn->prepare($sql);
-    if ($stmt === false) { send_json_response(500, ['error' => 'Failed to prepare update statement: ' . $conn->error]); }
-    $stmt->bind_param($types, ...$params);
-    if ($stmt->execute()) {
-        if ($stmt->affected_rows > 0) {
-            send_json_response(200, ['message' => 'Project updated successfully.']);
-        } else {
-             $stmt_check_again = $conn->prepare("SELECT id FROM projects WHERE id = ?");
-             $stmt_check_again->bind_param("i", $project_id);
-             $stmt_check_again->execute();
-             if ($stmt_check_again->get_result()->num_rows === 0) {
-                 send_json_response(404, ['message' => 'Project not found (possibly deleted).']);
-             } else {
-                 send_json_response(200, ['message' => 'Project data was the same; no changes made.']);
+            $stmt_update_project_table = $conn->prepare($sql_update_project_table);
+            if ($stmt_update_project_table === false) {
+                throw new Exception('Failed to prepare project table update statement: ' . $conn->error);
+            }
+            if (strlen($current_types_for_project) !== count($current_params_for_project)){
+                 throw new Exception('Param count mismatch for projects table update. Types: '.$current_types_for_project.' Params: '.count($current_params_for_project));
+            }
+             if (!empty($current_types_for_project)) { // Check if there are params to bind
+                $stmt_update_project_table->bind_param($current_types_for_project, ...$current_params_for_project);
              }
-             $stmt_check_again->close();
+
+            if (!$stmt_update_project_table->execute()) {
+                throw new Exception('Failed to update project details in projects table: ' . $stmt_update_project_table->error);
+            }
+            if($stmt_update_project_table->affected_rows > 0) $project_table_updated = true;
+            $stmt_update_project_table->close();
         }
-    } else { send_json_response(500, ['error' => 'Failed to update project: ' . $stmt->error]); }
-    $stmt->close();
+
+        $skills_table_updated = false;
+        if (isset($data['skill_ids']) && is_array($data['skill_ids'])) {
+            $skill_ids_for_project = array_map('intval', $data['skill_ids']);
+
+            $stmt_delete_proj_skills = $conn->prepare("DELETE FROM project_skills WHERE project_id = ?");
+            if (!$stmt_delete_proj_skills) { throw new Exception('Failed to prepare deleting project skills. ' . $conn->error); }
+            $stmt_delete_proj_skills->bind_param("i", $project_id);
+            if (!$stmt_delete_proj_skills->execute()) { throw new Exception('Failed to delete project skills. ' . $stmt_delete_proj_skills->error); }
+            // We consider skills updated if the key 'skill_ids' is present, even if it's empty (means remove all)
+            // or if rows were deleted or inserted.
+            if ($stmt_delete_proj_skills->affected_rows > 0 || !empty($skill_ids_for_project)) {
+                $skills_table_updated = true;
+            }
+            $stmt_delete_proj_skills->close();
+
+            if (!empty($skill_ids_for_project)) {
+                $proj_skill_placeholders = implode(',', array_fill(0, count($skill_ids_for_project), '?'));
+                $stmt_check_valid_proj_skills = $conn->prepare("SELECT id FROM skills WHERE id IN ($proj_skill_placeholders)");
+                if (!$stmt_check_valid_proj_skills) { throw new Exception('Failed to prepare project skill ID validation. ' . $conn->error); }
+                $proj_skill_types = str_repeat('i', count($skill_ids_for_project));
+                $stmt_check_valid_proj_skills->bind_param($proj_skill_types, ...$skill_ids_for_project);
+                if (!$stmt_check_valid_proj_skills->execute()) { throw new Exception('Failed to execute project skill ID validation. ' . $stmt_check_valid_proj_skills->error); }
+                $valid_proj_skill_result = $stmt_check_valid_proj_skills->get_result();
+                if ($valid_proj_skill_result->num_rows !== count($skill_ids_for_project)) {
+                    throw new Exception('One or more provided skill IDs for project are invalid.');
+                }
+                $stmt_check_valid_proj_skills->close();
+
+                $sql_insert_project_skill = "INSERT INTO project_skills (project_id, skill_id) VALUES (?, ?)";
+                $stmt_insert_proj_skill = $conn->prepare($sql_insert_project_skill);
+                if (!$stmt_insert_proj_skill) { throw new Exception('Failed to prepare adding project skill. ' . $conn->error); }
+
+                $inserted_skill_rows = 0;
+                foreach ($skill_ids_for_project as $skill_id_proj) {
+                    $stmt_insert_proj_skill->bind_param("ii", $project_id, $skill_id_proj);
+                    if (!$stmt_insert_proj_skill->execute()) {
+                        throw new Exception('Failed to add skill ID ' . $skill_id_proj . ' for project. ' . $stmt_insert_proj_skill->error);
+                    }
+                    if ($stmt_insert_proj_skill->affected_rows > 0) $inserted_skill_rows++;
+                }
+                $stmt_insert_proj_skill->close();
+                if ($inserted_skill_rows > 0) $skills_table_updated = true;
+            }
+        }
+
+        if (!$project_table_updated && !$skills_table_updated && !(isset($data['skill_ids']) && empty($data['skill_ids']))) {
+            // This condition means no project fields were in $data to update (so $fields_to_update was empty)
+            // AND skill_ids was not provided at all (so no attempt to clear/update skills)
+            // OR skill_ids was provided but was identical to existing skills (not easily checkable here without fetching old skills)
+            // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+            // If skill_ids was set (even if empty, meaning "remove all skills"), it's an update.
+            if (empty($fields_to_update) && !isset($data['skill_ids'])) {
+                 $conn->rollback(); // Nothing to commit
+                 send_json_response(200, ['message' => 'No update data provided for project or skills.']);
+            }
+        }
+
+        $conn->commit();
+        send_json_response(200, ['message' => 'Project details and/or skills updated successfully.']);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        if (strpos($e->getMessage(), 'Duplicate entry') !== false || strpos($e->getMessage(), 'already exists') !== false) {
+            send_json_response(409, ['error' => $e->getMessage()]);
+        } elseif (strpos($e->getMessage(), 'not found') !== false) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response(500, ['error' => 'Failed to update project: ' . $e->getMessage()]);
+        }
+    }
 }
 // END MODIFIED: update_project
+elseif ($action === 'delete_project' && $method === 'DELETE') {
 elseif ($action === 'delete_project' && $method === 'DELETE') {
     $authenticated_user = require_authentication($conn); // 1. Require Authentication
     $user_id = (int)$authenticated_user['id'];

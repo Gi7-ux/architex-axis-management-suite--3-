@@ -119,6 +119,30 @@ Messages Table:
 - content: TEXT, Not Null
 - created_at: TIMESTAMP, Default CURRENT_TIMESTAMP, INDEX
 - read_at: TIMESTAMP, Nullable
+
+Skills Table:
+- id: INT, Primary Key, Auto Increment
+- name: VARCHAR(255), Unique, Not Null
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
+
+User Skills Table (Junction Table):
+- user_id: INT, Foreign Key (references users.id ON DELETE CASCADE), Not Null
+- skill_id: INT, Foreign Key (references skills.id ON DELETE CASCADE), Not Null
+- PRIMARY KEY (user_id, skill_id)
+
+Project Skills Table (Junction Table):
+- project_id: INT, Foreign Key (references projects.id ON DELETE CASCADE), Not Null
+- skill_id: INT, Foreign Key (references skills.id ON DELETE CASCADE), Not Null
+- PRIMARY KEY (project_id, skill_id)
+
+Notifications Table:
+- id: INT, Primary Key, Auto Increment
+- user_id: INT, Foreign Key (references users.id ON DELETE CASCADE), Nullable (Specific admin if assigned, or for user-specific notifications later)
+- message_key: VARCHAR(255), Not Null (e.g., 'new_user_registered', 'project_awaits_approval')
+- related_entity_type: VARCHAR(50), Nullable (e.g., 'user', 'project', 'application')
+- related_entity_id: INT, Nullable
+- is_read: BOOLEAN, Not Null, Default 0
+- created_at: TIMESTAMP, Default CURRENT_TIMESTAMP
 */
 
 // --- Database Connection ---

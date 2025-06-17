@@ -58,6 +58,30 @@ export interface AdminActionResponse {
   message: string;
 }
 
+// --- Notification Service Types --- START
+export interface Notification {
+  id: number;
+  user_id: number | null; // Recipient admin (or null if for all admins - backend currently targets specific admins)
+  message_key: string;
+  related_entity_type: string | null;
+  related_entity_id: number | null;
+  is_read: boolean; // Backend sends 0/1
+  created_at: string; // ISO8601
+}
+
+// Response type for fetching notifications (includes pagination info from backend)
+export interface FetchAdminNotificationsResponse {
+    notifications: Notification[];
+    total_unread: number;
+}
+
+// Response type for marking notifications as read
+export interface MarkNotificationsReadResponse {
+    message: string;
+    marked_read_count: number;
+}
+// --- Notification Service Types --- END
+
 
 // const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api'; // Example if using build-time env vars
 const API_BASE_URL = '/backend'; // Using relative path for API calls
@@ -131,7 +155,43 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}, requires
   return response.json() as Promise<T>;
 }
 
-// --- Auth Service ---
+// --- Notification Service --- START
+export interface FetchAdminNotificationsParams {
+    limit?: number;
+    offset?: number;
+    // older_than_id?: number | string; // If using cursor pagination later
+}
+export const fetchAdminNotificationsAPI = (params?: FetchAdminNotificationsParams): Promise<FetchAdminNotificationsResponse> => {
+  const queryParams = new URLSearchParams();
+  if (params?.limit) queryParams.append('limit', String(params.limit));
+  if (params?.offset) queryParams.append('offset', String(params.offset));
+
+  const queryString = queryParams.toString();
+  const endpoint = `/api.php?action=get_admin_notifications${queryString ? '&' + queryString : ''}`;
+
+  return apiFetch<FetchAdminNotificationsResponse>(endpoint, {
+    method: 'GET',
+  }, true); // Requires Admin Auth
+};
+
+export const markNotificationAsReadAPI = (notificationIdOrIds: number | string | (number|string)[]): Promise<MarkNotificationsReadResponse> => {
+  const payload = Array.isArray(notificationIdOrIds)
+    ? { notification_ids: notificationIdOrIds }
+    : { notification_id: notificationIdOrIds };
+  return apiFetch<MarkNotificationsReadResponse>(`/api.php?action=mark_notification_as_read`, {
+    method: 'POST', // Or 'PUT' as per backend
+    body: JSON.stringify(payload),
+  }, true); // Requires Admin Auth
+};
+
+export const markAllAdminNotificationsAsReadAPI = (): Promise<MarkNotificationsReadResponse> => {
+  return apiFetch<MarkNotificationsReadResponse>(`/api.php?action=mark_all_admin_notifications_as_read`, {
+    method: 'POST', // Or 'PUT' as per backend
+  }, true); // Requires Admin Auth
+};
+// --- Notification Service --- END
+
+// --- Authentication Service ---
 export const registerAPI = (userData: UserRegistrationData): Promise<RegistrationResponse> => {
   return apiFetch<RegistrationResponse>(`/api.php?action=register_user`, {
     method: 'POST',
@@ -190,6 +250,7 @@ export interface AdminUserDetailsResponse {
   is_active: boolean; // Backend sends 0/1, converted to boolean
   created_at: string;
   updated_at: string;
+  skills?: Skill[]; // ADDED for skills associated with the user
 }
 
 // Payload for Admin to update user details
@@ -205,6 +266,7 @@ export interface AdminUpdateUserDetailsPayload {
   hourly_rate?: number | null; // Send null to clear, or number to set/update
   avatar_url?: string | null;
   is_active?: boolean;
+  skill_ids?: number[]; // ADDED for updating user's skills
   // Password changes should be separate, more secure endpoint
 }
 // AdminUpdateUserRolePayload already exists for just role changes.
@@ -296,6 +358,7 @@ export interface ProjectPHPResponse extends Omit<Project, 'id' | 'clientId' | 'f
   client_username?: string | null;      // Added by backend
   freelancer_username?: string | null;  // Added by backend
   // Other fields like title, description, status, budget, deadline, createdAt, updatedAt are assumed compatible
+  skills_required?: Skill[]; // ADDED for project's required skills
   // jobCards and skillsRequired would be populated by separate calls or if backend includes them
 }
 
@@ -356,6 +419,7 @@ export interface UpdateProjectPHPData {
   freelancer_id?: number | null; // Allow null for unassigning
   status?: string;
   client_id?: number; // Optional: For admin re-assigning project to a new client
+  skill_ids?: number[]; // ADDED for updating project's required skills
 }
 
 export interface UpdateProjectPHPResponse {
@@ -854,8 +918,36 @@ export const markConversationAsReadAPI = (conversationId: number | string): Prom
  };
 */
 
-// --- Misc/Utility Service ---
-export const fetchAllSkillsAPI = (): Promise<string[]> => apiFetch<string[]>('/skills');
+// --- Misc/Utility Service --- or a new // --- Skills Service ---
+
+export interface Skill {
+  id: number;
+  name: string;
+  created_at?: string; // Optional if not always needed by frontend after fetch
+}
+
+// Updated fetchAllSkillsAPI
+export const fetchAllSkillsAPI = (): Promise<Skill[]> => {
+  // Backend 'get_all_skills' requires basic auth (any logged-in user)
+  return apiFetch<Skill[]>(`/api.php?action=get_all_skills`, {
+    method: 'GET',
+  }, true); // Requires Auth
+};
+
+// New adminAddSkillAPI
+export interface AdminAddSkillPayload {
+  name: string;
+}
+export interface AdminAddSkillResponse {
+  message: string;
+  skill: Skill;
+}
+export const adminAddSkillAPI = (payload: AdminAddSkillPayload): Promise<AdminAddSkillResponse> => {
+  return apiFetch<AdminAddSkillResponse>(`/api.php?action=admin_add_skill`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, true); // Requires Admin Auth
+};
 
 // --- Dashboard Stats API ---
 

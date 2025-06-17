@@ -14,7 +14,9 @@ import {
     AdminUserDetailsResponse,
     AdminUpdateUserDetailsPayload,
     // AdminActionResponse, // Not directly used in component state, but for API calls
-    ApiError
+    ApiError,
+    Skill, // Import Skill
+    fetchAllSkillsAPI // Import fetchAllSkillsAPI
 } from '../../apiService';
 import Button from '../shared/Button';
 import { PencilIcon, TrashIcon, PlusCircleIcon, CheckCircleIcon, XCircleIcon } from '../shared/IconComponents';
@@ -42,17 +44,23 @@ const UserManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const loadUsers = useCallback(async () => {
+  const [allGlobalSkills, setAllGlobalSkills] = useState<Skill[]>([]);
+  const [selectedSkillIds, setSelectedSkillIds] = useState<Set<number>>(new Set());
+
+  const loadUsersAndSkills = useCallback(async () => { // Combined initial load
     setIsLoading(true); setError(null);
     try {
-      // adminFetchAllUsersAPI returns AdminUserView which should include is_active
-      const fetchedUsers = await adminFetchAllUsersAPI();
-      setUsers(fetchedUsers as AdminUserView[]); // Cast if AdminUserView in apiService doesn't have is_active yet
-    } catch (err: any) {setError(err.message || "Failed to load users.");}
+      const [fetchedUsers, fetchedSkills] = await Promise.all([
+        adminFetchAllUsersAPI(),
+        fetchAllSkillsAPI()
+      ]);
+      setUsers(fetchedUsers as AdminUserView[]);
+      setAllGlobalSkills(fetchedSkills.sort((a,b) => a.name.localeCompare(b.name)));
+    } catch (err: any) {setError(err.message || "Failed to load initial data.");}
     finally {setIsLoading(false);}
   }, []);
 
-  useEffect(() => { loadUsers(); }, [loadUsers]);
+  useEffect(() => { loadUsersAndSkills(); }, [loadUsersAndSkills]); // Use combined loader
 
   const handleOpenModal = async (userToEdit: AdminUserView | null = null) => {
     setError(null); // Clear modal error
@@ -62,6 +70,11 @@ const UserManagement: React.FC = () => {
         setIsSubmitting(true); // Use isSubmitting for loading state of modal form
         const fullDetails = await adminFetchUserDetailsAPI(userToEdit.id);
         setCurrentUserFormData(fullDetails);
+        if (fullDetails.skills) {
+          setSelectedSkillIds(new Set(fullDetails.skills.map(s => s.id)));
+        } else {
+          setSelectedSkillIds(new Set());
+        }
       } catch (err: any) {
         setError(err.message || "Failed to fetch user details.");
         // Fallback to list data if full fetch fails, though some fields might be missing
@@ -83,12 +96,13 @@ const UserManagement: React.FC = () => {
         name: '', phoneNumber: null, company: null, experience: null,
         hourlyRate: null, avatarUrl: null, is_active: true
       });
+      setSelectedSkillIds(new Set());
     }
     setIsModalOpen(true);
   };
 
   const handleCloseModal = () => {
-    setIsModalOpen(false); setCurrentUserFormData({}); setIsEditMode(false); setError(null);
+    setIsModalOpen(false); setCurrentUserFormData({}); setIsEditMode(false); setError(null); setSelectedSkillIds(new Set());
   };
 
   const handleFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
@@ -114,17 +128,18 @@ const UserManagement: React.FC = () => {
         const {
             id, created_at, updated_at, // Non-payload fields
             password, // Password changes handled separately
+            skills, // skills are handled via skill_ids
             ...editableFields
-        } = currentUserFormData as AdminUserDetailsResponse & { password?: string }; // Add password for type safety if it exists on form data
+        } = currentUserFormData as AdminUserDetailsResponse & { password?: string };
 
-        // Type assertion for the payload
-        const updatePayload: AdminUpdateUserDetailsPayload = { ...editableFields };
+        const updatePayload: AdminUpdateUserDetailsPayload = {
+            ...editableFields,
+            skill_ids: Array.from(selectedSkillIds) // Add selected skill IDs
+        };
 
-        // Ensure boolean is_active is correctly formatted if it came from a text input or needs conversion
         if (typeof updatePayload.is_active !== 'boolean' && updatePayload.is_active !== undefined) {
              updatePayload.is_active = String(updatePayload.is_active).toLowerCase() === 'true';
         }
-
 
         await adminUpdateUserDetailsAPI(currentUserFormData.id, updatePayload);
       } else {
@@ -133,9 +148,11 @@ const UserManagement: React.FC = () => {
         if (!createPayload.username || !createPayload.email || !createPayload.password || !createPayload.role) {
             throw new Error("Username, email, password, and role are required for new user.");
         }
+        // Backend admin_create_user doesn't support skill_ids on creation yet.
+        // If it did: createPayload.skill_ids = Array.from(selectedSkillIds);
         await adminCreateUserAPI(createPayload);
       }
-      await loadUsers();
+      await loadUsersAndSkills(); // Refresh users and skills list
       handleCloseModal();
     } catch (err: any) {
       if (err instanceof ApiError) setError(err.data?.message || err.message || "Failed to save user.");
@@ -155,7 +172,7 @@ const UserManagement: React.FC = () => {
             } else { // If inactive, call update to activate
                  await adminUpdateUserDetailsAPI(userId, { is_active: true });
             }
-            await loadUsers();
+            await loadUsersAndSkills();
         } catch (err: any) {
             setError(err.message || `Failed to ${actionText} user.`);
         } finally {
@@ -265,6 +282,33 @@ const UserManagement: React.FC = () => {
                 <label htmlFor="is_active_checkbox" className="text-sm font-medium">User is Active</label>
               </div>
             }
+
+            {isEditMode && currentUserFormData.id && (
+            <div className="pt-3">
+              <label className="block text-sm font-medium text-gray-700">Skills</label>
+              <div className="mt-1 max-h-40 overflow-y-auto border rounded p-2 space-y-1 bg-gray-50">
+                {allGlobalSkills.map(skill => (
+                  <div key={skill.id} className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id={`skill-${skill.id}-user-${currentUserFormData.id}`}
+                      checked={selectedSkillIds.has(skill.id)}
+                      onChange={(e) => {
+                        const newSet = new Set(selectedSkillIds);
+                        if (e.target.checked) newSet.add(skill.id);
+                        else newSet.delete(skill.id);
+                        setSelectedSkillIds(newSet);
+                      }}
+                      className="h-4 w-4 text-primary border-gray-300 rounded mr-2 focus:ring-primary-focus"
+                    />
+                    <label htmlFor={`skill-${skill.id}-user-${currentUserFormData.id}`} className="text-sm text-gray-700">{skill.name}</label>
+                  </div>
+                ))}
+                {allGlobalSkills.length === 0 && <p className="text-xs text-gray-400">No global skills defined yet. Add them in 'Manage Skills'.</p>}
+              </div>
+            </div>
+            )}
+
             <div className="flex justify-end space-x-2 pt-4 mt-2 border-t">
               <Button type="button" variant="secondary" onClick={handleCloseModal} disabled={isSubmitting}>Cancel</Button>
               <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting}>Save User</Button>
