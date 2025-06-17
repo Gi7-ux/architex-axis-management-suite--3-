@@ -36,9 +36,11 @@ export const NAV_LINKS = {
   PUBLIC_PROJECT_BROWSE: '/browse-projects',
   FREELANCER_APPLICATIONS: 'my-applications',
   FREELANCER_JOB_CARDS: 'my-job-cards',
+  FREELANCER_TIME_TRACKING: 'time-tracking', // New link for freelancer time tracking
   
   CLIENT_MY_PROJECTS: 'my-projects', 
-  
+  CLIENT_PROJECT_TIME_LOGS: 'project-time-logs', // New link for client project time logs viewing
+
   PROJECT_DETAILS: '/project/:id', 
 };
 

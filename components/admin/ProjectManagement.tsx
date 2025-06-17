@@ -1,9 +1,21 @@
-import React, { useState, useEffect } from 'react';
-import { Project, ProjectStatus, User, UserRole, Application, JobCardStatus } from '../../types';
+import React, { useState, useEffect, useCallback } from 'react';
+import { ProjectStatus, UserRole, Application } from '../../types'; // Removed Project, JobCardStatus
+import { useToast } from '../shared/toast/useToast';
 import { 
-    fetchProjectsAPI, fetchProjectDetailsAPI, fetchApplicationsForProjectAPI, 
-    updateProjectStatusAPI, toggleProjectArchiveStatusAPI, createProjectAPI, 
-    acceptApplicationAPI, deleteProjectAPI, fetchUsersAPI 
+    fetchProjectsAPI,
+    fetchProjectDetailsAPI,
+    fetchApplicationsForProjectAPI,
+    createProjectAPI,
+    updateApplicationStatusAPI,
+    deleteProjectAPI,
+    adminFetchAllUsersAPI,
+    updateProjectAPI,
+    AdminUserView,
+    CreateProjectPHPData,
+    ProjectPHPResponse, // Import new type
+    Skill, // Import Skill
+    fetchAllSkillsAPI // Import fetchAllSkillsAPI
+    // ProjectApplicationPHPResponse is also available if needed for projectApplications state
 } from '../../apiService';
 import { NAV_LINKS } from '../../constants';
 import Button from '../shared/Button';
@@ -14,43 +26,52 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import LoadingSpinner from '../shared/LoadingSpinner';
 
 // Helper to calculate project spend (basic version, assumes rates are available on user objects)
-const calculateProjectSpend = (project: Project, users: User[]): number => {
-    if (!project.assignedFreelancerId) return 0;
-    const freelancer = users.find(u => u.id === project.assignedFreelancerId && u.role === UserRole.FREELANCER);
-    if (!freelancer || !freelancer.hourlyRate) {
-        // console.warn(`Hourly rate for freelancer ${project.assignedFreelancerId} not found. Spend calculation might be inaccurate.`);
-        return 0; // Or fetch rate if not available, or handle as error
+// This calculation remains inaccurate as AdminUserView does not have hourlyRate.
+const calculateProjectSpend = (project: ProjectPHPResponse, users: AdminUserView[]): number => {
+    if (!project.freelancer_id) return 0;
+    const freelancer = users.find(u => u.id === project.freelancer_id && u.role === UserRole.FREELANCER);
+    if (!freelancer) {
+        console.warn(`Freelancer ${project.freelancer_id} not found in AdminUserView list. Spend calculation might be inaccurate.`);
+        return 0;
     }
-
-    const totalMinutes = project.jobCards?.reduce((sum, jc) => 
-        sum + (jc.timeLogs?.reduce((logSum, log) => logSum + log.durationMinutes, 0) || 0), 0) || 0;
-    
-    return (totalMinutes / 60) * freelancer.hourlyRate;
+    // TimeLogs are not part of ProjectPHPResponse, so this part of calculation would fail or need adjustment
+    // For now, returning 0 as detailed time logs aren't directly on the project object for spend calculation here.
+    // const totalMinutes = project.jobCards?.reduce((sum, jc) =>
+    //     sum + (jc.timeLogs?.reduce((logSum, log) => logSum + log.durationMinutes, 0) || 0), 0) || 0;
+    // return (totalMinutes / 60) * (freelancer.hourlyRate || 0); // hourlyRate not on AdminUserView
+    return 0;
 };
 
 const ProjectManagement: React.FC = () => {
   const { user: adminUser } = useAuth();
+  const { addToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [allUsers, setAllUsers] = useState<User[]>([]); 
-  const [clients, setClients] = useState<User[]>([]);
-  const [freelancers, setFreelancers] = useState<User[]>([]);
+  const [projects, setProjects] = useState<ProjectPHPResponse[]>([]); // Use ProjectPHPResponse
+  const [allUsers, setAllUsers] = useState<AdminUserView[]>([]);
+  const [clients, setClients] = useState<AdminUserView[]>([]);
+  const [freelancers, setFreelancers] = useState<AdminUserView[]>([]);
+
+  const [allGlobalSkills, setAllGlobalSkills] = useState<Skill[]>([]); // For skill selection
+  const [selectedProjectSkillIds, setSelectedProjectSkillIds] = useState<Set<number>>(new Set()); // For modal skill selection
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
-  const [projectApplications, setProjectApplications] = useState<Application[]>([]);
+  const [selectedProject, setSelectedProject] = useState<ProjectPHPResponse | null>(null); // Use ProjectPHPResponse
+  const [projectApplications, setProjectApplications] = useState<Application[]>([]); // Or ProjectApplicationPHPResponse
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   
+  // Form state for Create Project Modal
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
-  const [budget, setBudget] = useState<number | string>('');
-  const [deadline, setDeadline] = useState('');
-  const [skillsRequired, setSkillsRequired] = useState<string[]>([]);
-  const [currentSkill, setCurrentSkill] = useState('');
-  const [assignedClientId, setAssignedClientId] = useState<string>('');
+  const [projectStatus, setProjectStatus] = useState<ProjectStatus>(ProjectStatus.PENDING_APPROVAL);
+  const [assignedClientId, setAssignedClientId] = useState<string>(''); // For admin to select client
+  const [assignedFreelancerIdModal, setAssignedFreelancerIdModal] = useState<string>(''); // For admin to select freelancer
+
+  // State for the Edit Project Modal form
+  const [editFormData, setEditFormData] = useState<Partial<ProjectPHPResponse>>({});
+
   const [formError, setFormError] = useState<string | null>(null);
 
   const [filterStatus, setFilterStatus] = useState<ProjectStatus | 'ALL'>('ALL');
@@ -58,62 +79,60 @@ const ProjectManagement: React.FC = () => {
   const [filterFreelancer, setFilterFreelancer] = useState<string>('ALL');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [showArchived, setShowArchived] = useState<boolean>(false);
-  const [sortConfig, setSortConfig] = useState<{ key: keyof Project | 'spend' | null, direction: 'ascending' | 'descending' }>({ key: 'createdAt', direction: 'descending' });
+  const [sortConfig, setSortConfig] = useState<{ key: keyof ProjectPHPResponse | 'spend' | null, direction: 'ascending' | 'descending' }>({ key: 'created_at', direction: 'descending' });
 
-  const loadInitialData = async () => {
+  const loadInitialData = useCallback(async () => {
       setIsLoading(true);
       setFormError(null);
       try {
-          const [fetchedProjects, fetchedUsers, fetchedClients, fetchedFreelancers] = await Promise.all([
-              fetchProjectsAPI(),
-              fetchUsersAPI(),
-              fetchUsersAPI(UserRole.CLIENT),
-              fetchUsersAPI(UserRole.FREELANCER)
+          const [fetchedProjects, fetchedAdminUsersView, fetchedSkills] = await Promise.all([
+            fetchProjectsAPI({ status: 'all' }),
+            adminFetchAllUsersAPI(),
+            fetchAllSkillsAPI() // Fetch skills
           ]);
-          setProjects(fetchedProjects);
-          setAllUsers(fetchedUsers); // Store all users for spend calculation etc.
-          setClients(fetchedClients);
-          setFreelancers(fetchedFreelancers);
+
+          setProjects(fetchedProjects); // Directly use ProjectPHPResponse
+          setAllUsers(fetchedAdminUsersView);
+          setClients(fetchedAdminUsersView.filter(u => u.role === UserRole.CLIENT));
+          setFreelancers(fetchedAdminUsersView.filter(u => u.role === UserRole.FREELANCER));
+          setAllGlobalSkills(fetchedSkills.sort((a,b) => a.name.localeCompare(b.name)));
+
 
           if (location.pathname.endsWith(NAV_LINKS.ADMIN_CREATE_PROJECT)) {
               handleOpenCreateModal();
           }
       } catch (error: any) {
           console.error("Failed to load initial project management data:", error);
+          addToast(error.message || 'Failed to load initial project management data.', 'error');
+          // setFormError might still be useful if there's a dedicated error display area on the main page, not just toasts
           setFormError(error.message || "Failed to load necessary data. Please try refreshing.");
-      } finally {
-          setIsLoading(false);
-      }
-  };
-  
-  useEffect(() => {
-    loadInitialData();
-  }, []); 
+      } finally { setIsLoading(false); }
+  }, [location.pathname, addToast]);
 
-  useEffect(() => { // Handle direct navigation to create project
-    if (location.pathname.endsWith(NAV_LINKS.ADMIN_CREATE_PROJECT) && !isCreateModalOpen && clients.length > 0) {
-        handleOpenCreateModal();
-    }
-  }, [location.pathname, isCreateModalOpen, clients]);
+  useEffect(() => { loadInitialData(); }, [loadInitialData]);
 
-  const handleViewDetails = async (project: Project) => {
-    setIsSubmitting(true);
+  const handleViewDetails = async (project: ProjectPHPResponse) => { // Param is ProjectPHPResponse
+    setIsSubmitting(true); // Use for loading indicator in modal trigger button or initial modal load
     setFormError(null);
     try {
-        const details = await fetchProjectDetailsAPI(project.id);
+        const details = await fetchProjectDetailsAPI(project.id); // This should include skills_required
         setSelectedProject(details); 
-        if (details && (details.status === ProjectStatus.OPEN || details.status === ProjectStatus.PENDING_APPROVAL) && !details.assignedFreelancerId) {
-            const apps = await fetchApplicationsForProjectAPI(details.id);
-            setProjectApplications(apps);
+        setEditFormData(details); // Initialize edit form data with project details
+        setSelectedProjectSkillIds(new Set(details.skills_required?.map(s => s.id) || []));
+
+        if (details && (details.status === ProjectStatus.OPEN || details.status === ProjectStatus.PENDING_APPROVAL) && !details.freelancer_id) {
+            const apps = await fetchApplicationsForProjectAPI(String(details.id));
+            setProjectApplications(apps as Application[]);
         } else {
             setProjectApplications([]);
         }
         setIsDetailModalOpen(true);
     } catch (error: any) {
         console.error("Error fetching project details:", error);
-        setFormError(error.message || "Could not load project details.");
+        addToast(error.message || 'Could not load project details.', 'error');
+        setFormError(error.message || "Could not load project details."); // Keep for modal error display
     } finally {
-        setIsSubmitting(false);
+        setIsSubmitting(false); // Stop loading indicator
     }
   };
 
@@ -121,18 +140,23 @@ const ProjectManagement: React.FC = () => {
     setIsDetailModalOpen(false);
     setSelectedProject(null);
     setProjectApplications([]);
+    setSelectedProjectSkillIds(new Set());
+    setEditFormData({}); // Clear edit form data
+    setFormError(null); // Clear modal-specific errors
+  };
+
+  const handleEditFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
+    const { name, value } = e.target;
+    setEditFormData(prev => ({ ...prev, [name]: value }));
   };
 
   const resetCreateForm = () => {
-    setTitle(''); setDescription(''); setBudget(''); setDeadline(''); 
-    setSkillsRequired([]); setCurrentSkill(''); setAssignedClientId(''); setFormError(null);
+    setTitle(''); setDescription(''); setProjectStatus(ProjectStatus.PENDING_APPROVAL);
+    setAssignedClientId(''); setAssignedFreelancerIdModal(''); setFormError(null);
   };
   
   const handleOpenCreateModal = () => {
     resetCreateForm();
-    if (clients.length === 0 && !isLoading) { //isLoading check to prevent premature warning
-        setFormError("No clients available to assign for new project. Please add clients first.");
-    }
     setIsCreateModalOpen(true);
     if (location.pathname !== `${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`) {
         navigate(`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`, { replace: true });
@@ -147,120 +171,168 @@ const ProjectManagement: React.FC = () => {
     }
   };
 
-  const handleAddSkill = () => {
-    if (currentSkill.trim() && !skillsRequired.includes(currentSkill.trim())) {
-      setSkillsRequired([...skillsRequired, currentSkill.trim()]);
-      setCurrentSkill('');
-    }
-  };
-
-  const handleRemoveSkill = (skillToRemove: string) => {
-    setSkillsRequired(skillsRequired.filter(skill => skill !== skillToRemove));
-  };
-
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adminUser || adminUser.role !== UserRole.ADMIN) {
+    if (!adminUser ) { // Admin role check is implicit as only admin sees this form section usually
         setFormError("Authentication error."); return;
     }
-    if (!title || !description || !budget || !deadline || !assignedClientId) {
-      setFormError("Please fill in all required fields including assigning a client.");
+    if (!title || !description) {
+      setFormError("Project title and description are required.");
       return;
     }
+
     setIsSubmitting(true); setFormError(null);
     try {
-      const projectData = { title, description, budget: Number(budget), deadline: new Date(deadline).toISOString(), skillsRequired, clientId: assignedClientId, adminCreatorId: adminUser.id };
-      await createProjectAPI(projectData);
-      alert("Project created and is pending approval."); 
+      const projectPayload: CreateProjectPHPData = {
+        title,
+        description,
+        status: projectStatus,
+      };
+
+      if (adminUser.role === UserRole.ADMIN && assignedClientId) {
+        projectPayload.client_id = parseInt(assignedClientId, 10);
+      }
+      if (assignedFreelancerIdModal) {
+        projectPayload.freelancer_id = parseInt(assignedFreelancerIdModal, 10);
+      }
+
+      await createProjectAPI(projectPayload);
+      addToast('Project created successfully.', 'success');
       await loadInitialData(); 
       handleCloseCreateModal();
     } catch (err: any) {
       console.error("Failed to create project", err);
-      setFormError(err.message || "Failed to create project. Please try again.");
+      addToast(err.message || 'Failed to create project. Please try again.', 'error');
+      // setFormError(err.message || "Failed to create project. Please try again."); // Keep for modal error display if needed
     } finally {
       setIsSubmitting(false);
     }
   };
   
-  const handleApproveProjectStatus = async (projectId: string) => { 
-    setIsSubmitting(true);
-    setFormError(null);
+  const handleApproveProjectStatus = async (projectId: number) => {
+    setIsSubmitting(true); setFormError(null);
     try {
-        await updateProjectStatusAPI(projectId, ProjectStatus.OPEN);
-        alert("Project approved and is now open for applications.");
+        await updateProjectAPI(String(projectId), { status: ProjectStatus.OPEN });
+        addToast('Project approved and is now open for applications.', 'success');
         await loadInitialData();
         if (selectedProject?.id === projectId) { 
             const details = await fetchProjectDetailsAPI(projectId);
             setSelectedProject(details || null);
         }
     } catch (err: any) {
-        alert(err.message || "Failed to approve project.");
-        setFormError(err.message || "Failed to approve project.");
-    }
-    setIsSubmitting(false);
-  };
-
-  const handleAcceptApplication = async (applicationId: string) => {
-    if (!adminUser) return;
-    setIsSubmitting(true);
-    setFormError(null);
-    try {
-        await acceptApplicationAPI(applicationId);
-        alert("Application accepted. Freelancer assigned and project is In Progress.");
-        await loadInitialData();
-        handleCloseDetailModal(); 
-    } catch (err: any) {
-        alert(err.message || "Failed to accept application.");
-        setFormError(err.message || "Failed to accept application.");
-    }
-    setIsSubmitting(false);
-  };
-
-  const handleNavigateToEditProjectTasks = (project: Project) => {
-    navigate(NAV_LINKS.PROJECT_DETAILS.replace(':id', project.id)); 
-    handleCloseDetailModal();
-  };
-
-  const handleDeleteProject = async (projectId: string) => {
-    if(window.confirm("Are you sure you want to delete this project? This cannot be undone.")) {
-        setIsSubmitting(true);
-        setFormError(null);
-        try {
-            await deleteProjectAPI(projectId);
-            await loadInitialData();
-        } catch (err: any) {
-            alert(err.message || "Failed to delete project.");
-            setFormError(err.message || "Failed to delete project.");
-        }
+        addToast(err.message || 'Failed to approve project.', 'error');
+        // setFormError(err.message || "Failed to approve project."); // Removed as toast is primary
+    } finally {
         setIsSubmitting(false);
     }
   };
 
-  const handleToggleArchive = async (project: Project) => {
-    setIsSubmitting(true);
-    setFormError(null);
+  const handleAcceptApplication = async (applicationId: string, projectIdToRefresh: number) => {
+    if (!adminUser) return;
+    setIsSubmitting(true); setFormError(null);
     try {
-        await toggleProjectArchiveStatusAPI(project.id);
+        await updateApplicationStatusAPI(applicationId, { status: 'accepted' });
+        addToast('Application accepted. Freelancer assigned and project is In Progress.', 'success');
+        await loadInitialData();
+        if (selectedProject?.id === projectIdToRefresh) {
+            const details = await fetchProjectDetailsAPI(projectIdToRefresh);
+            setSelectedProject(details || null);
+             if (details) {
+                // If the modal is being enhanced for editing, re-populate skills
+                setSelectedProjectSkillIds(new Set(details.skills_required?.map(s => s.id) || []));
+                const apps = await fetchApplicationsForProjectAPI(String(details.id));
+                setProjectApplications(apps as Application[]);
+            }
+        } else {
+            handleCloseDetailModal();
+        }
+    } catch (err: any) {
+        addToast(err.message || 'Failed to accept application.', 'error');
+        // setFormError(err.message || "Failed to accept application."); // Removed as toast is primary
+    } finally {
+        setIsSubmitting(false);
+    }
+  };
+
+  // This function will be for saving changes from the enhanced "Edit Details" modal
+  const handleUpdateProjectDetails = async () => { // No direct formData param, reads from editFormData and selectedProjectSkillIds
+    if (!selectedProject || !editFormData) return;
+
+    setIsSubmitting(true); setFormError(null);
+    try {
+      const payload: UpdateProjectPHPData = {
+        title: editFormData.title,
+        description: editFormData.description,
+        status: editFormData.status as ProjectStatus, // Ensure status is of ProjectStatus type
+        client_id: editFormData.client_id ? Number(editFormData.client_id) : undefined,
+        freelancer_id: editFormData.freelancer_id ? Number(editFormData.freelancer_id) : undefined,
+        skill_ids: Array.from(selectedProjectSkillIds) // Use the state for selected skills
+      };
+      await updateProjectAPI(String(selectedProject.id), payload);
+      addToast('Project details updated successfully.', 'success');
+      await loadInitialData(); // Refresh list
+      handleCloseDetailModal();
+    } catch (err: any) {
+      console.error("Failed to update project details", err);
+      addToast(err.message || 'Failed to update project details. Please check inputs or try again.', 'error');
+      // setFormError(err.message || "Failed to update project details. Please check inputs or try again."); // Keep for modal error display
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+
+  const handleNavigateToEditProjectTasks = (project: ProjectPHPResponse) => { // Param is ProjectPHPResponse
+    navigate(NAV_LINKS.PROJECT_DETAILS.replace(':id', String(project.id)));
+    handleCloseDetailModal();
+  };
+
+  const handleDeleteProject = async (projectId: number) => { // Param is number
+    if(window.confirm("Are you sure you want to delete this project? This cannot be undone.")) {
+        setIsSubmitting(true);
+        setFormError(null);
+        try {
+            await deleteProjectAPI(String(projectId));
+            addToast('Project deleted successfully.', 'success');
+            await loadInitialData();
+        } catch (err: any) {
+            addToast(err.message || 'Failed to delete project.', 'error');
+            // setFormError(err.message || "Failed to delete project."); // Removed as toast is primary
+        } finally {
+            setIsSubmitting(false);
+        }
+    }
+  };
+
+  const handleToggleArchive = async (project: ProjectPHPResponse) => { // Param is ProjectPHPResponse
+    setIsSubmitting(true); setFormError(null);
+    try {
+        const currentIsArchived = project.status === 'archived'; // Determine if currently archived
+        const newStatus = currentIsArchived ? ProjectStatus.OPEN : 'archived' as ProjectStatus;
+        await updateProjectAPI(String(project.id), { status: newStatus });
+        addToast('Project archive status updated successfully.', 'success');
         await loadInitialData(); 
     } catch (err: any) {
-        alert(err.message || "Failed to update archive status.");
-        setFormError(err.message || "Failed to update archive status.");
+        addToast(err.message || 'Failed to update archive status.', 'error');
+        // setFormError(err.message || "Failed to update archive status."); // Removed as toast is primary
+    } finally {
+        setIsSubmitting(false);
     }
-    setIsSubmitting(false);
   };
   
-  const getStatusClass = (status: ProjectStatus) => {
+  const getStatusClass = (status?: ProjectStatus | string) => {
     switch (status) {
       case ProjectStatus.PENDING_APPROVAL: return 'bg-orange-100 text-orange-700';
       case ProjectStatus.OPEN: return 'bg-green-100 text-green-700';
       case ProjectStatus.IN_PROGRESS: return 'bg-yellow-100 text-yellow-700';
       case ProjectStatus.COMPLETED: return 'bg-blue-100 text-blue-700';
       case ProjectStatus.CANCELLED: return 'bg-red-100 text-red-700';
+      case 'archived': return 'bg-gray-200 text-gray-800'; // Specific style for archived
       default: return 'bg-gray-100 text-gray-700';
     }
   };
 
-  const requestSort = (key: keyof Project | 'spend') => {
+  const requestSort = (key: keyof ProjectPHPResponse | 'spend') => { // Adjusted key type
     let direction: 'ascending' | 'descending' = 'ascending';
     if (sortConfig.key === key && sortConfig.direction === 'ascending') {
       direction = 'descending';
@@ -273,12 +345,14 @@ const ProjectManagement: React.FC = () => {
 
     sortableProjects = sortableProjects.filter(project => {
       const matchesStatus = filterStatus === 'ALL' || project.status === filterStatus;
-      const matchesClient = filterClient === 'ALL' || project.clientId === filterClient;
-      const matchesFreelancer = filterFreelancer === 'ALL' || project.assignedFreelancerId === filterFreelancer;
+      // Ensure client_id and freelancer_id are numbers for comparison if filters are numbers
+      const matchesClient = filterClient === 'ALL' || project.client_id === parseInt(filterClient);
+      const matchesFreelancer = filterFreelancer === 'ALL' || project.freelancer_id === parseInt(filterFreelancer);
       const matchesSearch = searchTerm === '' || 
                             project.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            project.description.toLowerCase().includes(searchTerm.toLowerCase());
-      const matchesArchived = showArchived ? true : !project.isArchived;
+                            (project.description && project.description.toLowerCase().includes(searchTerm.toLowerCase()));
+      const isArchived = project.status === 'archived';
+      const matchesArchived = showArchived ? true : !isArchived;
       return matchesStatus && matchesClient && matchesFreelancer && matchesSearch && matchesArchived;
     });
 
@@ -286,11 +360,11 @@ const ProjectManagement: React.FC = () => {
       sortableProjects.sort((a, b) => {
         let aValue, bValue;
         if (sortConfig.key === 'spend') {
-            aValue = calculateProjectSpend(a, allUsers);
-            bValue = calculateProjectSpend(b, allUsers);
+            aValue = calculateProjectSpend(a, allUsers); // Pass ProjectPHPResponse
+            bValue = calculateProjectSpend(b, allUsers); // Pass ProjectPHPResponse
         } else {
-            aValue = a[sortConfig.key as keyof Project];
-            bValue = b[sortConfig.key as keyof Project];
+            aValue = a[sortConfig.key as keyof ProjectPHPResponse];
+            bValue = b[sortConfig.key as keyof ProjectPHPResponse];
         }
 
         if (typeof aValue === 'number' && typeof bValue === 'number') {
@@ -299,7 +373,8 @@ const ProjectManagement: React.FC = () => {
         if (typeof aValue === 'string' && typeof bValue === 'string') {
           return sortConfig.direction === 'ascending' ? aValue.localeCompare(bValue) : bValue.localeCompare(aValue);
         }
-        if (sortConfig.key === 'deadline' || sortConfig.key === 'createdAt') {
+        // Assuming created_at and deadline are strings
+        if (sortConfig.key === 'deadline' || sortConfig.key === 'created_at') {
             const dateA = new Date(aValue as string).getTime();
             const dateB = new Date(bValue as string).getTime();
             return sortConfig.direction === 'ascending' ? dateA - dateB : dateB - dateA;
@@ -310,7 +385,7 @@ const ProjectManagement: React.FC = () => {
     return sortableProjects;
   }, [projects, filterStatus, filterClient, filterFreelancer, searchTerm, showArchived, sortConfig, allUsers]);
 
-  const getSortIndicator = (key: keyof Project | 'spend') => {
+  const getSortIndicator = (key: keyof ProjectPHPResponse | 'spend') => { // Adjusted key type
     if (sortConfig.key === key) {
       return sortConfig.direction === 'ascending' ? '▲' : '▼';
     }
@@ -330,7 +405,8 @@ const ProjectManagement: React.FC = () => {
           Create Project
         </Button>
       </div>
-      {formError && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
+      {formError && !isDetailModalOpen && !isCreateModalOpen && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
+      {/* Note: formError for modals is handled inside the modal now. The above is for page-level form errors if any. */}
       <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
         <div>
           <label className="block text-xs font-medium text-gray-700">Search</label>
@@ -341,20 +417,21 @@ const ProjectManagement: React.FC = () => {
           <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as ProjectStatus | 'ALL')} className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm">
             <option value="ALL">All Statuses</option>
             {Object.values(ProjectStatus).map(s => <option key={s} value={s}>{s}</option>)}
+             <option value="archived">Archived</option> {/* Add archived to filter */}
           </select>
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-700">Client</label>
           <select value={filterClient} onChange={e => setFilterClient(e.target.value)} className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm">
             <option value="ALL">All Clients</option>
-            {clients.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            {clients.map(c => <option key={c.id} value={String(c.id)}>{c.username}</option>)}
           </select>
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-700">Freelancer</label>
           <select value={filterFreelancer} onChange={e => setFilterFreelancer(e.target.value)} className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm">
             <option value="ALL">All Freelancers</option>
-            {freelancers.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+            {freelancers.map(f => <option key={f.id} value={String(f.id)}>{f.username}</option>)}
           </select>
         </div>
         <div className="md:col-span-2 lg:col-span-4 flex items-center">
@@ -376,104 +453,137 @@ const ProjectManagement: React.FC = () => {
             <thead className="bg-gray-50">
               <tr>
                 <th onClick={() => requestSort('title')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Title {getSortIndicator('title')}</th>
-                <th onClick={() => requestSort('clientName')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Client {getSortIndicator('clientName')}</th>
-                <th onClick={() => requestSort('assignedFreelancerName')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Freelancer {getSortIndicator('assignedFreelancerName')}</th>
+                <th onClick={() => requestSort('client_username')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Client {getSortIndicator('client_username')}</th>
+                <th onClick={() => requestSort('freelancer_username')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Freelancer {getSortIndicator('freelancer_username')}</th>
                 <th onClick={() => requestSort('status')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Status {getSortIndicator('status')}</th>
-                <th onClick={() => requestSort('budget')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Budget (R) {getSortIndicator('budget')}</th>
-                <th onClick={() => requestSort('spend')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Spend (R) {getSortIndicator('spend')}</th>
-                <th onClick={() => requestSort('deadline')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Deadline {getSortIndicator('deadline')}</th>
+                {/* Budget and Spend columns are removed for simplicity as budget is not in ProjectPHPResponse and spend calc is inaccurate */}
+                <th onClick={() => requestSort('created_at')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Created {getSortIndicator('created_at')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
               {sortedAndFilteredProjects.map((project) => {
-                const projectSpend = calculateProjectSpend(project, allUsers);
-                const isOverdue = new Date(project.deadline) < new Date() && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED;
+                const isArchived = project.status === 'archived';
+                // const projectSpend = calculateProjectSpend(project, allUsers); // Spend calculation is inaccurate
+                // const isOverdue = project.deadline && new Date(project.deadline) < new Date() && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED;
                 return (
-                <tr key={project.id} className={`hover:bg-primary-extralight transition-colors duration-150 ${project.isArchived ? 'opacity-60 bg-gray-100' : ''}`}>
+                <tr key={project.id} className={`hover:bg-primary-extralight transition-colors duration-150 ${isArchived ? 'opacity-60 bg-gray-100' : ''}`}>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{project.title}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.clientName || 'N/A'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.assignedFreelancerName || 'Not Assigned'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.client_username || 'N/A'}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.freelancer_username || 'Not Assigned'}</td>
                   <td className="px-6 py-4 whitespace-nowrap">
                     <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(project.status)}`}>
                       {project.status}
                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">R {project.budget.toLocaleString()}</td>
-                  <td className={`px-6 py-4 whitespace-nowrap text-sm ${projectSpend > project.budget ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
-                      R {projectSpend.toLocaleString()}
-                  </td>
-                  <td className={`px-6 py-4 whitespace-nowrap text-sm ${isOverdue ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>{new Date(project.deadline).toLocaleDateString()}</td>
+                  {/* Budget and Spend Columns Removed */}
+                  <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-500`}>{project.created_at ? new Date(project.created_at).toLocaleDateString() : 'N/A'}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-1">
                     <Button variant="ghost" size="sm" onClick={() => handleViewDetails(project)} aria-label="View Details" className="text-primary hover:text-primary-hover p-1" disabled={isSubmitting}><EyeIcon className="w-4 h-4" /></Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleNavigateToEditProjectTasks(project)} aria-label="Edit Project/Tasks" className="text-primary hover:text-primary-hover p-1" disabled={isSubmitting}><PencilIcon className="w-4 h-4" /></Button>
+                    <Button variant="ghost" size="sm" onClick={() => handleNavigateToEditProjectTasks(project)} aria-label="Manage Project Tasks" className="text-primary hover:text-primary-hover p-1" disabled={isSubmitting}><PencilIcon className="w-4 h-4" /></Button>
                     {project.status === ProjectStatus.PENDING_APPROVAL && (
                        <Button variant="ghost" size="sm" onClick={() => handleApproveProjectStatus(project.id)} aria-label="Approve Project" className="text-green-600 hover:text-green-700 p-1" disabled={isSubmitting}><CheckCircleIcon className="w-4 h-4" /></Button>
                     )}
-                    <Button variant="ghost" size="sm" onClick={() => handleToggleArchive(project)} aria-label={project.isArchived ? "Unarchive" : "Archive"} className="text-gray-500 hover:text-gray-700 p-1" disabled={isSubmitting}>
-                       {project.isArchived ? '📤' : '📥'}
+                    <Button variant="ghost" size="sm" onClick={() => handleToggleArchive(project)} aria-label={isArchived ? "Unarchive" : "Archive"} className="text-gray-500 hover:text-gray-700 p-1" disabled={isSubmitting}>
+                       {isArchived ? '📤' : '📥'}
                     </Button>
                     <Button variant="ghost" size="sm" onClick={() => handleDeleteProject(project.id)} aria-label="Delete" className="text-red-500 hover:text-red-700 p-1" disabled={isSubmitting}><TrashIcon className="w-4 h-4" /></Button>
                   </td>
                 </tr>
               )})}
               {sortedAndFilteredProjects.length === 0 && (
-                  <tr><td colSpan={8} className="text-center py-4 text-gray-500">No projects match the current filters.</td></tr>
+                  <tr><td colSpan={6} className="text-center py-4 text-gray-500">No projects match the current filters.</td></tr>
               )}
             </tbody>
           </table>
         </div>
       )}
 
-      {selectedProject && (
-        <Modal isOpen={isDetailModalOpen} onClose={handleCloseDetailModal} title={`Details: ${selectedProject.title}`} size="2xl">
-          <div className="space-y-4">
-            <p><strong className="font-medium text-gray-700">Description:</strong> {selectedProject.description}</p>
-            <p><strong className="font-medium text-gray-700">Budget:</strong> R {selectedProject.budget.toLocaleString()}</p>
-            <p><strong className="font-medium text-gray-700">Spend:</strong> R {calculateProjectSpend(selectedProject, allUsers).toLocaleString()}</p>
-            <p><strong className="font-medium text-gray-700">Deadline:</strong> {new Date(selectedProject.deadline).toLocaleDateString()}</p>
-            <p><strong className="font-medium text-gray-700">Client:</strong> {selectedProject.clientName || 'N/A'}</p>
-            <p><strong className="font-medium text-gray-700">Status:</strong> <span className={`px-2 py-0.5 text-xs rounded-full ${getStatusClass(selectedProject.status)}`}>{selectedProject.status}</span></p>
-            {selectedProject.assignedFreelancerName && <p><strong className="font-medium text-gray-700">Assigned Freelancer:</strong> {selectedProject.assignedFreelancerName}</p>}
+      {selectedProject && isDetailModalOpen && ( // Ensure modal only renders if selectedProject and isDetailModalOpen are true
+        <Modal isOpen={isDetailModalOpen} onClose={handleCloseDetailModal} title={`Edit Project: ${editFormData?.title || selectedProject.title}`} size="2xl">
+          <form onSubmit={(e) => { e.preventDefault(); handleUpdateProjectDetails(); }} className="space-y-4 max-h-[75vh] overflow-y-auto p-1">
+            {/* Modal-specific formError display */}
+            {formError && isDetailModalOpen && <div className="mb-3 p-2 bg-red-100 text-red-600 rounded-md text-sm">{formError}</div>}
+
             <div>
-              <strong className="font-medium text-gray-700">Skills Required:</strong>
-              <div className="flex flex-wrap gap-2 mt-1">
-                {selectedProject.skillsRequired.map(skill => (
-                  <span key={skill} className="px-2.5 py-1 bg-accent text-secondary text-xs rounded-full font-medium">{skill}</span>
-                ))}
+              <label htmlFor="edit_proj_title" className="block text-sm font-medium text-gray-700">Title*</label>
+              <input type="text" name="title" id="edit_proj_title" value={editFormData?.title || ''} onChange={handleEditFormChange} required
+                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary"/>
+            </div>
+            <div>
+              <label htmlFor="edit_proj_desc" className="block text-sm font-medium text-gray-700">Description*</label>
+              <textarea name="description" id="edit_proj_desc" rows={3} value={editFormData?.description || ''} onChange={handleEditFormChange} required
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary"/>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label htmlFor="edit_proj_status" className="block text-sm font-medium text-gray-700">Status</label>
+                <select name="status" id="edit_proj_status" value={editFormData?.status || ''} onChange={handleEditFormChange}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
+                  {Object.values(ProjectStatus).map(s => <option key={s} value={s}>{s}</option>)}
+                  <option value="archived">Archived</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="edit_proj_client" className="block text-sm font-medium text-gray-700">Client</label>
+                <select name="client_id" id="edit_proj_client" value={editFormData?.client_id || ''} onChange={handleEditFormChange}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
+                  <option value="">None (Admin is Client)</option>
+                  {clients.map(c => <option key={c.id} value={c.id}>{c.username} (ID: {c.id})</option>)}
+                </select>
               </div>
             </div>
-             {selectedProject.jobCards && selectedProject.jobCards.length > 0 && (
-                <div className="pt-3">
-                    <h4 className="font-medium text-gray-700">Job Cards / Tasks:</h4>
-                    <ul className="list-disc list-inside mt-1 space-y-1 text-sm max-h-40 overflow-y-auto bg-gray-50 p-3 rounded-md border">
-                        {selectedProject.jobCards.map(jc => (
-                            <li key={jc.id} className="text-gray-600">
-                                {jc.title} - <span className={`font-semibold ${
-                                    jc.status === JobCardStatus.COMPLETED ? 'text-green-600' : 
-                                    jc.status === JobCardStatus.IN_PROGRESS ? 'text-yellow-600' :
-                                    jc.status === JobCardStatus.PENDING_REVIEW ? 'text-purple-600' :
-                                    'text-gray-500'
-                                }`}>{jc.status}</span>
-                                {jc.assignedArchitectName && <span className="text-xs text-gray-400"> (Assigned: {jc.assignedArchitectName})</span>}
-                            </li>
-                        ))}
-                    </ul>
-                </div>
-            )}
+            <div>
+              <label htmlFor="edit_proj_freelancer" className="block text-sm font-medium text-gray-700">Assigned Freelancer</label>
+              <select name="freelancer_id" id="edit_proj_freelancer" value={editFormData?.freelancer_id || ''} onChange={handleEditFormChange}
+                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
+                <option value="">Not Assigned</option>
+                {freelancers.map(f => <option key={f.id} value={f.id}>{f.username} (ID: {f.id})</option>)}
+              </select>
+            </div>
 
-            { (selectedProject.status === ProjectStatus.OPEN || selectedProject.status === ProjectStatus.PENDING_APPROVAL) && projectApplications.length > 0 && !selectedProject.assignedFreelancerId && (
+            {/* Skills Selection UI */}
+            <div className="pt-3">
+              <label className="block text-sm font-medium text-gray-700">Required Skills</label>
+              <div className="mt-1 max-h-40 overflow-y-auto border rounded p-2 space-y-1 bg-gray-50">
+                {allGlobalSkills.map(skill => (
+                  <div key={skill.id} className="flex items-center">
+                    <input
+                      type="checkbox"
+                      id={`edit-proj-skill-${skill.id}`}
+                      checked={selectedProjectSkillIds.has(skill.id)}
+                      onChange={(e) => {
+                        const newSet = new Set(selectedProjectSkillIds);
+                        if (e.target.checked) newSet.add(skill.id);
+                        else newSet.delete(skill.id);
+                        setSelectedProjectSkillIds(newSet);
+                      }}
+                      className="h-4 w-4 text-primary border-gray-300 rounded mr-2 focus:ring-primary-focus"
+                    />
+                    <label htmlFor={`edit-proj-skill-${skill.id}`} className="text-sm text-gray-700">{skill.name}</label>
+                  </div>
+                ))}
+                {allGlobalSkills.length === 0 && <p className="text-xs text-gray-400">No global skills available.</p>}
+              </div>
+            </div>
+
+            {/* Display Applications if relevant (read-only part of the form) */}
+            { (editFormData?.status === ProjectStatus.OPEN || editFormData?.status === ProjectStatus.PENDING_APPROVAL) &&
+              projectApplications.length > 0 && !editFormData?.freelancer_id && (
                 <div className="pt-4 border-t mt-4">
-                    <h4 className="text-md font-semibold text-gray-700 mb-2">Pending Applications ({projectApplications.filter(app => app.status === 'PendingAdminApproval').length})</h4>
-                    {projectApplications.filter(app => app.status === 'PendingAdminApproval').length > 0 ? (
+                    <h4 className="text-md font-semibold text-gray-700 mb-2">
+                        Pending Applications ({projectApplications.filter(app => app.status === 'pending').length})
+                    </h4>
+                    {projectApplications.filter(app => app.status === 'pending').length > 0 ? (
                         <div className="space-y-3 max-h-60 overflow-y-auto">
-                            {projectApplications.filter(app => app.status === 'PendingAdminApproval').map(app => (
-                                <div key={app.id} className="p-3 bg-gray-50 rounded-md border hover:shadow-sm">
-                                    <p className="font-semibold text-gray-800">{app.freelancerName} <span className="text-xs text-gray-500">({app.freelancerId})</span></p>
-                                    <p className="text-sm text-gray-600">Bid: R {app.bidAmount.toLocaleString()}</p>
-                                    <p className="text-sm text-gray-600 mt-1 italic">"{app.proposal}"</p>
+                            {projectApplications.filter(app => app.status === 'pending').map(app => (
+                                <div key={app.id}
+                                     className="p-3 bg-gray-50 rounded-md border hover:shadow-sm">
+                                    <p className="font-semibold text-gray-800">{ (app as any).freelancer_username /* Assuming type cast for now */} <span className="text-xs text-gray-500">({app.freelancer_id})</span></p>
+                                    <p className="text-sm text-gray-600">Bid: R {app.bid_amount ? app.bid_amount.toLocaleString() : 'N/A'}</p>
+                                    <p className="text-sm text-gray-600 mt-1 italic whitespace-pre-wrap">"{app.proposal_text}"</p>
                                     <Button 
-                                        onClick={() => handleAcceptApplication(app.id)} 
+                                        onClick={() => handleAcceptApplication(String(app.id), selectedProject.id)}
                                         variant="primary" size="sm" className="mt-2" 
                                         leftIcon={<UserCheckIcon className="w-4 h-4"/>}
                                         isLoading={isSubmitting}>
@@ -483,78 +593,71 @@ const ProjectManagement: React.FC = () => {
                             ))}
                         </div>
                     ) : (
-                        <p className="text-sm text-gray-500">No applications currently pending admin approval for this project.</p>
+                        <p className="text-sm text-gray-500">No applications currently pending for this project.</p>
                     )}
                 </div>
             )}
-            {selectedProject.status === ProjectStatus.OPEN && projectApplications.filter(app => app.status === 'PendingAdminApproval').length === 0 && !selectedProject.assignedFreelancerId && (
-                 <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open for bidding but has no pending applications yet.</p>
+            {selectedProject.status === ProjectStatus.OPEN && projectApplications.filter(app => app.status === 'pending').length === 0 && !selectedProject.freelancer_id && (
+                 <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open but has no pending applications yet.</p>
+            )}
+            {editFormData?.status === ProjectStatus.OPEN && projectApplications.filter(app => app.status === 'pending').length === 0 && !editFormData?.freelancer_id && (
+                 <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open but has no pending applications yet.</p>
             )}
 
 
-             <div className="mt-6 flex justify-end space-x-2">
-                <Button onClick={() => handleNavigateToEditProjectTasks(selectedProject)} variant="secondary">Manage Tasks</Button>
-                <Button onClick={handleCloseDetailModal} variant="outline">Close</Button>
+            <div className="mt-6 flex justify-end space-x-3 pt-4 border-t">
+                <Button type="button" variant="secondary" onClick={handleCloseDetailModal} disabled={isSubmitting}>Cancel</Button>
+                <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting}>Save Changes</Button>
             </div>
-          </div>
+          </form>
         </Modal>
       )}
 
+      {/* Create Project Modal - Skills are deferred for creation */}
       {isCreateModalOpen && (
-        <Modal isOpen={isCreateModalOpen} onClose={handleCloseCreateModal} title="Create New Project (Admin)" size="2xl">
-           <form onSubmit={handleCreateProject} className="space-y-6">
+        <Modal isOpen={isCreateModalOpen} onClose={handleCloseCreateModal} title="Create New Project (Admin)" size="xl">
+           <form onSubmit={handleCreateProject} className="space-y-4 p-1">
             <div>
-              <label htmlFor="proj_title" className="block text-sm font-medium text-gray-700">Project Title</label>
-              <input type="text" id="proj_title" value={title} onChange={(e) => setTitle(e.target.value)}
+              <label htmlFor="proj_title_create" className="block text-sm font-medium text-gray-700">Project Title*</label>
+              <input type="text" id="proj_title_create" value={title} onChange={(e) => setTitle(e.target.value)}
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" required />
             </div>
             <div>
-              <label htmlFor="proj_desc" className="block text-sm font-medium text-gray-700">Project Description</label>
-              <textarea id="proj_desc" rows={4} value={description} onChange={(e) => setDescription(e.target.value)}
+              <label htmlFor="proj_desc_create" className="block text-sm font-medium text-gray-700">Project Description*</label>
+              <textarea id="proj_desc_create" rows={3} value={description} onChange={(e) => setDescription(e.target.value)}
                 className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" required />
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              <div>
-                <label htmlFor="proj_budget" className="block text-sm font-medium text-gray-700">Budget (R)</label>
-                <input type="number" id="proj_budget" value={budget} onChange={(e) => setBudget(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" required min="1" />
-              </div>
-              <div>
-                <label htmlFor="proj_deadline" className="block text-sm font-medium text-gray-700">Deadline</label>
-                <input type="date" id="proj_deadline" value={deadline} onChange={(e) => setDeadline(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" required min={new Date().toISOString().split('T')[0]} />
-              </div>
-            </div>
-             <div>
-                <label htmlFor="assignClient" className="block text-sm font-medium text-gray-700">Assign Client</label>
-                <select id="assignClient" value={assignedClientId} onChange={(e) => setAssignedClientId(e.target.value)} required
-                    className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
-                    <option value="" disabled>Select a client</option>
-                    {clients.length > 0 ? clients.map(client => <option key={client.id} value={client.id}>{client.name} ({client.email})</option>) : <option disabled>No clients available</option>}
+            <div>
+                <label htmlFor="proj_status_create" className="block text-sm font-medium text-gray-700">Initial Status</label>
+                <select id="proj_status_create" value={projectStatus} onChange={e => setProjectStatus(e.target.value as ProjectStatus)}
+                    className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-white">
+                    <option value={ProjectStatus.PENDING_APPROVAL}>Pending Approval</option>
+                    <option value={ProjectStatus.OPEN}>Open</option>
                 </select>
             </div>
-            <div>
-              <label htmlFor="proj_skills" className="block text-sm font-medium text-gray-700">Skills Required (optional)</label>
-              <div className="flex items-center mt-1">
-                <input type="text" id="proj_skills" value={currentSkill} onChange={(e) => setCurrentSkill(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddSkill();}}}
-                  className="flex-grow px-3 py-2 border border-gray-300 rounded-l-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" placeholder="e.g., Revit, AutoCAD" />
-                <Button type="button" onClick={handleAddSkill} className="rounded-l-none !py-2" variant="secondary">Add Skill</Button>
+            {adminUser?.role === UserRole.ADMIN && (
+              <div>
+                <label htmlFor="assignClient" className="block text-sm font-medium text-gray-700">Assign to Client (Optional)</label>
+                <select id="assignClient" value={assignedClientId} onChange={(e) => setAssignedClientId(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
+                  <option value="">Admin becomes client (Self-assigned)</option>
+                  {clients.map(client => <option key={client.id} value={client.id}>{client.username} (ID: {client.id})</option>)}
+                </select>
               </div>
-              {skillsRequired.length > 0 && (
-                <div className="mt-2 flex flex-wrap gap-2">
-                  {skillsRequired.map(skill => (
-                    <span key={skill} className="flex items-center px-2.5 py-1 bg-accent text-secondary text-sm rounded-full font-medium">
-                      {skill} <button type="button" onClick={() => handleRemoveSkill(skill)} className="ml-1.5 text-secondary hover:text-red-700 font-bold">&times;</button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-            {formError && <p className="text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
-            <div className="pt-4 flex justify-end space-x-3">
+            )}
+             <div>
+                <label htmlFor="assignFreelancerModal" className="block text-sm font-medium text-gray-700">Assign Freelancer (Optional)</label>
+                <select id="assignFreelancerModal" value={assignedFreelancerIdModal} onChange={(e) => setAssignedFreelancerIdModal(e.target.value)}
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
+                  <option value="">No Freelancer Assigned</option>
+                  {freelancers.map(freelancer => <option key={freelancer.id} value={freelancer.id}>{freelancer.username} (ID: {freelancer.id})</option>)}
+                </select>
+              </div>
+            {/* Modal-specific formError display for create modal */}
+            {formError && isCreateModalOpen && <p className="text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
+            <div className="pt-4 flex justify-end space-x-3 border-t mt-4">
                 <Button type="button" variant="secondary" onClick={handleCloseCreateModal} disabled={isSubmitting}>Cancel</Button>
-                <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting || (clients.length === 0 && !isLoading) }>Create Project</Button>
+                <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting}>Create Project</Button>
             </div>
           </form>
         </Modal>

@@ -2,7 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from './AuthContext';
 import { UserRole, ProjectStatus, MessageStatus, JobCardStatus, Project, User, Application, ManagedFile } from '../../types';
 import { 
-    fetchAdminDashboardStatsAPI, fetchFreelancerDashboardStatsAPI, fetchClientDashboardStatsAPI,
+    fetchAdminDashboardStatsAPI,
+    AdminDashboardStatsResponse, // Import new type
+    fetchFreelancerDashboardStatsAPI,
+    fetchClientDashboardStatsAPI,
     fetchRecentActivityAPI, fetchAdminRecentFilesAPI
 } from '../../apiService';
 import { NAV_LINKS, getMockFileIconPath } from '../../constants';
@@ -48,14 +51,14 @@ const StatCard: React.FC<StatCardProps> = ({ title, value, icon, linkTo, color =
 };
 
 // Define more specific types for stats if possible
-interface AdminDashboardStats {
-    totalUsers: number;
-    totalProjects: number;
-    pendingApprovalProjects: number;
-    messagesPendingApproval: number;
-    inProgressProjects: number;
-}
-interface FreelancerDashboardStats {
+// interface AdminDashboardStats { // Old type, to be removed or adapted
+//     totalUsers: number;
+//     totalProjects: number;
+//     pendingApprovalProjects: number;
+//     messagesPendingApproval: number;
+//     inProgressProjects: number;
+// }
+interface FreelancerDashboardStats { // Keep for now, or update if backend changes
     myTotalJobCards: number;
     myInProgressJobCards: number;
     openProjectsCount: number;
@@ -70,7 +73,8 @@ interface ClientDashboardStats {
 
 const DashboardOverview: React.FC = () => {
   const { user } = useAuth();
-  const [stats, setStats] = useState<AdminDashboardStats | FreelancerDashboardStats | ClientDashboardStats | null>(null);
+  // Update stats state type to include AdminDashboardStatsResponse
+  const [stats, setStats] = useState<AdminDashboardStatsResponse | FreelancerDashboardStats | ClientDashboardStats | null>(null);
   const [recentActivity, setRecentActivity] = useState<any[]>([]);
   const [recentFiles, setRecentFiles] = useState<ManagedFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -121,15 +125,35 @@ const DashboardOverview: React.FC = () => {
 
 
   const renderAdminStats = () => {
-    if (!stats || user.role !== UserRole.ADMIN) return null;
-    const adminStats = stats as AdminDashboardStats;
+    if (!stats || user?.role !== UserRole.ADMIN) return null;
+    // Cast stats to the new type
+    const adminStats = stats as AdminDashboardStatsResponse;
+
     return (
       <>
-        <StatCard title="Total Users" value={adminStats.totalUsers || 0} icon={<UsersIcon />} linkTo={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_USERS}`} color="blue" />
-        <StatCard title="Total Projects" value={adminStats.totalProjects || 0} icon={<BriefcaseIcon />} linkTo={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`} color="teal" />
-        <StatCard title="Projects In Progress" value={adminStats.inProgressProjects || 0} icon={<ClockIcon />} linkTo={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`} color="yellow" />
-        <StatCard title="Messages Pending Approval" value={adminStats.messagesPendingApproval || 0} icon={<ChatBubbleLeftRightIcon />} linkTo={NAV_LINKS.MESSAGES} color="red" />
-        <StatCard title="Projects Pending Approval" value={adminStats.pendingApprovalProjects || 0} icon={<CheckCircleIcon />} linkTo={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`} color="orange" />
+        <StatCard title="Total Active Users" value={adminStats.total_active_users || 0} icon={<UsersIcon />} linkTo={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_USERS}`} color="blue" />
+
+        {/* Users by Role - could be one card or multiple */}
+        <StatCard title="Admin Users" value={adminStats.users_by_role?.admin || 0} icon={<UsersIcon />} color="purple" />
+        <StatCard title="Client Users" value={adminStats.users_by_role?.client || 0} icon={<UsersIcon />} color="purple" />
+        <StatCard title="Freelancer Users" value={adminStats.users_by_role?.freelancer || 0} icon={<UsersIcon />} color="purple" />
+
+        <StatCard title="Total Projects" value={adminStats.total_projects || 0} icon={<BriefcaseIcon />} linkTo={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`} color="teal" />
+
+        {/* Projects by Status - iterate or show key ones */}
+        {adminStats.projects_by_status && Object.entries(adminStats.projects_by_status).map(([status, count]) => (
+          <StatCard
+            key={status}
+            title={`Projects: ${status}`}
+            value={count || 0}
+            icon={<ListBulletIcon />} // Generic icon or map status to specific icons
+            linkTo={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}?status=${encodeURIComponent(status)}`} // Link to filtered list
+            color="yellow" // Cycle colors or assign based on status
+          />
+        ))}
+
+        <StatCard title="Open Applications" value={adminStats.total_open_applications || 0} icon={<DocumentTextIcon />} linkTo={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`} color="orange" />
+
       </>
     );
   };

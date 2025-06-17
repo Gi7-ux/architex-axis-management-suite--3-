@@ -1,6 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { Project, ProjectStatus, Application, User, UserRole } from '../../types';
-import { fetchProjectsAPI, submitApplicationAPI, fetchAllSkillsAPI, fetchUserApplicationsAPI } from '../../apiService';
+import { Project, ProjectStatus, UserRole } from '../../types'; // Removed Application as it's not directly used for type here
+import {
+    fetchProjectsAPI,
+    submitApplicationAPI,
+    fetchAllSkillsAPI,
+    fetchFreelancerApplicationsAPI, // Use this instead of fetchUserApplicationsAPI
+    FreelancerApplicationResponseItem, // Type for the response
+    SubmitApplicationPayload, // Type for submitting application
+    ApiError // Ensure ApiError is imported if used in catch blocks
+} from '../../apiService';
 import ProjectCard from '../shared/ProjectCard';
 import Modal from '../shared/Modal';
 import Button from '../shared/Button';
@@ -23,27 +31,93 @@ const ProjectBrowser: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Define the raw project data type from PHP
+    interface RawPhpProject {
+      id: number;
+      title: string;
+      description: string;
+      client_id: number;
+      freelancer_id: number | null;
+      status: string;
+      created_at: string;
+      updated_at: string;
+      // budget, skillsRequired etc. are not in the basic PHP response yet
+    }
+
     const loadInitialData = async () => {
       setIsLoading(true);
       setError(null);
-      try {
-        const [openProjects, fetchedSkills] = await Promise.all([
-            fetchProjectsAPI({ status: ProjectStatus.OPEN }),
-            fetchAllSkillsAPI()
-        ]);
-        setProjects(openProjects);
-        setAllSkills(fetchedSkills.sort());
+      let errorMessages: string[] = [];
 
-        if (user && user.role === UserRole.FREELANCER) {
-          const userApplications = await fetchUserApplicationsAPI(user.id);
-          setAppliedProjectIds(new Set(userApplications.map(app => app.projectId)));
-        }
-      } catch (err: any) {
-        console.error("Failed to load project browser data:", err);
-        setError(err.message || "Could not load projects. Please try again later.");
-      } finally {
-        setIsLoading(false);
+      try {
+        // Fetch projects - no status filter for now, new API doesn't support it yet
+        const rawProjects: RawPhpProject[] = await fetchProjectsAPI();
+
+        // Map rawProjects to the frontend Project type
+        const mappedProjects: Project[] = rawProjects.map((rawProject): Project => ({
+          id: String(rawProject.id), // Convert number to string
+          title: rawProject.title,
+          description: rawProject.description,
+          clientId: String(rawProject.client_id), // Convert number to string and camelCase
+          freelancerId: rawProject.freelancer_id ? String(rawProject.freelancer_id) : undefined,
+          status: rawProject.status as ProjectStatus, // Assume status string matches ProjectStatus enum values
+          createdAt: rawProject.created_at,
+          updatedAt: rawProject.updated_at,
+          // Provide default/placeholder values for other fields expected by Project type
+          clientName: `Client ${rawProject.client_id}`, // Placeholder
+          budget: 0, // Placeholder - not in PHP response
+          currency: 'USD', // Placeholder
+          skillsRequired: [], // Placeholder - not in PHP response
+          paymentType: 'fixed', // Placeholder
+          experienceLevel: 'intermediate', // Placeholder
+          duration: 'unknown', // Placeholder
+          isFeatured: false, // Placeholder
+          jobCards: [], // Placeholder
+          adminCreatorId: undefined, // Placeholder
+          isArchived: false, // Placeholder
+          assignedFreelancerName: rawProject.freelancer_id ? `Freelancer ${rawProject.freelancer_id}` : undefined, // Placeholder
+        }));
+        setProjects(mappedProjects);
+
+      } catch (projError: any) {
+        console.error("Failed to load projects:", projError);
+        errorMessages.push(projError.message || "Could not load projects.");
+        setProjects([]); // Clear projects on error
       }
+
+      // Fetch all skills
+      try {
+        const fetchedSkills = await fetchAllSkillsAPI();
+        setAllSkills(fetchedSkills.sort());
+      } catch (skillError: any) {
+        console.warn("fetchAllSkillsAPI failed, using empty skills list:", skillError);
+        // errorMessages.push("Could not load skills filter."); // Optionally inform user
+        setAllSkills([]); // Default to empty list
+      }
+
+      // Fetch user applications if freelancer
+      if (user && user.role === UserRole.FREELANCER) {
+        try {
+          // Use new API for freelancer's applications
+          const freelancerApps: FreelancerApplicationResponseItem[] = await fetchFreelancerApplicationsAPI();
+          setAppliedProjectIds(new Set(freelancerApps.map(app => String(app.project_id)))); // Ensure project_id is string if Project.id is string
+        } catch (appError: any) {
+          console.warn("fetchFreelancerApplicationsAPI failed:", appError);
+          // errorMessages.push("Could not load your application statuses."); // Optionally inform user
+          setAppliedProjectIds(new Set()); // Default to empty set
+        }
+      }
+
+      if (errorMessages.length > 0) {
+        setError(errorMessages.join(' '));
+      }
+
+    } catch (err: any) { // Catch any unexpected errors from the overall process
+        console.error("Unexpected error in loadInitialData:", err);
+        setError(err.message || "An unexpected error occurred.");
+    } finally {
+      setIsLoading(false);
+    }
     };
     loadInitialData();
   }, [user]);
@@ -64,24 +138,27 @@ const ProjectBrowser: React.FC = () => {
 
   const handleSubmitApplication = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProjectForApplication || !user || !proposal || !bidAmount) return;
+    if (!selectedProjectForApplication || !user || !proposal || bidAmount === '') return; // Check bidAmount for empty string too
     setApplying(true);
-    setError(null);
+    setError(null); // Clear previous modal errors
     try {
-      await submitApplicationAPI({
-        projectId: selectedProjectForApplication.id,
-        freelancerId: user.id,
-        proposal,
-        bidAmount: Number(bidAmount),
-        status: 'PendingAdminApproval', 
-      });
+      const payload: SubmitApplicationPayload = {
+        project_id: parseInt(selectedProjectForApplication.id, 10), // Ensure project_id is number
+        proposal_text: proposal,
+        bid_amount: Number(bidAmount) // Ensure bid_amount is number
+      };
+      await submitApplicationAPI(payload); // Use new API
       setAppliedProjectIds(prev => new Set(prev).add(selectedProjectForApplication.id));
-      alert(`Application submitted for ${selectedProjectForApplication.title}`); 
+      alert(`Application submitted for ${selectedProjectForApplication.title}`);
       handleCloseApplyModal();
     } catch (error: any) {
       console.error("Failed to submit application", error);
-      setError(error.message || "Failed to submit application. Please try again.");
-      alert(error.message || "Failed to submit application. Please try again.");
+      if (error instanceof ApiError) {
+        setError(error.message || "Failed to submit application. Please try again.");
+      } else {
+        setError("An unexpected error occurred. Please try again.");
+      }
+      // Do not alert error here if it's already displayed in the modal via setError
     } finally {
       setApplying(false);
     }
