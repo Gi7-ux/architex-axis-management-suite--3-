@@ -557,13 +557,28 @@ const ProjectDetailsPage: React.FC = () => {
   };
 
   const handleApplyClick = () => {
+    if (!user) { // Check for user first
+      navigate('/login'); // Redirect if not logged in
+      return;
+    }
     if (!project) return;
-    setBidAmount(project.budget * 0.9); setProposal(''); setIsApplyModalOpen(true);
+    // Only open modal if user is a freelancer, otherwise they've been redirected or shouldn't see the button (though we are making it visible)
+    // The actual application submission will still be guarded by user role.
+    if (user.role === UserRole.FREELANCER) {
+        setBidAmount(project.budget * 0.9); setProposal(''); setIsApplyModalOpen(true);
+    } else {
+        // Optionally, show a message if a non-freelancer clicks, though they are unlikely to see the button
+        // if the condition below is also updated. For now, /login redirect is the main goal.
+        alert("Only freelancers can apply for projects.");
+    }
    };
   const handleCloseApplyModal = () => { setIsApplyModalOpen(false); setProposal(''); setBidAmount(''); };
   const handleSubmitApplication = async (e: React.FormEvent) => { 
     e.preventDefault();
-    if (!project || !user || !proposal || !bidAmount) return;
+    if (!project || !user || user.role !== UserRole.FREELANCER || !proposal || !bidAmount) { // Ensure user is freelancer here
+        alert("You must be logged in as a freelancer to apply.");
+        return;
+    }
     setApplying(true);
     try {
       // submitApplicationAPI expects SubmitApplicationPayload
@@ -743,14 +758,17 @@ const ProjectDetailsPage: React.FC = () => {
                         </div>
                     )}
                     <ProjectProgressBar jobCards={project.jobCards} projectStatus={project.status} />
-                    {user && user.role === UserRole.FREELANCER && project.status === ProjectStatus.OPEN && !hasApplied && (
+                    {/* Show Apply button if project is OPEN and user has NOT applied, regardless of login status initially.
+                        Click handler will manage redirection if not logged in or not a freelancer. */}
+                    {project.status === ProjectStatus.OPEN && !hasApplied && (
                         <div className="mt-8 pt-6 border-t border-gray-200">
                             <Button variant="primary" size="lg" onClick={handleApplyClick} isLoading={applying}>
                                 Apply for this Project
                             </Button>
                         </div>
                     )}
-                    {user && user.role === UserRole.FREELANCER && hasApplied && (
+                    {/* Keep this part for showing "You have applied" message, but ensure 'user' check for safety if hasApplied could be true for non-logged-in users (it shouldn't) */}
+                    {user && hasApplied && ( // user check here is good practice
                         <div className="mt-8 pt-6 border-t border-gray-200">
                             <p className="text-green-600 bg-green-50 p-3 rounded-md font-semibold">You have applied for this project.</p>
                         </div>
@@ -758,38 +776,50 @@ const ProjectDetailsPage: React.FC = () => {
                 </>
             )}
 
-            {currentTab === 'tasks' && (
-                <>
-                    <div className="flex justify-between items-center mb-4">
-                    <h3 className="text-xl font-semibold text-gray-700">Project Tasks / Job Cards</h3>
-                    {isAdminView && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED && (
-                        <Button onClick={() => handleOpenJobCardModal()} leftIcon={<PlusIcon/>} variant="primary" size="sm">
-                            Add Job Card
-                        </Button>
-                    )}
-                    </div>
-                    {project.jobCards && project.jobCards.length > 0 ? (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                        {project.jobCards.map(jc => (
-                        <JobCardDisplay 
-                            key={jc.id} jobCard={jc} project={project}
-                            isAssignedToCurrentUser={!!user && user.role === UserRole.FREELANCER && (jc.assignedArchitectId === String(user.id) || (!jc.assignedArchitectId && project.assignedFreelancerId === String(user.id)))}
-                            isAdminView={isAdminView}
-                            onStatusUpdate={handleJobCardStatusUpdate}
-                            onTimeLog={handleTimeLogSubmit}
-                            onEditJobCard={handleOpenJobCardModal}
-                            onDeleteJobCard={handleDeleteJobCard}
-                            activeTimerJobCardId={activeTimerInfo?.jobCardId}
-                            onStartTimer={startGlobalTimer}
-                            onStopTimer={stopGlobalTimerAndLog}
-                        />
-                        ))}
-                    </div>
-                    ) : (
-                        <p className="text-gray-500">No job cards have been added to this project yet. {isAdminView && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED ? "You can add them now." : ""}</p>
-                    )}
-                </>
-            )}
+            {currentTab === 'tasks' && (() => {
+                let displayedJobCards: JobCard[] = project.jobCards || [];
+                if (user?.role === UserRole.FREELANCER && project.jobCards) {
+                    displayedJobCards = project.jobCards.filter(jc =>
+                        jc.assignedArchitectId === String(user.id) ||
+                        (!jc.assignedArchitectId && project.assignedFreelancerId === String(user.id))
+                    );
+                }
+
+                return (
+                    <>
+                        <div className="flex justify-between items-center mb-4">
+                        <h3 className="text-xl font-semibold text-gray-700">Project Tasks / Job Cards</h3>
+                        {isAdminView && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED && (
+                            <Button onClick={() => handleOpenJobCardModal()} leftIcon={<PlusIcon/>} variant="primary" size="sm">
+                                Add Job Card
+                            </Button>
+                        )}
+                        </div>
+                        {displayedJobCards.length > 0 ? (
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                            {displayedJobCards.map(jc => (
+                            <JobCardDisplay
+                                key={jc.id} jobCard={jc} project={project}
+                                isAssignedToCurrentUser={!!user && user.role === UserRole.FREELANCER && (jc.assignedArchitectId === String(user.id) || (!jc.assignedArchitectId && project.assignedFreelancerId === String(user.id)))}
+                                isAdminView={isAdminView}
+                                onStatusUpdate={handleJobCardStatusUpdate}
+                                onTimeLog={handleTimeLogSubmit}
+                                onEditJobCard={handleOpenJobCardModal}
+                                onDeleteJobCard={handleDeleteJobCard}
+                                activeTimerJobCardId={activeTimerInfo?.jobCardId}
+                                onStartTimer={startGlobalTimer}
+                                onStopTimer={stopGlobalTimerAndLog}
+                            />
+                            ))}
+                        </div>
+                        ) : (
+                            user?.role === UserRole.FREELANCER ?
+                                <p className="text-gray-500">You have no tasks assigned on this project.</p> :
+                                <p className="text-gray-500">No job cards have been added to this project yet. {isAdminView && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED ? "You can add them now." : ""}</p>
+                        )}
+                    </>
+                );
+            })()}
 
             {currentTab === 'messages' && (
                 <div>

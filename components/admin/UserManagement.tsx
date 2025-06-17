@@ -320,8 +320,8 @@ const UserManagement: React.FC = () => {
                     <Button variant="ghost" size="sm" onClick={() => handleOpenModal(user)}><PencilIcon className="w-4 h-4"/></Button>
                     <Button variant="ghost" size="sm" onClick={() => handleDeleteUser(user.id, user.is_active)}
                             className={`${user.is_active ? 'text-red-500 hover:text-red-700' : 'text-green-500 hover:text-green-700'}`}
-                            disabled={user.id === authUser?.id && user.is_active} // Prevent admin deactivating self via this button
-                            title={user.id === authUser?.id && user.is_active ? "Cannot deactivate self" : (user.is_active ? "Deactivate User" : "Activate User")}
+                            disabled={user.role === UserRole.ADMIN} // Prevent (de)activation of any admin account
+                            title={user.role === UserRole.ADMIN ? "Admin accounts cannot be (de)activated here" : (user.is_active ? "Deactivate User" : "Activate User")}
                             >
                       {user.is_active ? <TrashIcon className="w-4 h-4"/> : <CheckCircleIcon className="w-4 h-4"/>}
                     </Button>
