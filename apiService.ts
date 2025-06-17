@@ -182,3 +182,149 @@ export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<M
 
 // Reports
 export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetch<Project[]>('/reports/projects-with-timelogs');
+
+// --- Invoice & Payment Service (Mock Implementation) ---
+import { Invoice, InvoiceItem, Payment, InvoiceStatus } from './types';
+
+// Mock data storage
+let mockInvoices: Invoice[] = [];
+let mockPayments: Payment[] = [];
+let nextInvoiceId = 1;
+let nextPaymentId = 1;
+
+// Helper to simulate async operations
+const simulateDelay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// --- Invoice Functions ---
+export const createInvoice = async (invoiceData: Omit<Invoice, 'id' | 'invoiceNumber' | 'createdAt' | 'updatedAt' | 'status' | 'totalAmount' | 'subTotal'> & { items: Omit<InvoiceItem, 'id' | 'totalPrice'>[] }): Promise<Invoice> => {
+  await simulateDelay(500);
+  const now = new Date().toISOString();
+  let subTotal = 0;
+  const itemsWithTotals: InvoiceItem[] = invoiceData.items.map((item, index) => {
+    const totalPrice = item.quantity * item.unitPrice;
+    subTotal += totalPrice;
+    return { ...item, id: `item-${Date.now()}-${index}`, totalPrice };
+  });
+
+  const taxAmount = invoiceData.taxRate ? subTotal * invoiceData.taxRate : 0;
+  const totalAmount = subTotal + taxAmount;
+
+  const newInvoice: Invoice = {
+    ...invoiceData,
+    id: `inv-${nextInvoiceId++}`,
+    invoiceNumber: `INV-${String(nextInvoiceId).padStart(5, '0')}`,
+    items: itemsWithTotals,
+    subTotal,
+    taxAmount,
+    totalAmount,
+    status: InvoiceStatus.DRAFT,
+    createdAt: now,
+    updatedAt: now,
+  };
+  mockInvoices.push(newInvoice);
+  return newInvoice;
+};
+
+export const getInvoice = async (invoiceId: string): Promise<Invoice | null> => {
+  await simulateDelay(300);
+  const invoice = mockInvoices.find(inv => inv.id === invoiceId);
+  if (!invoice) {
+    // In a real API, this might throw an ApiError(404)
+    console.warn(`Invoice with ID ${invoiceId} not found.`);
+    return null;
+  }
+  return invoice;
+};
+
+export const updateInvoice = async (invoiceId: string, updates: Partial<Invoice>): Promise<Invoice | null> => {
+  await simulateDelay(400);
+  const invoiceIndex = mockInvoices.findIndex(inv => inv.id === invoiceId);
+  if (invoiceIndex === -1) {
+    console.warn(`Invoice with ID ${invoiceId} not found for update.`);
+    return null;
+  }
+  // Recalculate totals if items or taxRate are updated
+  let updatedInvoice = { ...mockInvoices[invoiceIndex], ...updates, updatedAt: new Date().toISOString() };
+
+  if (updates.items || updates.taxRate !== undefined) {
+    let subTotal = 0;
+    const itemsWithTotals: InvoiceItem[] = (updates.items || updatedInvoice.items).map((item, index) => {
+      const totalPrice = item.quantity * item.unitPrice;
+      subTotal += totalPrice;
+      return { ...item, id: item.id || `item-${Date.now()}-${index}`, totalPrice };
+    });
+    updatedInvoice.items = itemsWithTotals;
+    updatedInvoice.subTotal = subTotal;
+    updatedInvoice.taxAmount = updatedInvoice.taxRate ? subTotal * updatedInvoice.taxRate : 0;
+    updatedInvoice.totalAmount = updatedInvoice.subTotal + (updatedInvoice.taxAmount || 0);
+  }
+
+  mockInvoices[invoiceIndex] = updatedInvoice;
+  return updatedInvoice;
+};
+
+export const deleteInvoice = async (invoiceId: string): Promise<boolean> => {
+  await simulateDelay(200);
+  const initialLength = mockInvoices.length;
+  mockInvoices = mockInvoices.filter(inv => inv.id !== invoiceId);
+  if (mockInvoices.length === initialLength) {
+    console.warn(`Invoice with ID ${invoiceId} not found for deletion.`);
+    return false;
+  }
+  // Also remove associated payments
+  mockPayments = mockPayments.filter(p => p.invoiceId !== invoiceId);
+  return true;
+};
+
+export const listInvoices = async (filters?: { clientId?: string, projectId?: string, status?: InvoiceStatus }): Promise<Invoice[]> => {
+  await simulateDelay(600);
+  return mockInvoices.filter(inv => {
+    if (filters?.clientId && inv.clientId !== filters.clientId) return false;
+    if (filters?.projectId && inv.projectId !== filters.projectId) return false;
+    if (filters?.status && inv.status !== filters.status) return false;
+    return true;
+  });
+};
+
+// --- Payment Functions ---
+export const recordPayment = async (paymentData: Omit<Payment, 'id' | 'createdAt'>): Promise<Payment> => {
+  await simulateDelay(500);
+  const now = new Date().toISOString();
+  const newPayment: Payment = {
+    ...paymentData,
+    id: `pay-${nextPaymentId++}`,
+    createdAt: now,
+  };
+  mockPayments.push(newPayment);
+
+  // Optionally, update invoice status if fully paid
+  const relatedInvoice = mockInvoices.find(inv => inv.id === newPayment.invoiceId);
+  if (relatedInvoice) {
+    const paymentsForInvoice = mockPayments.filter(p => p.invoiceId === newPayment.invoiceId);
+    const totalPaid = paymentsForInvoice.reduce((sum, p) => sum + p.amountPaid, 0);
+    if (totalPaid >= relatedInvoice.totalAmount) {
+      await updateInvoice(relatedInvoice.id, { status: InvoiceStatus.PAID });
+    }
+  }
+  return newPayment;
+};
+
+export const getPayment = async (paymentId: string): Promise<Payment | null> => {
+  await simulateDelay(300);
+  const payment = mockPayments.find(p => p.id === paymentId);
+  if (!payment) {
+    console.warn(`Payment with ID ${paymentId} not found.`);
+    return null;
+  }
+  return payment;
+};
+
+export const listPaymentsForInvoice = async (invoiceId: string): Promise<Payment[]> => {
+  await simulateDelay(400);
+  const invoiceExists = mockInvoices.find(inv => inv.id === invoiceId);
+  if (!invoiceExists) {
+      console.warn(`Cannot list payments: Invoice with ID ${invoiceId} not found.`);
+      return []; // Or throw an error
+  }
+  return mockPayments.filter(p => p.invoiceId === invoiceId);
+};

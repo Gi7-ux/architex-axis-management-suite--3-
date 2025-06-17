@@ -10,7 +10,7 @@ import Sidebar, { SidebarNavItem } from './shared/Sidebar';
 import DashboardOverview from './DashboardOverview'; 
 import UserManagement from './admin/UserManagement';
 import ProjectManagement from './admin/ProjectManagement';
-import AdminBillingPlaceholder from './admin/AdminBillingPlaceholder'; 
+import AdminBillingPage from './admin/billing/AdminBillingPage'; // Corrected import path
 import AdminTimeLogReportPage from './admin/AdminTimeLogReportPage'; 
 import ProjectBrowser from './freelancer/ProjectBrowser';
 import MyApplications from './freelancer/MyApplications';
@@ -95,7 +95,7 @@ const Dashboard: React.FC = () => {
               <Route path={NAV_LINKS.ADMIN_PROJECTS} element={<ProjectManagement />} />
               {/* ADMIN_CREATE_PROJECT route logic is now handled within ProjectManagement via modal */}
               {/* <Route path={NAV_LINKS.ADMIN_CREATE_PROJECT} element={<ProjectManagement />} />  */}
-              <Route path={NAV_LINKS.ADMIN_BILLING} element={<AdminBillingPlaceholder />} />
+              <Route path={NAV_LINKS.ADMIN_BILLING} element={<AdminBillingPage />} />
               <Route path={NAV_LINKS.ADMIN_TIME_REPORTS} element={<AdminTimeLogReportPage />} />
             </>
           )}

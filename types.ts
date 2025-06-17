@@ -137,3 +137,52 @@ export interface Conversation {
   createdAt: string;
   updatedAt: string;
 }
+
+// --- Invoice System Types ---
+export enum InvoiceStatus {
+  DRAFT = 'Draft',
+  SENT = 'Sent',
+  PAID = 'Paid',
+  VOID = 'Void',
+}
+
+export interface InvoiceItem {
+  id: string;
+  description: string;
+  quantity: number;
+  unitPrice: number; // In Rands
+  totalPrice: number; // quantity * unitPrice, In Rands
+}
+
+export interface Invoice {
+  id: string;
+  invoiceNumber: string;
+  clientId: string;
+  clientName?: string; // Denormalized for display
+  projectId: string;
+  projectTitle?: string; // Denormalized for display
+  issueDate: string; // ISO date string
+  dueDate: string; // ISO date string
+  items: InvoiceItem[];
+  subTotal: number; // Sum of all item totalPrice, In Rands
+  taxRate?: number; // Percentage e.g., 0.15 for 15%
+  taxAmount?: number; // subTotal * taxRate, In Rands
+  totalAmount: number; // subTotal + taxAmount, In Rands
+  status: InvoiceStatus;
+  paymentDetails?: Payment[]; // Could be one or multiple payments
+  notes?: string;
+  createdAt: string; // ISO date string
+  updatedAt: string; // ISO date string
+}
+
+export interface Payment {
+  id: string;
+  invoiceId: string;
+  paymentDate: string; // ISO date string
+  amountPaid: number; // In Rands
+  paymentMethod: string; // e.g., 'EFT', 'Credit Card', 'PayPal'
+  transactionId?: string; // Reference from payment gateway
+  notes?: string;
+  processedBy?: string; // Admin userId who confirmed/processed payment
+  createdAt: string; // ISO date string
+}

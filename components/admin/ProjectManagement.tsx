@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Project, ProjectStatus, User, UserRole, Application, JobCardStatus } from '../../types';
+import React, { useState, useEffect, useMemo } from 'react'; // Added useMemo
+import { Project, ProjectStatus, User, UserRole, Application, JobCardStatus, Invoice, InvoiceStatus } from '../../types'; // Added Invoice, InvoiceStatus
 import { 
     fetchProjectsAPI, fetchProjectDetailsAPI, fetchApplicationsForProjectAPI, 
     updateProjectStatusAPI, toggleProjectArchiveStatusAPI, createProjectAPI, 
-    acceptApplicationAPI, deleteProjectAPI, fetchUsersAPI 
+    acceptApplicationAPI, deleteProjectAPI, fetchUsersAPI, listInvoices as listInvoicesAPI // Added listInvoicesAPI
 } from '../../apiService';
 import { NAV_LINKS } from '../../constants';
 import Button from '../shared/Button';
@@ -36,6 +36,7 @@ const ProjectManagement: React.FC = () => {
   const [allUsers, setAllUsers] = useState<User[]>([]); 
   const [clients, setClients] = useState<User[]>([]);
   const [freelancers, setFreelancers] = useState<User[]>([]);
+  const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
 
   const [isLoading, setIsLoading] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -64,16 +65,18 @@ const ProjectManagement: React.FC = () => {
       setIsLoading(true);
       setFormError(null);
       try {
-          const [fetchedProjects, fetchedUsers, fetchedClients, fetchedFreelancers] = await Promise.all([
+          const [fetchedProjects, fetchedUsers, fetchedClients, fetchedFreelancers, fetchedInvoices] = await Promise.all([
               fetchProjectsAPI(),
               fetchUsersAPI(),
               fetchUsersAPI(UserRole.CLIENT),
-              fetchUsersAPI(UserRole.FREELANCER)
+              fetchUsersAPI(UserRole.FREELANCER),
+              listInvoicesAPI() // Fetch all invoices
           ]);
           setProjects(fetchedProjects);
-          setAllUsers(fetchedUsers); // Store all users for spend calculation etc.
+          setAllUsers(fetchedUsers);
           setClients(fetchedClients);
           setFreelancers(fetchedFreelancers);
+          setAllInvoices(fetchedInvoices);
 
           if (location.pathname.endsWith(NAV_LINKS.ADMIN_CREATE_PROJECT)) {
               handleOpenCreateModal();
@@ -381,6 +384,8 @@ const ProjectManagement: React.FC = () => {
                 <th onClick={() => requestSort('status')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Status {getSortIndicator('status')}</th>
                 <th onClick={() => requestSort('budget')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Budget (R) {getSortIndicator('budget')}</th>
                 <th onClick={() => requestSort('spend')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Spend (R) {getSortIndicator('spend')}</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Invoiced (R)</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Paid (R)</th>
                 <th onClick={() => requestSort('deadline')} className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer">Deadline {getSortIndicator('deadline')}</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
               </tr>
@@ -389,6 +394,13 @@ const ProjectManagement: React.FC = () => {
               {sortedAndFilteredProjects.map((project) => {
                 const projectSpend = calculateProjectSpend(project, allUsers);
                 const isOverdue = new Date(project.deadline) < new Date() && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED;
+
+                const relatedInvoices = allInvoices.filter(inv => inv.projectId === project.id);
+                const totalInvoiced = relatedInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+                const totalPaid = relatedInvoices
+                  .filter(inv => inv.status === InvoiceStatus.PAID)
+                  .reduce((sum, inv) => sum + inv.totalAmount, 0);
+
                 return (
                 <tr key={project.id} className={`hover:bg-primary-extralight transition-colors duration-150 ${project.isArchived ? 'opacity-60 bg-gray-100' : ''}`}>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{project.title}</td>
@@ -403,6 +415,8 @@ const ProjectManagement: React.FC = () => {
                   <td className={`px-6 py-4 whitespace-nowrap text-sm ${projectSpend > project.budget ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>
                       R {projectSpend.toLocaleString()}
                   </td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">R {totalInvoiced.toLocaleString()}</td>
+                  <td className="px-6 py-4 whitespace-nowrap text-sm text-green-600">R {totalPaid.toLocaleString()}</td>
                   <td className={`px-6 py-4 whitespace-nowrap text-sm ${isOverdue ? 'text-red-600 font-semibold' : 'text-gray-500'}`}>{new Date(project.deadline).toLocaleDateString()}</td>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-1">
                     <Button variant="ghost" size="sm" onClick={() => handleViewDetails(project)} aria-label="View Details" className="text-primary hover:text-primary-hover p-1" disabled={isSubmitting}><EyeIcon className="w-4 h-4" /></Button>
@@ -418,7 +432,7 @@ const ProjectManagement: React.FC = () => {
                 </tr>
               )})}
               {sortedAndFilteredProjects.length === 0 && (
-                  <tr><td colSpan={8} className="text-center py-4 text-gray-500">No projects match the current filters.</td></tr>
+                  <tr><td colSpan={10} className="text-center py-4 text-gray-500">No projects match the current filters.</td></tr>
               )}
             </tbody>
           </table>
