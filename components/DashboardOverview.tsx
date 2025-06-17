@@ -154,6 +154,14 @@ const DashboardOverview: React.FC = () => {
 
         <StatCard title="Open Applications" value={adminStats.total_open_applications || 0} icon={<DocumentTextIcon />} linkTo={`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`} color="orange" />
 
+        {/* New StatCard for Messages Pending Approval */}
+        <StatCard
+          title="Messages Pending Approval"
+          value={adminStats.messages_pending_approval || 0}
+          icon={<ChatBubbleLeftRightIcon />}
+          linkTo={NAV_LINKS.MESSAGES} // Assuming NAV_LINKS.MESSAGES is the correct path to the main messaging page
+          color="purple"
+        />
       </>
     );
   };

@@ -14,9 +14,11 @@ import Modal from '../shared/Modal';
 import Button from '../shared/Button';
 import LoadingSpinner from '../shared/LoadingSpinner';
 import { useAuth } from '../AuthContext';
+import { useNavigate } from 'react-router-dom'; // Added for navigation
 
 const ProjectBrowser: React.FC = () => {
   const { user } = useAuth();
+  const navigate = useNavigate(); // Added for navigation
   const [projects, setProjects] = useState<Project[]>([]);
   const [allSkills, setAllSkills] = useState<string[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -123,6 +125,11 @@ const ProjectBrowser: React.FC = () => {
   }, [user]);
 
   const handleApplyClick = (project: Project) => {
+    if (!user) {
+      navigate('/login'); // Redirect to login if not authenticated
+      return;
+    }
+    // Existing logic for authenticated users
     setSelectedProjectForApplication(project);
     setBidAmount(project.budget * 0.9); 
     setProposal('');
@@ -227,8 +234,8 @@ const ProjectBrowser: React.FC = () => {
           <ProjectCard 
             key={project.id} 
             project={project} 
-            showApplyButton={user?.role === UserRole.FREELANCER && !appliedProjectIds.has(project.id)}
-            onApply={user?.role === UserRole.FREELANCER ? handleApplyClick : undefined}
+            showApplyButton={!appliedProjectIds.has(project.id)} // Show if not applied, regardless of auth
+            onApply={handleApplyClick} // Unified handler
           />
         ))}
       </div>

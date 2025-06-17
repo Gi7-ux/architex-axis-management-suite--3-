@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation, useNavigate }from 'react-router-dom';
 // Removed old Conversation, Message, MessageStatus types
-import { User } from '../../types'; // UserRole removed as it's not used directly here, User for auth context
+import { User, UserRole } from '../../types'; // UserRole IMPORTED, User for auth context
 import { useAuth } from './AuthContext';
 import {
     // New Messaging APIs
+    adminUpdateMessageStatusAPI, // Added for admin actions
+    adminDeleteMessageAPI,       // Added for admin actions
     findOrCreateConversationAPI,
     fetchUserConversationsAPI,
     fetchConversationMessagesAPI,
@@ -63,6 +65,32 @@ const MessagingPage: React.FC = () => {
 
   useEffect(scrollToBottom, [messages]);
 
+  // Extracted message loading logic to be callable
+  const loadMessagesForConversation = useCallback(async (conversationId: number) => {
+    if (!user) return;
+    setIsLoadingMessages(true); setError(null);
+    try {
+      const convMessages = await fetchConversationMessagesAPI(conversationId, { limit: 100 });
+      setMessages(convMessages);
+
+      const currentConversation = conversations.find(c => c.conversation_id === conversationId);
+      if (currentConversation && currentConversation.unread_message_count > 0) {
+        await markConversationAsReadAPI(conversationId);
+        const convIdx = conversations.findIndex(c => c.conversation_id === conversationId);
+        if (convIdx !== -1) {
+            const newConversations = [...conversations];
+            newConversations[convIdx] = {...newConversations[convIdx], unread_message_count: 0};
+            setConversations(newConversations);
+        }
+      }
+    } catch (err:any) {
+      console.error("Failed to load messages:", err);
+      setError(err.message || "Could not load messages for this chat.");
+    } finally {
+      setIsLoadingMessages(false);
+    }
+  }, [user, conversations]); // conversations is needed here to update its state
+
   const loadConversations = useCallback(async (selectConvId?: number) => {
     if (!user) return;
     setIsLoadingConversations(true); setError(null);
@@ -97,36 +125,12 @@ const MessagingPage: React.FC = () => {
   // Removed useEffect for location.state handling (project-based chat initiation)
 
   useEffect(() => {
-    const loadMessages = async () => {
-      if (selectedConversation && user) {
-        setIsLoadingMessages(true); setError(null);
-        try {
-          const convMessages = await fetchConversationMessagesAPI(selectedConversation.conversation_id, { limit: 100 }); // Increased limit
-          setMessages(convMessages);
-
-          if (selectedConversation.unread_message_count > 0) {
-            await markConversationAsReadAPI(selectedConversation.conversation_id);
-            // Update unread count locally for immediate UI feedback
-            const convIdx = conversations.findIndex(c => c.conversation_id === selectedConversation.conversation_id);
-            if (convIdx !== -1) {
-                const newConversations = [...conversations];
-                newConversations[convIdx] = {...newConversations[convIdx], unread_message_count: 0};
-                setConversations(newConversations);
-            }
-          }
-        } catch (err:any) {
-          console.error("Failed to load messages:", err);
-          setError(err.message || "Could not load messages for this chat.");
-        } finally {
-          setIsLoadingMessages(false);
-        }
-      } else {
-        setMessages([]);
-      }
-    };
-    loadMessages();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedConversation, user]); // Removed 'conversations' from dep array to avoid loop with unread update
+    if (selectedConversation) {
+      loadMessagesForConversation(selectedConversation.conversation_id);
+    } else {
+      setMessages([]);
+    }
+  }, [selectedConversation, loadMessagesForConversation]);
 
 
   const handleSendMessage = async () => {
@@ -151,6 +155,44 @@ const MessagingPage: React.FC = () => {
   };
 
   // Removed handleAdminMessageAction as admin moderation is simplified/removed for now
+
+  const handleAdminApproveMessage = async (messageId: number) => {
+    if (!selectedConversation) return;
+    setError(null);
+    try {
+      await adminUpdateMessageStatusAPI(messageId, 'approved');
+      await loadMessagesForConversation(selectedConversation.conversation_id); // Refresh messages
+    } catch (err: any) {
+      console.error("Failed to approve message:", err);
+      setError(err.message || "Failed to approve message.");
+    }
+  };
+
+  const handleAdminRejectMessage = async (messageId: number) => {
+    if (!selectedConversation) return;
+    setError(null);
+    try {
+      await adminUpdateMessageStatusAPI(messageId, 'rejected');
+      await loadMessagesForConversation(selectedConversation.conversation_id); // Refresh messages
+    } catch (err: any) {
+      console.error("Failed to reject message:", err);
+      setError(err.message || "Failed to reject message.");
+    }
+  };
+
+  const handleAdminDeleteMessage = async (messageId: number) => {
+    if (!selectedConversation) return;
+    if (window.confirm("Are you sure you want to delete this message permanently?")) {
+      setError(null);
+      try {
+        await adminDeleteMessageAPI(messageId);
+        await loadMessagesForConversation(selectedConversation.conversation_id); // Refresh messages
+      } catch (err: any) {
+        console.error("Failed to delete message:", err);
+        setError(err.message || "Failed to delete message.");
+      }
+    }
+  };
 
   const getConversationDisplayName = (conv: ConversationPreviewPHP): string => {
     if (!user) return "Conversation";
@@ -301,14 +343,40 @@ const MessagingPage: React.FC = () => {
                 {!isLoadingMessages && messages.length === 0 && <div className="text-center text-gray-400 p-4">No messages yet. Send one to start the conversation!</div>}
                 {messages.map(msg => {
                   const isSender = msg.sender_id === user?.id;
+                  // Determine message styling based on status for Admin view
+                  let messageStyle = "";
+                  let statusText = "";
+                  if (user?.role === UserRole.ADMIN) {
+                    if (msg.message_status === 'pending_admin_approval') {
+                      statusText = "(Pending Approval)";
+                      messageStyle = "border border-yellow-400 bg-yellow-50";
+                    } else if (msg.message_status === 'rejected') {
+                      statusText = "(Rejected)";
+                      messageStyle = "opacity-60 bg-gray-200";
+                    }
+                  }
+
                   return (
-                    <div key={msg.id} className={`flex ${isSender ? 'justify-end' : 'justify-start'}`}>
-                      <div className={`max-w-xs lg:max-w-md p-2.5 rounded-lg shadow ${isSender ? 'bg-primary text-white rounded-br-none' : 'bg-white text-gray-700 rounded-bl-none'}`}>
+                    <div key={msg.id} className={`flex flex-col ${isSender ? 'items-end' : 'items-start'} mb-1`}>
+                      <div className={`max-w-xs lg:max-w-md p-2.5 rounded-lg shadow ${isSender ? 'bg-primary text-white rounded-br-none' : 'bg-white text-gray-700 rounded-bl-none'} ${messageStyle}`}>
                         {!isSender && <p className="text-xs font-semibold mb-0.5 text-secondary">{msg.sender_username}</p>}
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
-                        <p className={`text-xs mt-1 ${isSender ? 'text-gray-200 text-right' : 'text-gray-400 text-left'}`}>{formatMessageTimestamp(msg.created_at)}</p>
-                        {/* Admin moderation UI removed */}
+                        <p className={`text-xs mt-1 ${isSender ? 'text-gray-200' : 'text-gray-400'} ${isSender ? 'text-right' : 'text-left'}`}>
+                          {formatMessageTimestamp(msg.created_at)} {statusText && <span className="font-semibold italic ml-1">{statusText}</span>}
+                        </p>
                       </div>
+                      {user?.role === UserRole.ADMIN && (
+                        <div className="flex space-x-1 mt-0.5">
+                          {msg.message_status === 'pending_admin_approval' && (
+                            <>
+                              <Button size="xs" variant="success" onClick={() => handleAdminApproveMessage(msg.id)}>Approve</Button>
+                              <Button size="xs" variant="danger_outline" onClick={() => handleAdminRejectMessage(msg.id)}>Reject</Button>
+                            </>
+                          )}
+                           {/* Allow delete for any message for admin, or refine if only for pending/rejected */}
+                          <Button size="xs" variant="danger" onClick={() => handleAdminDeleteMessage(msg.id)}>Delete</Button>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
@@ -316,11 +384,7 @@ const MessagingPage: React.FC = () => {
               </div>
               <div className="p-3 bg-white border-t border-gray-200 sticky bottom-0 z-10"> {/* Message Input Area */}
                 <div className="flex items-center space-x-2">
-                  {/* File attach button (placeholder for now)
-                  <Button variant="ghost" onClick={() => alert("File attachment not implemented yet.")} className="p-2">
-                    <PaperClipIcon className="w-5 h-5 text-gray-500 hover:text-primary"/>
-                  </Button>
-                  */}
+                  {/* File attach button (placeholder for now) */}
                   <input
                     type="text"
                     value={newMessageContent}
