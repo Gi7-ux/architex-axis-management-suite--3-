@@ -15,7 +15,9 @@ import AdminTimeLogReportPage from './admin/AdminTimeLogReportPage';
 import ProjectBrowser from './freelancer/ProjectBrowser';
 import MyApplications from './freelancer/MyApplications';
 import MyJobCards from './freelancer/MyJobCards';
+import FreelancerTimeTrackingPage from './freelancer/FreelancerTimeTrackingPage';
 import MyProjects from './client/MyProjects'; 
+import ClientProjectTimeLogPage from './client/ClientProjectTimeLogPage'; // Import the new page
 import MessagingPage from './MessagingPage'; 
 import UserProfilePage from './UserProfilePage'; 
 import { NAV_LINKS } from '../constants';
@@ -41,11 +43,13 @@ const getSidebarNavItems = (role: UserRole): SidebarNavItem[] => {
         { label: 'Browse Projects', to: `${baseDashboardPath}/${NAV_LINKS.FREELANCER_BROWSE}`, icon: <BriefcaseIcon /> },
         { label: 'My Applications', to: `${baseDashboardPath}/${NAV_LINKS.FREELANCER_APPLICATIONS}`, icon: <DocumentTextIcon /> },
         { label: 'My Job Cards', to: `${baseDashboardPath}/${NAV_LINKS.FREELANCER_JOB_CARDS}`, icon: <ListBulletIcon /> },
+        { label: 'Time Tracking', to: `${baseDashboardPath}/${NAV_LINKS.FREELANCER_TIME_TRACKING}`, icon: <ClockIcon /> },
       ];
     case UserRole.CLIENT:
       return [
         { label: 'Overview', to: NAV_LINKS.DASHBOARD_OVERVIEW, icon: <HomeIcon /> },
         { label: 'My Projects', to: `${baseDashboardPath}/${NAV_LINKS.CLIENT_MY_PROJECTS}`, icon: <BriefcaseIcon /> },
+        { label: 'Project Time Logs', to: `${baseDashboardPath}/${NAV_LINKS.CLIENT_PROJECT_TIME_LOGS}`, icon: <ClockIcon /> },
       ];
     default:
       return [{ label: 'Overview', to: NAV_LINKS.DASHBOARD_OVERVIEW, icon: <HomeIcon /> }];
@@ -106,6 +110,7 @@ const Dashboard: React.FC = () => {
               <Route path={NAV_LINKS.FREELANCER_BROWSE} element={<ProjectBrowser />} />
               <Route path={NAV_LINKS.FREELANCER_APPLICATIONS} element={<MyApplications />} />
               <Route path={NAV_LINKS.FREELANCER_JOB_CARDS} element={<MyJobCards />} />
+              <Route path={NAV_LINKS.FREELANCER_TIME_TRACKING} element={<FreelancerTimeTrackingPage />} />
             </>
           )}
 
@@ -113,6 +118,7 @@ const Dashboard: React.FC = () => {
           {user.role === UserRole.CLIENT && (
             <>
               <Route path={NAV_LINKS.CLIENT_MY_PROJECTS} element={<MyProjects />} />
+              <Route path={NAV_LINKS.CLIENT_PROJECT_TIME_LOGS} element={<ClientProjectTimeLogPage />} />
             </>
           )}
           

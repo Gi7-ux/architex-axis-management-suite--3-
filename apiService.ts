@@ -139,6 +139,51 @@ export const fetchAllTimeLogsAPI = (filters?: any): Promise<TimeLog[]> => { // F
     return apiFetch<TimeLog[]>(`/admin/timelogs${query ? `?${query}` : ''}`);
 };
 
+export const fetchMyTimeLogsAPI = (freelancerId: string, filters?: { dateFrom?: string, dateTo?: string, projectId?: string, jobCardId?: string }): Promise<TimeLog[]> => {
+  const queryParams = new URLSearchParams();
+  if (filters?.dateFrom) queryParams.append('dateFrom', filters.dateFrom);
+  if (filters?.dateTo) queryParams.append('dateTo', filters.dateTo);
+  if (filters?.projectId) queryParams.append('projectId', filters.projectId);
+  if (filters?.jobCardId) queryParams.append('jobCardId', filters.jobCardId);
+  const queryString = queryParams.toString();
+  return apiFetch<TimeLog[]>(`/users/${freelancerId}/timelogs${queryString ? `?${queryString}` : ''}`);
+};
+
+export const updateTimeLogAPI = (timeLogId: string, updates: Partial<Omit<TimeLog, 'id' | 'createdAt' | 'architectId' | 'jobCardId'>>): Promise<TimeLog> => {
+  return apiFetch<TimeLog>(`/timelogs/${timeLogId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+};
+
+export const deleteTimeLogAPI = (timeLogId: string): Promise<void> => {
+  return apiFetch<void>(`/timelogs/${timeLogId}`, {
+    method: 'DELETE',
+  });
+};
+
+export const fetchClientProjectTimeLogsAPI = (clientId: string, projectId: string, filters?: { dateFrom?: string, dateTo?: string, freelancerId?: string }): Promise<TimeLog[]> => {
+  const queryParams = new URLSearchParams();
+  if (filters?.dateFrom) queryParams.append('dateFrom', filters.dateFrom);
+  if (filters?.dateTo) queryParams.append('dateTo', filters.dateTo);
+  if (filters?.freelancerId) queryParams.append('freelancerId', filters.freelancerId);
+  const queryString = queryParams.toString();
+  return apiFetch<TimeLog[]>(`/clients/${clientId}/projects/${projectId}/timelogs${queryString ? `?${queryString}` : ''}`);
+};
+
+export const adminUpdateTimeLogAPI = (timeLogId: string, updates: Partial<Omit<TimeLog, 'id' | 'createdAt'>>): Promise<TimeLog> => {
+  return apiFetch<TimeLog>(`/admin/timelogs/${timeLogId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(updates),
+  });
+};
+
+export const adminDeleteTimeLogAPI = (timeLogId: string): Promise<void> => {
+  return apiFetch<void>(`/admin/timelogs/${timeLogId}`, {
+    method: 'DELETE',
+  });
+};
+
 
 // --- File Service ---
 export const fetchProjectFilesAPI = (projectId: string): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/projects/${projectId}/files`);

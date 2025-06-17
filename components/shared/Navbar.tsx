@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
+import GlobalTimerDisplay from './GlobalTimerDisplay'; // Import the GlobalTimerDisplay
 import Button from './Button';
 import { SHORT_APP_NAME, NAV_LINKS } from '../../constants'; 
 import { HomeIcon, UserCircleIcon, ChatBubbleLeftRightIcon, LogoutIcon, BriefcaseIcon, IconProps } from './IconComponents'; 
@@ -17,6 +18,8 @@ const Navbar: React.FC = () => {
 
   return (
     <nav className="bg-white text-text-dark shadow-md sticky top-0 z-50 border-b border-primary-extralight">
+      {/* GlobalTimerDisplay will be fixed position, so its location in DOM tree here is not super critical for layout */}
+      <GlobalTimerDisplay />
       <div className="container mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
           <div className="flex items-center">
