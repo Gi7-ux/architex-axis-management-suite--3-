@@ -1,14 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { useAuth } from './AuthContext';
-import { UserRole, ProjectStatus, MessageStatus, JobCardStatus, Project, User, Application, ManagedFile } from '../../types';
+import { useAuth } from '@/components/AuthContext';
+import { UserRole, ProjectStatus, MessageStatus, JobCardStatus, Project, User, Application, ManagedFile } from '@/types';
 import { 
     fetchAdminDashboardStatsAPI, fetchFreelancerDashboardStatsAPI, fetchClientDashboardStatsAPI,
     fetchRecentActivityAPI, fetchAdminRecentFilesAPI
-} from '../../apiService';
-import { NAV_LINKS, getMockFileIconPath } from '../../constants';
+} from '@/apiService';
+import { NAV_LINKS, getMockFileIconPath } from '@/constants';
 import { Link } from 'react-router-dom';
-import { UsersIcon, BriefcaseIcon, ClockIcon, CheckCircleIcon, DocumentTextIcon, ListBulletIcon, CurrencyDollarIcon, IconProps, PencilIcon, ChatBubbleLeftRightIcon, FolderIcon } from './shared/IconComponents';
-import LoadingSpinner from '../shared/LoadingSpinner';
+import { UsersIcon, BriefcaseIcon, ClockIcon, CheckCircleIcon, DocumentTextIcon, ListBulletIcon, CurrencyDollarIcon, IconProps, PencilIcon, ChatBubbleLeftRightIcon, FolderIcon } from '@/components/shared/IconComponents';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 interface StatCardProps {
   title: string;

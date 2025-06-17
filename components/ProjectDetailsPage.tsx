@@ -1,15 +1,15 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Project, ProjectStatus, Application, UserRole, JobCard, JobCardStatus, TimeLog, User, MessageStatus, ManagedFile, Conversation, Message } from '../../types';
+import { Project, ProjectStatus, Application, UserRole, JobCard, JobCardStatus, TimeLog, User, MessageStatus, ManagedFile, Conversation, Message } from '@/types';
 import { 
     fetchProjectDetailsAPI, fetchApplicationsForProjectAPI, fetchProjectFilesAPI, submitApplicationAPI,
     addJobCardAPI, updateJobCardAPI, deleteJobCardAPI, updateJobCardStatusAPI, addTimeLogAPI,
     uploadFileAPI, deleteFileAPI, findOrCreateConversationAPI, sendMessageAPI
-} from '../../apiService';
-import { NAV_LINKS, getMockFileIconPath, formatDurationToHHMMSS } from '../../constants';
+} from '@/apiService';
+import { NAV_LINKS, getMockFileIconPath, formatDurationToHHMMSS } from '@/constants';
 import LoadingSpinner from './shared/LoadingSpinner';
 import Button from './shared/Button';
-import { useAuth } from '../AuthContext';
+import { useAuth } from '@/components/AuthContext';
 import Modal from './shared/Modal';
 import { ClockIcon, CheckCircleIcon, PencilIcon as EditIcon, PlayIcon, StopIcon, PlusIcon, TrashIcon, ChatBubbleLeftRightIcon, FolderOpenIcon, PaperClipIcon, DownloadIcon, UploadIcon, EyeIcon, ArrowLeftIcon } from './shared/IconComponents'; 
 

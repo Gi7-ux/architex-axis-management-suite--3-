@@ -12,6 +12,12 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
+      },
+      // Vitest configuration
+      test: {
+        globals: true,
+        environment: 'jsdom', // Recommended for React projects
+        setupFiles: './setupTests.ts', // Setup file for tests
       }
     };
 });

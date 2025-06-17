@@ -1,11 +1,14 @@
-import { User, Project, Application, JobCard, TimeLog, ManagedFile, Conversation, Message, UserRole, ProjectStatus, JobCardStatus, MessageStatus } from './types';
+import {
+    User, Project, Application, JobCard, TimeLog, ManagedFile, Conversation, Message,
+    UserRole, ProjectStatus, JobCardStatus, MessageStatus,
+    UserRegistrationData, RegistrationResponse, UserProfileResponse, AuthUser, LoginResponse, UserLoginData
+} from './types';
 
-// const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api'; // Example if using build-time env vars
-const API_BASE_URL = '/api'; // Using relative path for API calls
+const API_BASE_URL = '/backend';
 
 interface ApiErrorData {
   message?: string;
-  errors?: { param: string, msg: string }[]; // Example for validation errors
+  errors?: { param: string, msg: string }[];
 }
 
 export class ApiError extends Error {
@@ -20,12 +23,9 @@ export class ApiError extends Error {
   }
 }
 
-// Generic fetch wrapper
 async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const { headers, ...restOptions } = options;
-  
-  // TODO: Retrieve auth token (e.g., from localStorage or AuthContext)
-  const token = localStorage.getItem('authToken'); 
+  const token = localStorage.getItem('authToken'); // Token used for the request
 
   const defaultHeaders: HeadersInit = {
     'Content-Type': 'application/json',
@@ -42,25 +42,41 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
     let errorData: ApiErrorData = {};
     try {
       errorData = await response.json();
-    } catch (e) {
-      // Ignore if response is not JSON
+    } catch (e) { /* Ignore */ }
+
+    if (response.status === 401 || response.status === 403) {
+        if (token) { // If a token was used for this request that resulted in 401/403, remove it.
+            localStorage.removeItem('authToken');
+        }
     }
-    throw new ApiError(errorData.message || `API Error: ${response.status} ${response.statusText}`, response.status, errorData);
+
+    const errorMessage = errorData.message || `API Error: ${response.status} ${response.statusText}`;
+    throw new ApiError(errorMessage, response.status || 0, errorData);
   }
 
-  if (response.status === 204) { // No Content
+  if (response.status === 204) {
     return null as T;
   }
-
   return response.json() as Promise<T>;
 }
 
 // --- Auth Service ---
-export const loginAPI = (email: string, pass: string): Promise<{ user: User, token: string }> => {
-  return apiFetch<{ user: User, token: string }>('/auth/login', {
+export const loginAPI = (credentials: UserLoginData): Promise<LoginResponse> => {
+  return apiFetch<LoginResponse>('/auth/login', {
     method: 'POST',
-    body: JSON.stringify({ email, password: pass }),
+    body: JSON.stringify(credentials),
   });
+};
+
+export const registerAPI = (userData: UserRegistrationData): Promise<RegistrationResponse> => {
+  return apiFetch<RegistrationResponse>('/auth/register', {
+    method: 'POST',
+    body: JSON.stringify(userData),
+  });
+};
+
+export const fetchUserProfileAPI = (): Promise<UserProfileResponse> => {
+  return apiFetch<UserProfileResponse>('/users/profile');
 };
 
 // --- User Service ---
@@ -80,20 +96,19 @@ export const deleteUserAPI = (userId: string): Promise<void> => {
 };
 export const fetchUserApplicationsAPI = (userId: string): Promise<Application[]> => apiFetch<Application[]>(`/users/${userId}/applications`);
 
-
 // --- Project Service ---
 export const fetchProjectsAPI = (params?: { status?: ProjectStatus, clientId?: string, freelancerId?: string }): Promise<Project[]> => {
   const query = new URLSearchParams(params as any).toString();
   return apiFetch<Project[]>(`/projects${query ? `?${query}` : ''}`);
 };
-export const fetchProjectDetailsAPI = (projectId: string): Promise<Project> => apiFetch<Project>(`/projects/${projectId}`);
+export const fetchProjectDetailsAPI = (projectId: string | number): Promise<Project> => apiFetch<Project>(`/projects/${projectId}`);
 export const createProjectAPI = (projectData: Omit<Project, 'id' | 'createdAt' | 'clientName' | 'status' | 'adminCreatorId' | 'isArchived' | 'assignedFreelancerName' | 'jobCards'>): Promise<Project> => {
   return apiFetch<Project>('/projects', { method: 'POST', body: JSON.stringify(projectData) });
 };
-export const updateProjectAPI = (projectId: string, projectData: Partial<Project>): Promise<Project> => {
+export const updateProjectAPI = (projectId: string | number, projectData: Partial<Project>): Promise<Project> => {
     return apiFetch<Project>(`/projects/${projectId}`, { method: 'PATCH', body: JSON.stringify(projectData) });
 };
-export const deleteProjectAPI = (projectId: string): Promise<void> => {
+export const deleteProjectAPI = (projectId: string | number): Promise<void> => {
   return apiFetch<void>(`/projects/${projectId}`, { method: 'DELETE' });
 };
 export const updateProjectStatusAPI = (projectId: string, status: ProjectStatus): Promise<Project> => {
@@ -132,22 +147,20 @@ export const addTimeLogAPI = (projectId: string, jobCardId: string, timeLogData:
   return apiFetch<TimeLog>(`/projects/${projectId}/jobcards/${jobCardId}/timelogs`, { method: 'POST', body: JSON.stringify(timeLogData) });
 };
 export const fetchProjectTimeLogsForAdminAPI = (projectId: string): Promise<TimeLog[]> => {
-    return apiFetch<TimeLog[]>(`/admin/projects/${projectId}/timelogs`); // Example specific admin endpoint
+    return apiFetch<TimeLog[]>(`/admin/projects/${projectId}/timelogs`);
 };
-export const fetchAllTimeLogsAPI = (filters?: any): Promise<TimeLog[]> => { // Filters for date range, client, etc.
+export const fetchAllTimeLogsAPI = (filters?: any): Promise<TimeLog[]> => {
     const query = new URLSearchParams(filters as any).toString();
     return apiFetch<TimeLog[]>(`/admin/timelogs${query ? `?${query}` : ''}`);
 };
 
-
 // --- File Service ---
 export const fetchProjectFilesAPI = (projectId: string): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/projects/${projectId}/files`);
 export const uploadFileAPI = (projectId: string, formData: FormData): Promise<ManagedFile> => {
-  // For FormData, Content-Type is set automatically by browser
   return apiFetch<ManagedFile>(`/projects/${projectId}/files`, { 
     method: 'POST', 
     body: formData,
-    headers: { 'Content-Type': undefined } // Remove default Content-Type for FormData
+    headers: { 'Content-Type': undefined }
   }); 
 };
 export const deleteFileAPI = (fileId: string): Promise<void> => {
@@ -183,19 +196,17 @@ export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<M
 // Reports
 export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetch<Project[]>('/reports/projects-with-timelogs');
 
-// --- Invoice & Payment Service (Mock Implementation) ---
-import { Invoice, InvoiceItem, Payment, InvoiceStatus } from './types';
 
-// Mock data storage
+// --- Invoice & Payment Service (Mock Implementation) ---
+import { Invoice, InvoiceItem, Payment, InvoiceStatus as LocalInvoiceStatus } from './types';
+
 let mockInvoices: Invoice[] = [];
 let mockPayments: Payment[] = [];
 let nextInvoiceId = 1;
 let nextPaymentId = 1;
 
-// Helper to simulate async operations
 const simulateDelay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// --- Invoice Functions ---
 export const createInvoice = async (invoiceData: Omit<Invoice, 'id' | 'invoiceNumber' | 'createdAt' | 'updatedAt' | 'status' | 'totalAmount' | 'subTotal'> & { items: Omit<InvoiceItem, 'id' | 'totalPrice'>[] }): Promise<Invoice> => {
   await simulateDelay(500);
   const now = new Date().toISOString();
@@ -217,7 +228,7 @@ export const createInvoice = async (invoiceData: Omit<Invoice, 'id' | 'invoiceNu
     subTotal,
     taxAmount,
     totalAmount,
-    status: InvoiceStatus.DRAFT,
+    status: LocalInvoiceStatus.DRAFT,
     createdAt: now,
     updatedAt: now,
   };
@@ -228,24 +239,15 @@ export const createInvoice = async (invoiceData: Omit<Invoice, 'id' | 'invoiceNu
 export const getInvoice = async (invoiceId: string): Promise<Invoice | null> => {
   await simulateDelay(300);
   const invoice = mockInvoices.find(inv => inv.id === invoiceId);
-  if (!invoice) {
-    // In a real API, this might throw an ApiError(404)
-    console.warn(`Invoice with ID ${invoiceId} not found.`);
-    return null;
-  }
+  if (!invoice) { console.warn(`Invoice with ID ${invoiceId} not found.`); return null; }
   return invoice;
 };
 
 export const updateInvoice = async (invoiceId: string, updates: Partial<Invoice>): Promise<Invoice | null> => {
   await simulateDelay(400);
   const invoiceIndex = mockInvoices.findIndex(inv => inv.id === invoiceId);
-  if (invoiceIndex === -1) {
-    console.warn(`Invoice with ID ${invoiceId} not found for update.`);
-    return null;
-  }
-  // Recalculate totals if items or taxRate are updated
+  if (invoiceIndex === -1) { console.warn(`Invoice with ID ${invoiceId} not found for update.`); return null; }
   let updatedInvoice = { ...mockInvoices[invoiceIndex], ...updates, updatedAt: new Date().toISOString() };
-
   if (updates.items || updates.taxRate !== undefined) {
     let subTotal = 0;
     const itemsWithTotals: InvoiceItem[] = (updates.items || updatedInvoice.items).map((item, index) => {
@@ -258,7 +260,6 @@ export const updateInvoice = async (invoiceId: string, updates: Partial<Invoice>
     updatedInvoice.taxAmount = updatedInvoice.taxRate ? subTotal * updatedInvoice.taxRate : 0;
     updatedInvoice.totalAmount = updatedInvoice.subTotal + (updatedInvoice.taxAmount || 0);
   }
-
   mockInvoices[invoiceIndex] = updatedInvoice;
   return updatedInvoice;
 };
@@ -267,16 +268,12 @@ export const deleteInvoice = async (invoiceId: string): Promise<boolean> => {
   await simulateDelay(200);
   const initialLength = mockInvoices.length;
   mockInvoices = mockInvoices.filter(inv => inv.id !== invoiceId);
-  if (mockInvoices.length === initialLength) {
-    console.warn(`Invoice with ID ${invoiceId} not found for deletion.`);
-    return false;
-  }
-  // Also remove associated payments
+  if (mockInvoices.length === initialLength) { console.warn(`Invoice with ID ${invoiceId} not found for deletion.`); return false; }
   mockPayments = mockPayments.filter(p => p.invoiceId !== invoiceId);
   return true;
 };
 
-export const listInvoices = async (filters?: { clientId?: string, projectId?: string, status?: InvoiceStatus }): Promise<Invoice[]> => {
+export const listInvoices = async (filters?: { clientId?: string, projectId?: string, status?: LocalInvoiceStatus }): Promise<Invoice[]> => {
   await simulateDelay(600);
   return mockInvoices.filter(inv => {
     if (filters?.clientId && inv.clientId !== filters.clientId) return false;
@@ -286,24 +283,17 @@ export const listInvoices = async (filters?: { clientId?: string, projectId?: st
   });
 };
 
-// --- Payment Functions ---
 export const recordPayment = async (paymentData: Omit<Payment, 'id' | 'createdAt'>): Promise<Payment> => {
   await simulateDelay(500);
   const now = new Date().toISOString();
-  const newPayment: Payment = {
-    ...paymentData,
-    id: `pay-${nextPaymentId++}`,
-    createdAt: now,
-  };
+  const newPayment: Payment = { ...paymentData, id: `pay-${nextPaymentId++}`, createdAt: now };
   mockPayments.push(newPayment);
-
-  // Optionally, update invoice status if fully paid
   const relatedInvoice = mockInvoices.find(inv => inv.id === newPayment.invoiceId);
   if (relatedInvoice) {
     const paymentsForInvoice = mockPayments.filter(p => p.invoiceId === newPayment.invoiceId);
     const totalPaid = paymentsForInvoice.reduce((sum, p) => sum + p.amountPaid, 0);
     if (totalPaid >= relatedInvoice.totalAmount) {
-      await updateInvoice(relatedInvoice.id, { status: InvoiceStatus.PAID });
+      await updateInvoice(relatedInvoice.id, { status: LocalInvoiceStatus.PAID });
     }
   }
   return newPayment;
@@ -312,19 +302,20 @@ export const recordPayment = async (paymentData: Omit<Payment, 'id' | 'createdAt
 export const getPayment = async (paymentId: string): Promise<Payment | null> => {
   await simulateDelay(300);
   const payment = mockPayments.find(p => p.id === paymentId);
-  if (!payment) {
-    console.warn(`Payment with ID ${paymentId} not found.`);
-    return null;
-  }
+  if (!payment) { console.warn(`Payment with ID ${paymentId} not found.`); return null; }
   return payment;
 };
 
 export const listPaymentsForInvoice = async (invoiceId: string): Promise<Payment[]> => {
   await simulateDelay(400);
   const invoiceExists = mockInvoices.find(inv => inv.id === invoiceId);
-  if (!invoiceExists) {
-      console.warn(`Cannot list payments: Invoice with ID ${invoiceId} not found.`);
-      return []; // Or throw an error
-  }
+  if (!invoiceExists) { console.warn(`Cannot list payments: Invoice with ID ${invoiceId} not found.`); return []; }
   return mockPayments.filter(p => p.invoiceId === invoiceId);
+};
+
+export const __resetApiServiceMocks = () => {
+  mockInvoices = [];
+  mockPayments = [];
+  nextInvoiceId = 1;
+  nextPaymentId = 1;
 };

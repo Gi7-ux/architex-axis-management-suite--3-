@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useLocation, useNavigate }from 'react-router-dom';
-import { Conversation, Message, MessageStatus, UserRole, User } from '../types';
-import { useAuth } from './AuthContext';
+import { Conversation, Message, MessageStatus, UserRole, User } from '@/types';
+import { useAuth } from '@/components/AuthContext';
 import {
     fetchConversationsAPI, fetchMessagesAPI, sendMessageAPI, 
     updateMessageStatusAPI, deleteMessageAPI, findOrCreateConversationAPI,
     uploadFileAPI // For potential future chat file uploads
-} from '../../apiService';
-import { NAV_LINKS } from '../../constants'; // Removed getUserById
-import Button from './shared/Button';
-import { PaperAirplaneIcon, PaperClipIcon, CheckCircleIcon, XCircleIcon, TrashIcon, UserGroupIcon, ArrowLeftIcon, ChatBubbleLeftRightIcon } from './shared/IconComponents';
-import Modal from './shared/Modal';
-import LoadingSpinner from '../shared/LoadingSpinner';
+} from '@/apiService';
+import { NAV_LINKS } from '@/constants'; // Removed getUserById
+import Button from '@/components/shared/Button';
+import { PaperAirplaneIcon, PaperClipIcon, CheckCircleIcon, XCircleIcon, TrashIcon, UserGroupIcon, ArrowLeftIcon, ChatBubbleLeftRightIcon } from '@/components/shared/IconComponents';
+import Modal from '@/components/shared/Modal';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 
 const formatMessageTimestamp = (isoString: string) => {
