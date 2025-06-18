@@ -1004,16 +1004,28 @@ export interface AdminDashboardStatsResponse {
   total_open_applications: number;
 }
 
+// Stats for Client Dashboard
+export interface ClientDashboardStats {
+  myProjectsCount: number;
+  openProjectsCount: number; // Platform-wide
+  myInProgressProjectsCount: number;
+  myCompletedProjectsCount: number;
+}
+
 export const fetchAdminDashboardStatsAPI = (): Promise<AdminDashboardStatsResponse> => {
   return apiFetch<AdminDashboardStatsResponse>(`/api.php?action=get_admin_dashboard_stats`, {
     method: 'GET',
   }, true); // Requires Admin Auth
 };
 
-export const fetchFreelancerDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
-export const fetchClientDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
-export const fetchRecentActivityAPI = (userId: string): Promise<any[]> => apiFetch<any[]>(`/users/${userId}/recent-activity`);
-export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`);
+export const fetchFreelancerDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`); // Placeholder
+export const fetchClientDashboardStatsAPI = (): Promise<ClientDashboardStats> => {
+  return apiFetch<ClientDashboardStats>(`/api.php?action=get_client_dashboard_stats`, {
+    method: 'GET',
+  }, true); // Requires Client Auth
+};
+export const fetchRecentActivityAPI = (userId: string): Promise<any[]> => apiFetch<any[]>(`/users/${userId}/recent-activity`); // Placeholder
+export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`); // Placeholder
 
 // Reports
 export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetch<Project[]>('/reports/projects-with-timelogs');
