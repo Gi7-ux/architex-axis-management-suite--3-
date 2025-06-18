@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useAuth, AuthUser } from '../AuthContext'; // Import AuthUser if needed for user type, or use UserRole directly
+import { useAuth } from '../../contexts/AuthContext';
+// import { AuthUser } from '../../types'; // Uncomment if you actually use AuthUser type in this file
 import Button from './Button';
 import { StopIcon, ClockIcon } from './IconComponents';
 import { UserRole } from '../../types'; // Import UserRole

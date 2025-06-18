@@ -5,11 +5,27 @@ test.describe('Shared Messaging Functionality', () => {
   // Consider using test.beforeEach with params or separate describe blocks for different roles.
 
   test('should allow a user to send a message in a project/job context', async ({ page }) => {
-    // TODO: Log in as a specific user (e.g., client)
-    // TODO: Navigate to a project or job where messaging is available
-    // TODO: Type a message into the message input
-    // TODO: Click send button
-    // TODO: Assert that the message appears in the chat thread
+    // Log in as a specific user (e.g., client)
+    await page.goto('/login');
+    await page.fill('input[name="email"]', 'client@example.com');
+    await page.fill('input[name="password"]', 'password123');
+    await page.click('button[type="submit"]');
+    await page.waitForURL('**/dashboard');
+
+    // Navigate to a project or job where messaging is available
+    await page.goto('/projects');
+    await page.click('text=Sample Project'); // Replace with actual project name or selector
+    await page.click('text=Messages'); // Replace with actual tab or button selector
+
+    // Type a message into the message input
+    const testMessage = `Test message ${Date.now()}`;
+    await page.fill('textarea[name="message"]', testMessage);
+
+    // Click send button
+    await page.click('button[type="submit"], button:has-text("Send")');
+
+    // Assert that the message appears in the chat thread
+    await expect(page.locator('.chat-thread')).toContainText(testMessage);
   });
 
   test('should display messages from other participants in the thread', async ({ page }) => {

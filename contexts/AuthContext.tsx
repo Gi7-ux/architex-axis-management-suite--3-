@@ -48,13 +48,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
-  const startGlobalTimer = async (jobCardId: string) => {
+  const startGlobalTimer = async (jobCardId: string, jobCardTitle: string, projectId: string) => {
     if (activeTimerInfo) {
       throw new Error('Timer is already running');
     }
     const startTime = new Date().toISOString();
-    setActiveTimerInfo({ jobCardId, startTime });
-    localStorage.setItem('activeTimer', JSON.stringify({ jobCardId, startTime }));
+    setActiveTimerInfo({ jobCardId, startTime, jobCardTitle, projectId });
+    localStorage.setItem('activeTimer', JSON.stringify({ jobCardId, startTime, jobCardTitle, projectId }));
   };
 
   const stopGlobalTimerAndLog = async (notes?: string) => {
