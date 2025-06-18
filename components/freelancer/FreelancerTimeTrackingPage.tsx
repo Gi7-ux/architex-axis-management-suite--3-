@@ -3,11 +3,7 @@ import { User, JobCard, TimeLog } from '../../types';
 import {
   fetchFreelancerJobCardsAPI,
   fetchMyTimeLogsAPI,
-<<<<<<< Updated upstream
-  // addTimeLogAPI, // Will be handled by AuthContext's stopGlobalTimerAndLog
-=======
   addTimeLogAPI, // Will be handled by AuthContext's stopGlobalTimerAndLog
->>>>>>> Stashed changes
   deleteTimeLogAPI, // Keep for future direct delete on this page
   updateTimeLogAPI  // Keep for future direct edit on this page
 } from '../../apiService';
@@ -50,13 +46,8 @@ const FreelancerTimeTrackingPage: React.FC = () => {
         try {
           // Fetch job cards and existing time logs when freelancerId is available
           const [fetchedJobCards, fetchedTimeLogs] = await Promise.all([
-<<<<<<< Updated upstream
-            fetchFreelancerJobCardsAPI(freelancerId),
-            fetchMyTimeLogsAPI(freelancerId) // Consider filtering by activeTimerInfo.jobCardId if needed
-=======
             fetchFreelancerJobCardsAPI(String(freelancerId)),
             fetchMyTimeLogsAPI(String(freelancerId)) // Consider filtering by activeTimerInfo.jobCardId if needed
->>>>>>> Stashed changes
           ]);
           setJobCards(fetchedJobCards);
           setTimeLogs(fetchedTimeLogs);
@@ -80,11 +71,7 @@ const FreelancerTimeTrackingPage: React.FC = () => {
             // console.log("Global timer stopped, refreshing logs on tracking page.");
             // setIsProcessingLog(true); // Show a brief loading state for logs
             try {
-<<<<<<< Updated upstream
-                const fetchedTimeLogs = await fetchMyTimeLogsAPI(freelancerId);
-=======
                 const fetchedTimeLogs = await fetchMyTimeLogsAPI(String(freelancerId));
->>>>>>> Stashed changes
                 setTimeLogs(fetchedTimeLogs);
             } catch (err) {
                 console.error("Error refreshing time logs:", err);
@@ -146,11 +133,7 @@ const FreelancerTimeTrackingPage: React.FC = () => {
     try {
       await stopGlobalTimerAndLog(notes || undefined); // stopGlobalTimerAndLog handles API call and clearing activeTimerInfo
       // Refresh time logs after stopping
-<<<<<<< Updated upstream
-      const fetchedTimeLogs = await fetchMyTimeLogsAPI(freelancerId);
-=======
       const fetchedTimeLogs = await fetchMyTimeLogsAPI(String(freelancerId)); // Convert freelancerId to string
->>>>>>> Stashed changes
       setTimeLogs(fetchedTimeLogs);
       // alert("Timer stopped and time logged successfully!"); // Already handled by global timer logic potentially
     } catch (err) {
@@ -211,11 +194,7 @@ const FreelancerTimeTrackingPage: React.FC = () => {
 
     const newLogData: Omit<TimeLog, 'id' | 'createdAt'> = {
       jobCardId: manualLogJobCardId,
-<<<<<<< Updated upstream
-      architectId: freelancerId,
-=======
       architectId: String(freelancerId),
->>>>>>> Stashed changes
       startTime: startTimeISO,
       endTime: endTimeISO,
       durationMinutes,
@@ -225,15 +204,9 @@ const FreelancerTimeTrackingPage: React.FC = () => {
 
     setIsLoading(true);
     try {
-<<<<<<< Updated upstream
-      await addTimeLogAPI(projectId, manualLogJobCardId, newLogData);
-      handleCloseManualLog();
-      const fetchedTimeLogs = await fetchMyTimeLogsAPI(freelancerId);
-=======
       await addTimeLogAPI(projectId, manualLogJobCardId, newLogData); // Corrected: Call addTimeLogAPI directly
       handleCloseManualLog();
       const fetchedTimeLogs = await fetchMyTimeLogsAPI(String(freelancerId));
->>>>>>> Stashed changes
       setTimeLogs(fetchedTimeLogs);
       alert("Manual time log added successfully!");
     } catch (err) {

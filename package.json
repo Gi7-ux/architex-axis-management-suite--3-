@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"vite\" \"php -S localhost:8000 -t public_html/\"",
     "build": "vite build",
     "preview": "vite preview",
     "test": "jest",
@@ -31,6 +31,7 @@
     "@vitejs/plugin-react": "^4.5.2",
     "autoprefixer": "^10.4.21",
     "babel-jest": "^30.0.0",
+    "concurrently": "^9.1.2",
     "jest": "^30.0.0",
     "jest-environment-jsdom": "^30.0.0",
     "jest-fetch-mock": "^3.0.3",
