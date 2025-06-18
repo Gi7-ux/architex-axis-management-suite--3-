@@ -369,12 +369,6 @@ elseif ($action === 'admin_create_user' && $method === 'POST') {
     // Let's add them to the INSERT statement if they were added to `users` table schema.
     // If not, this part needs adjustment based on actual table structure.
     // For this subtask, let's assume users table has: name, phoneNumber, company, experience, hourly_rate, avatar_url
-    // (and these fields were added to user table schema comment in db_connect.php previously).
-    // If not, the INSERT query should only include username, email, password, role.
-
-    // For simplicity, this example assumes users table was expanded with:
-    // name VARCHAR(255) NULL, phone_number VARCHAR(50) NULL, company VARCHAR(255) NULL,
-    // experience TEXT NULL, hourly_rate DECIMAL(10,2) NULL, avatar_url VARCHAR(2048) NULL
     // And these need to be added to db_connect.php comments for users table.
     // (This schema update is outside this subtask's direct instructions but implied by wanting full user edits)
 
@@ -1420,11 +1414,11 @@ elseif ($action === 'withdraw_application' && ($method === 'POST' || $method ===
     if (!$stmt_check_app->execute()) {
         send_json_response(500, ['error' => 'Server error executing application check. ' . $stmt_check_app->error]);
     }
-    $result_app_check = $stmt_check_app->get_result();
-    if ($result_app_check->num_rows === 0) {
+    $result_check_app = $stmt_check_app->get_result();
+    if ($result_check_app->num_rows === 0) {
         send_json_response(404, ['error' => 'Application not found.']);
     }
-    $app_data = $result_app_check->fetch_assoc();
+    $app_data = $result_check_app->fetch_assoc();
     $stmt_check_app->close();
 
     if ((int)$app_data['freelancer_id'] !== $freelancer_id) {
@@ -1663,10 +1657,9 @@ elseif ($action === 'update_job_card' && ($method === 'PUT' || $method === 'POST
     if ($result_jc_check->num_rows === 0) {
         send_json_response(404, ['error' => 'Job Card not found.']);
     }
-    $jc_details = $result_jc_check->fetch_assoc();
-    $project_client_id = (int)$jc_details['project_client_id'];
-    $job_card_assignee_id = $jc_details['job_card_assignee'] ? (int)$jc_details['job_card_assignee'] : null;
-    $project_main_freelancer_id = $jc_details['project_main_freelancer_id'] ? (int)$jc_details['project_main_freelancer_id'] : null;
+    $project_client_id = (int)$jc_check['client_id'];
+    $job_card_assignee_id = $jc_check['job_card_assignee'] ? (int)$jc_check['job_card_assignee'] : null;
+    $project_main_freelancer_id = $jc_check['project_main_freelancer_id'] ? (int)$jc_check['project_main_freelancer_id'] : null;
     $stmt_jc_check->close();
 
     // Authorization
@@ -1720,8 +1713,8 @@ elseif ($action === 'update_job_card' && ($method === 'PUT' || $method === 'POST
                 $stmt_f_check->bind_param("i", $assigned_freelancer_id_update);
                 if (!$stmt_f_check->execute()) { send_json_response(500, ['error' => 'Server error executing freelancer validation.']);}
                 $res_f_check = $stmt_f_check->get_result();
-                if ($res_f_check->num_rows === 0) { send_json_response(404, ['error' => 'New assigned freelancer not found.']); }
-                if ($res_f_check->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'New assigned user is not a freelancer.']);}
+                if ($res_f_check->num_rows === 0) { send_json_response(404, ['error' => 'Assigned freelancer not found.']); }
+                if ($res_f_check->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'Assigned user is not a freelancer.']);}
                 $stmt_f_check->close();
             }
             $fields_to_update[] = "assigned_freelancer_id = ?"; $params[] = $assigned_freelancer_id_update; $types .= "i";
@@ -1736,111 +1729,113 @@ elseif ($action === 'update_job_card' && ($method === 'PUT' || $method === 'POST
     }
 
     if (isset($data['status'])) { // Status can always be updated if $can_edit_status_only or $can_edit_fully
-        $valid_statuses = ['todo', 'in_progress', 'pending_review', 'completed'];
-        if (!in_array($data['status'], $valid_statuses)) {
-            send_json_response(400, ['error' => 'Invalid status value. Valid statuses: ' . implode(", ", $valid_statuses)]);
+        $valid_project_statuses = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled', 'archived'];
+        if (!in_array($data['status'], $valid_project_statuses)) {
+            send_json_response(400, ['error' => 'Invalid project status specified.']);
         }
         $fields_to_update[] = "status = ?"; $params[] = $data['status']; $types .= "s";
     }
 
     if (empty($fields_to_update)) {
-         send_json_response(400, ['error' => 'No valid fields provided for update or no permission to update specified fields.']);
+        send_json_response(400, ['error' => 'No valid fields provided for update or no permission to update specified fields.']);
     }
 
     $fields_to_update[] = "updated_at = NOW()";
 
-    $sql = "UPDATE job_cards SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
-    $params[] = $job_card_id;
+    $sql_update = "UPDATE projects SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+    $params[] = $project_id;
     $types .= "i";
 
-    $stmt_update = $conn->prepare($sql);
+    $stmt_update = $conn->prepare($sql_update);
     if ($stmt_update === false) {
-        send_json_response(500, ['error' => 'Failed to prepare job card update statement: ' . $conn->error]);
+        send_json_response(500, ['error' => 'Failed to prepare project update statement: ' . $conn->error]);
     }
     $stmt_update->bind_param($types, ...$params);
 
     if ($stmt_update->execute()) {
         if ($stmt_update->affected_rows > 0) {
-            send_json_response(200, ['message' => 'Job card updated successfully.']);
+            send_json_response(200, ['message' => 'Project details updated successfully.']);
         } else {
-            $stmt_exists_check = $conn->prepare("SELECT id FROM job_cards WHERE id = ?");
-            $stmt_exists_check->bind_param("i", $job_card_id);
-            $stmt_exists_check->execute();
-            if ($stmt_exists_check->get_result()->num_rows === 0) {
-                send_json_response(404, ['error' => 'Job Card not found (possibly deleted during update attempt).']);
+            // Check if project still exists to differentiate
+            $stmt_exists = $conn->prepare("SELECT id FROM projects WHERE id = ?");
+            $stmt_exists->bind_param("i", $project_id);
+            $stmt_exists->execute();
+            if ($stmt_exists->get_result()->num_rows === 0) {
+                 send_json_response(404, ['error' => 'Project not found (possibly deleted during update attempt).']);
             } else {
-                send_json_response(200, ['message' => 'Job card data was the same; no changes made.']);
+                 send_json_response(200, ['message' => 'Project data was the same; no changes made.']);
             }
-            $stmt_exists_check->close();
+            $stmt_exists->close();
         }
     } else {
-        send_json_response(500, ['error' => 'Failed to update job card: ' . $stmt_update->error]);
+        send_json_response(500, ['error' => 'Failed to update project details: ' . $stmt_update->error]);
     }
     $stmt_update->close();
 
-} // END NEW: Update Job Card
-
-// NEW: Delete Job Card
-elseif ($action === 'delete_job_card' && ($method === 'DELETE' || $method === 'POST')) { // Allow POST for simplicity if DELETE is tricky for some clients
-    $authenticated_user = require_authentication($conn);
+} // END MODIFIED: update_project
+elseif ($action === 'delete_project' && $method === 'DELETE') {
+    $authenticated_user = require_authentication($conn); // 1. Require Authentication
     $user_id = (int)$authenticated_user['id'];
     $user_role = $authenticated_user['role'];
 
-    $job_card_id = null;
-    if ($method === 'DELETE') {
-        $job_card_id = isset($_GET['job_card_id']) ? (int)$_GET['job_card_id'] : null;
-    } elseif ($method === 'POST') { // Allow job_card_id in POST body as well
-        $data = json_decode(file_get_contents('php://input'), true);
-        $job_card_id = isset($data['job_card_id']) ? (int)$data['job_card_id'] : (isset($_GET['job_card_id']) ? (int)$_GET['job_card_id'] : null);
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for deletion.']);
     }
 
-    if (!$job_card_id) {
-        send_json_response(400, ['error' => 'Job Card ID is required for deletion.']);
+    // 2. Authorize User: Fetch project's client_id first
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) {
+        send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check for delete. ' . $conn->error]);
     }
-
-    // Fetch job card's project's client_id for authorization
-    $stmt_jc_owner_check = $conn->prepare(
-        "SELECT p.client_id AS project_client_id
-         FROM job_cards jc
-         JOIN projects p ON jc.project_id = p.id
-         WHERE jc.id = ?"
-    );
-    if (!$stmt_jc_owner_check) { send_json_response(500, ['error' => 'Server error preparing job card ownership check.']); }
-    $stmt_jc_owner_check->bind_param("i", $job_card_id);
-    if (!$stmt_jc_owner_check->execute()) { send_json_response(500, ['error' => 'Server error executing job card ownership check.']); }
-    $result_jc_owner_check = $stmt_jc_owner_check->get_result();
-    if ($result_jc_owner_check->num_rows === 0) {
-        send_json_response(404, ['error' => 'Job Card not found.']);
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) {
+        send_json_response(500, ['error' => 'Server error: Failed to execute ownership check for delete. ' . $stmt_check_owner->error]);
     }
-    $jc_owner_details = $result_jc_owner_check->fetch_assoc();
-    $project_client_id = (int)$jc_owner_details['project_client_id'];
-    $stmt_jc_owner_check->close();
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found, cannot delete.']);
+    }
+    $project_data = $result_owner_check->fetch_assoc();
+    $project_client_id = (int)$project_data['client_id'];
+    $stmt_check_owner->close();
 
     // Authorization check
-    if (!($user_role === 'admin' || ($user_role === 'client' && $project_client_id === $user_id))) {
-        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this job card.']);
+    if ($user_role !== 'admin' && $project_client_id !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this project.']);
     }
 
     // Proceed with delete logic
-    $stmt_delete = $conn->prepare("DELETE FROM job_cards WHERE id = ?");
-    if ($stmt_delete === false) {
-        send_json_response(500, ['error' => 'Failed to prepare delete statement for job card: ' . $conn->error]);
-    }
-    $stmt_delete->bind_param("i", $job_card_id);
+    // TODO: Consider what happens to related data (e.g., applications, job cards) when a project is deleted.
+    // For now, it's a direct delete. Future enhancements might involve soft deletes or cascading deletes/archiving.
 
-    if ($stmt_delete->execute()) {
-        if ($stmt_delete->affected_rows > 0) {
-            send_json_response(200, ['message' => 'Job card deleted successfully.']);
+    $stmt = $conn->prepare("DELETE FROM projects WHERE id = ?");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("i", $project_id);
+
+    if ($stmt->execute()) {
+        if ($stmt->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Project deleted successfully.']);
         } else {
-            // This case implies the job card was not found, though the check above should catch it.
-            send_json_response(404, ['message' => 'Job card not found or already deleted.']);
+            // This case should ideally not be reached if the ownership check found the project.
+            // If it is, it means the project was deleted between the check and this operation.
+            send_json_response(404, ['message' => 'Project not found or already deleted.']);
         }
     } else {
-        send_json_response(500, ['error' => 'Failed to delete job card: ' . $stmt_delete->error]);
+        send_json_response(500, ['error' => 'Failed to delete project: ' . $stmt->error]);
     }
-    $stmt_delete->close();
+    $stmt->close();
+} else {
+    // No action or invalid action/method combination
+    send_json_response(404, ['error' => 'API endpoint not found or invalid request.']);
+}
 
-} // END NEW: Delete Job Card
+// Close the database connection
+$conn->close();
+?>
 
 // NEW: Log Time for a Job Card
 elseif ($action === 'log_time' && $method === 'POST') {
@@ -2745,7 +2740,6 @@ elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST'
     }
 }
 // END MODIFIED: update_project
-elseif ($action === 'delete_project' && $method === 'DELETE') {
 elseif ($action === 'delete_project' && $method === 'DELETE') {
     $authenticated_user = require_authentication($conn); // 1. Require Authentication
     $user_id = (int)$authenticated_user['id'];

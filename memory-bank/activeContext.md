@@ -42,7 +42,7 @@ This involves:
     *   Implement the next set of API endpoints in `backend/api.php` based on `apiService.ts` (e.g., project-related endpoints).
     *   Protect new endpoints using the `getDecodedJwt()` function as appropriate.
     *   Ensure comprehensive input validation and use of prepared statements for all new endpoints.
-2.  **Update `JWT_SECRET_KEY`:** Remind the user to change the placeholder `JWT_SECRET_KEY` to a strong, unique secret and store it securely (e.g., environment variable on cPanel, or a config file outside `public_html` if possible).
+2.  **Update `JWT_SECRET_KEY`:** Emphasize replacing the placeholder `JWT_SECRET_KEY` with a strong, unique secret. This secret **must be injected via environment configuration** (e.g., cPanel Config Variables or a similar mechanism on the hosting platform) and **not hardcoded or committed to the repository**. Clarify that this secret should be stored securely outside the codebase to enhance security before deployment.
 
 ## 4. Active Decisions & Considerations
 

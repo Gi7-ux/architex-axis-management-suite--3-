@@ -30,94 +30,75 @@ const ProjectBrowser: React.FC = () => {
   const [filterSkills, setFilterSkills] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    // Define the raw project data type from PHP
-    interface RawPhpProject {
-      id: number;
-      title: string;
-      description: string;
-      client_id: number;
-      freelancer_id: number | null;
-      status: string;
-      created_at: string;
-      updated_at: string;
-      // budget, skillsRequired etc. are not in the basic PHP response yet
-    }
+useEffect(() => {
+    // interface RawPhpProject { // Removed, use ProjectPHPResponse from apiService
+    //   id: number;
+    //   title: string;
+    //   description: string;
+    //   client_id: number;
+    //   freelancer_id: number | null;
+    //   status: string;
+    //   created_at: string;
+    //   updated_at: string;
+    // }
 
     const loadInitialData = async () => {
       setIsLoading(true);
       setError(null);
-      let errorMessages: string[] = [];
 
+      // Fetch projects
       try {
-        // Fetch projects - no status filter for now, new API doesn't support it yet
-        const rawProjects: RawPhpProject[] = await fetchProjectsAPI();
-
-        // Map rawProjects to the frontend Project type
+        const rawProjects = await fetchProjectsAPI(); // Type is ProjectPHPResponse[] from apiService.ts
         const mappedProjects: Project[] = rawProjects.map((rawProject): Project => ({
-          id: String(rawProject.id), // Convert number to string
+          id: String(rawProject.id), // ProjectPHPResponse has id as number
           title: rawProject.title,
           description: rawProject.description,
-          clientId: String(rawProject.client_id), // Convert number to string and camelCase
-          freelancerId: rawProject.freelancer_id ? String(rawProject.freelancer_id) : undefined,
-          status: rawProject.status as ProjectStatus, // Assume status string matches ProjectStatus enum values
-          createdAt: rawProject.created_at,
-          updatedAt: rawProject.updated_at,
-          // Provide default/placeholder values for other fields expected by Project type
-          clientName: `Client ${rawProject.client_id}`, // Placeholder
-          budget: 0, // Placeholder - not in PHP response
-          currency: 'USD', // Placeholder
-          skillsRequired: [], // Placeholder - not in PHP response
-          paymentType: 'fixed', // Placeholder
-          experienceLevel: 'intermediate', // Placeholder
-          duration: 'unknown', // Placeholder
-          isFeatured: false, // Placeholder
-          jobCards: [], // Placeholder
-          adminCreatorId: undefined, // Placeholder
-          isArchived: false, // Placeholder
-          assignedFreelancerName: rawProject.freelancer_id ? `Freelancer ${rawProject.freelancer_id}` : undefined, // Placeholder
+          clientId: String(rawProject.client_id), // ProjectPHPResponse has client_id as number
+          assignedFreelancerId: rawProject.freelancer_id ? String(rawProject.freelancer_id) : undefined, // ProjectPHPResponse has freelancer_id as number | null
+          status: rawProject.status as ProjectStatus, // ProjectPHPResponse has status as string
+          createdAt: rawProject.createdAt, // Corrected to camelCase
+          deadline: rawProject.deadline, // ProjectPHPResponse should have this from Project base
+          clientName: rawProject.client_username || `Client ${rawProject.client_id}`, // Use client_username if available
+          budget: rawProject.budget, // ProjectPHPResponse should have this from Project base
+          skillsRequired: rawProject.skills_required ? rawProject.skills_required.map(s => s.name) : [], // Map skills if present
+          jobCards: [], // Placeholder, or fetch separately
+          adminCreatorId: rawProject.adminCreatorId, // If ProjectPHPResponse includes it
+          isArchived: rawProject.isArchived || false, // If ProjectPHPResponse includes it
+          assignedFreelancerName: rawProject.freelancer_username || (rawProject.freelancer_id ? `Freelancer ${rawProject.freelancer_id}` : undefined), // Use freelancer_username
         }));
         setProjects(mappedProjects);
-
       } catch (projError: any) {
         console.error("Failed to load projects:", projError);
-        errorMessages.push(projError.message || "Could not load projects.");
-        setProjects([]); // Clear projects on error
+        setError(projError.message || "Could not load projects.");
+        setProjects([]);
       }
 
       // Fetch all skills
       try {
         const fetchedSkills = await fetchAllSkillsAPI();
-        setAllSkills(fetchedSkills.sort());
+        setAllSkills(fetchedSkills.map(skill => skill.name).sort());
       } catch (skillError: any) {
         console.warn("fetchAllSkillsAPI failed, using empty skills list:", skillError);
-        // errorMessages.push("Could not load skills filter."); // Optionally inform user
-        setAllSkills([]); // Default to empty list
+        // setError(prevError => prevError ? `${prevError} Could not load skills.` : "Could not load skills."); // Optionally append
+        setAllSkills([]);
       }
 
       // Fetch user applications if freelancer
       if (user && user.role === UserRole.FREELANCER) {
         try {
-          // Use new API for freelancer's applications
           const freelancerApps: FreelancerApplicationResponseItem[] = await fetchFreelancerApplicationsAPI();
-          setAppliedProjectIds(new Set(freelancerApps.map(app => String(app.project_id)))); // Ensure project_id is string if Project.id is string
+          setAppliedProjectIds(new Set(freelancerApps.map(app => String(app.project_id))));
         } catch (appError: any) {
           console.warn("fetchFreelancerApplicationsAPI failed:", appError);
-          // errorMessages.push("Could not load your application statuses."); // Optionally inform user
-          setAppliedProjectIds(new Set()); // Default to empty set
+          // setError(prevError => prevError ? `${prevError} Could not load applications.` : "Could not load applications."); // Optionally append
+          setAppliedProjectIds(new Set());
         }
       }
 
-      if (errorMessages.length > 0) {
-        setError(errorMessages.join(' '));
-      }
-
-    } catch (err: any) { // Catch any unexpected errors from the overall process
-        console.error("Unexpected error in loadInitialData:", err);
-        setError(err.message || "An unexpected error occurred.");
-    } finally {
-      setIsLoading(false);
-    }
+      // if (errorMessages.length > 0) { // Removed
+      //   setError(errorMessages.join(' '));
+      // }
+      setIsLoading(false); // Moved here, will run after all attempts
     };
     loadInitialData();
   }, [user]);

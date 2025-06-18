@@ -7,4 +7,5 @@ $baseDir = dirname($vendorDir);
 
 return array(
     'Firebase\\JWT\\' => array($vendorDir . '/firebase/php-jwt/src'),
+    'Architex\\AxisSuite\\Backend\\' => array($baseDir . '/src'),
 );

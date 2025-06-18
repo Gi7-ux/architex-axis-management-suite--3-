@@ -797,19 +797,6 @@ export const fetchMyTimeLogsAPI = (freelancerId: string, filters?: { dateFrom?: 
   return apiFetch<TimeLog[]>(`/users/${freelancerId}/timelogs${queryString ? `?${queryString}` : ''}`);
 };
 
-export const updateTimeLogAPI = (timeLogId: string, updates: Partial<Omit<TimeLog, 'id' | 'createdAt' | 'architectId' | 'jobCardId'>>): Promise<TimeLog> => {
-  return apiFetch<TimeLog>(`/timelogs/${timeLogId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(updates),
-  });
-};
-
-export const deleteTimeLogAPI = (timeLogId: string): Promise<void> => {
-  return apiFetch<void>(`/timelogs/${timeLogId}`, {
-    method: 'DELETE',
-  });
-};
-
 export const fetchClientProjectTimeLogsAPI = (clientId: string, projectId: string, filters?: { dateFrom?: string, dateTo?: string, freelancerId?: string }): Promise<TimeLog[]> => {
   const queryParams = new URLSearchParams();
   if (filters?.dateFrom) queryParams.append('dateFrom', filters.dateFrom);

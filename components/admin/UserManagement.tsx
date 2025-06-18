@@ -1,7 +1,7 @@
 // In components/admin/UserManagement.tsx
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { UserRole } from '../../types'; // Keep UserRole
+import { UserRole, User } from '../../types'; // Keep UserRole, import User. Skill is from apiService.
 import {
     adminFetchAllUsersAPI,
     // adminUpdateUserRoleAPI, // Keep for simple role updates if separate button, or merge into full edit
@@ -15,12 +15,11 @@ import {
     AdminUpdateUserDetailsPayload,
     // AdminActionResponse, // Not directly used in component state, but for API calls
     ApiError,
-    Skill, // Import Skill
-    fetchAllSkillsAPI // Import fetchAllSkillsAPI
+    Skill, // This Skill is from apiService
+    fetchAllSkillsAPI, // Import fetchAllSkillsAPI
+    getUsersFromPhp, // Ensure this is imported
+    createUserInPhp // Ensure this is imported
 } from '../../apiService';
-import React, { useState, useEffect } from 'react';
-import { User, UserRole } from '../../types';
-import { fetchUsersAPI, addUserAPI, updateUserAPI, deleteUserAPI, getUsersFromPhp, createUserInPhp } from '../../apiService';
 import Button from '../shared/Button';
 import { PencilIcon, TrashIcon, PlusCircleIcon, CheckCircleIcon, XCircleIcon } from '../shared/IconComponents';
 import Modal from '../shared/Modal';
@@ -31,6 +30,7 @@ import { useAuth } from '../AuthContext'; // Import useAuth to get current admin
 // Extend AdminUserListEntry to include is_active for the main list display
 interface AdminUserView extends AdminUserListEntry {
     is_active: boolean;
+    skills?: Skill[]; // Use Skill from apiService
 }
 
 const UserManagement: React.FC = () => {
@@ -65,7 +65,7 @@ const UserManagement: React.FC = () => {
   const [isCreatingPhpUser, setIsCreatingPhpUser] = useState(false);
   const [createPhpUserError, setCreatePhpUserError] = useState<string | null>(null);
 
-  const [allGlobalSkills, setAllGlobalSkills] = useState<Skill[]>([]);
+  const [allGlobalSkills, setAllGlobalSkills] = useState<Skill[]>([]); // Use Skill from apiService
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<number>>(new Set());
 
   const loadUsersAndSkills = useCallback(async () => { // Combined initial load
@@ -108,8 +108,14 @@ const UserManagement: React.FC = () => {
       try {
         setIsSubmitting(true); // Use isSubmitting for loading state of modal form
         const fullDetails = await adminFetchUserDetailsAPI(userToEdit.id);
-        setCurrentUserFormData(fullDetails);
-        if (fullDetails.skills) {
+        
+        // Sanitize fullDetails to convert nulls to undefined to match the form state type
+        const sanitizedFullDetails = Object.fromEntries(
+          Object.entries(fullDetails).map(([key, value]) => [key, value === null ? undefined : value])
+        ) as Partial<AdminUserDetailsResponse & AdminCreateUserPayload>;
+        setCurrentUserFormData(sanitizedFullDetails);
+
+        if (fullDetails.skills) { // original fullDetails can be used here or sanitizedFullDetails
           setSelectedSkillIds(new Set(fullDetails.skills.map(s => s.id)));
         } else {
           setSelectedSkillIds(new Set());
@@ -117,14 +123,17 @@ const UserManagement: React.FC = () => {
       } catch (err: any) {
         setError(err.message || "Failed to fetch user details.");
         // Fallback to list data if full fetch fails, though some fields might be missing
-        setCurrentUserFormData({
-            id: userToEdit.id,
-            username: userToEdit.username,
-            email: userToEdit.email,
-            role: userToEdit.role,
-            is_active: userToEdit.is_active,
-            // other fields will be undefined
-        });
+        // Convert null values to undefined to match the expected type
+        const sanitizedDetails = Object.fromEntries(
+          Object.entries(userToEdit).map(([key, value]) => [key, value === null ? undefined : value])
+        ) as Partial<AdminUserDetailsResponse & AdminCreateUserPayload>;
+        setCurrentUserFormData(sanitizedDetails);
+        // Set selected skills based on userToEdit data as a fallback
+        if (userToEdit.skills) {
+          setSelectedSkillIds(new Set(userToEdit.skills.map(s => s.id)));
+        } else {
+          setSelectedSkillIds(new Set());
+        }
       } finally {
         setIsSubmitting(false);
       }
@@ -154,7 +163,7 @@ const UserManagement: React.FC = () => {
     } else if (name === 'is_active_text_input_for_some_reason') { // Example if not checkbox
         processedValue = value.toLowerCase() === 'true';
     }
-    setCurrentUserFormData(prev => ({ ...prev, [name]: processedValue }));
+    setCurrentUserFormData((prev: Partial<AdminUserDetailsResponse & AdminCreateUserPayload>) => ({ ...prev, [name]: processedValue }));
   };
 
   const handleSaveUser = async () => {
@@ -220,18 +229,16 @@ const UserManagement: React.FC = () => {
     }
   };
 
-  const filteredUsers = users.filter(user => 
+  const filteredUsers = users.filter((user: AdminUserView) =>
     user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
     user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.role.toLowerCase().includes(searchTerm.toLowerCase())
-  );
     user.role.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    (user.skills && user.skills.some(skill => skill.toLowerCase().includes(searchTerm.toLowerCase())))
+    (user.skills && user.skills.some((skill: Skill) => skill.name.toLowerCase().includes(searchTerm.toLowerCase())))
   );
 
   const handlePhpUserFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
-    setPhpUserFormData(prev => ({ ...prev, [name]: value }));
+    setPhpUserFormData((prev: typeof phpUserFormData) => ({ ...prev, [name]: value }));
   };
 
   const handleCreatePhpUser = async (e: React.FormEvent) => {
@@ -281,7 +288,7 @@ const UserManagement: React.FC = () => {
       </div>
 
       {error && !isModalOpen && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md">{error}</div>}
-      <input type="text" placeholder="Search users..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+      <input type="text" placeholder="Search users..." value={searchTerm} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)}
         className="mb-6 p-2.5 border rounded-lg w-full sm:w-1/2"/>
 
       {isLoading && <LoadingSpinner text="Loading users..." />}
@@ -302,7 +309,7 @@ const UserManagement: React.FC = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filteredUsers.map((user) => (
+              {filteredUsers.map((user: AdminUserView) => (
                 <tr key={user.id} className={`${!user.is_active ? 'bg-gray-100 opacity-70' : ''} hover:bg-gray-50`}>
                   <td className="px-4 py-3 whitespace-nowrap text-sm">{user.id}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm font-medium">{user.username}</td>
@@ -336,7 +343,7 @@ const UserManagement: React.FC = () => {
       {isModalOpen && (
         <Modal isOpen={isModalOpen} onClose={handleCloseModal} title={isEditMode ? `Edit User: ${currentUserFormData.username || ''}` : 'Add New User'} size="2xl">
           {error && isModalOpen && <div className="mb-3 p-2 bg-red-100 text-red-600 rounded-md text-sm">{error}</div>}
-          <form onSubmit={(e) => { e.preventDefault(); handleSaveUser(); }} className="space-y-3 max-h-[75vh] overflow-y-auto p-1">
+          <form onSubmit={(e: React.FormEvent) => { e.preventDefault(); handleSaveUser(); }} className="space-y-3 max-h-[75vh] overflow-y-auto p-1">
             {/* Common Fields */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div><label className="block text-sm font-medium">Username:*</label><input type="text" name="username" value={currentUserFormData.username || ''} onChange={handleFormChange} required className="w-full mt-1 p-2 border rounded"/></div>
@@ -357,7 +364,7 @@ const UserManagement: React.FC = () => {
               <div><label className="block text-sm font-medium">Avatar URL:</label><input type="url" name="avatarUrl" value={currentUserFormData.avatarUrl || ''} onChange={handleFormChange} className="w-full mt-1 p-2 border rounded"/></div>
             </div>
             <div><label className="block text-sm font-medium">Experience/Bio:</label><textarea name="experience" value={currentUserFormData.experience || ''} onChange={handleFormChange} rows={3} className="w-full mt-1 p-2 border rounded"/></div>
-            { (currentUserFormData.role === UserRole.FREELANCER || (!isEditMode && currentUserFormData.role === UserRole.FREELANCER) ) && // Show if role is freelancer or if adding a freelancer
+            { (currentUserFormData.role as UserRole) === UserRole.FREELANCER && // Show if role is freelancer
               <div><label className="block text-sm font-medium">Hourly Rate (R):</label><input type="number" name="hourlyRate" value={currentUserFormData.hourlyRate === null ? '' : currentUserFormData.hourlyRate || ''} onChange={handleFormChange} min="0" step="0.01" className="w-full mt-1 p-2 border rounded"/></div>
             }
             {isEditMode &&
@@ -371,13 +378,13 @@ const UserManagement: React.FC = () => {
             <div className="pt-3">
               <label className="block text-sm font-medium text-gray-700">Skills</label>
               <div className="mt-1 max-h-40 overflow-y-auto border rounded p-2 space-y-1 bg-gray-50">
-                {allGlobalSkills.map(skill => (
+                {allGlobalSkills.map((skill: Skill) => (
                   <div key={skill.id} className="flex items-center">
                     <input
                       type="checkbox"
                       id={`skill-${skill.id}-user-${currentUserFormData.id}`}
                       checked={selectedSkillIds.has(skill.id)}
-                      onChange={(e) => {
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                         const newSet = new Set(selectedSkillIds);
                         if (e.target.checked) newSet.add(skill.id);
                         else newSet.delete(skill.id);
@@ -474,14 +481,14 @@ const UserManagement: React.FC = () => {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {phpUsers.map((user) => (
+                {phpUsers.map((user: any) => ( // Temporary cast to any
                   <tr key={user.id} className="hover:bg-green-50 transition-colors duration-150">
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{user.id}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{user.username}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{user.email}</td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{user.role}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{user.first_name || 'N/A'}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{user.last_name || 'N/A'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{(user as any).first_name || 'N/A'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{(user as any).last_name || 'N/A'}</td>
                   </tr>
                 ))}
               </tbody>
