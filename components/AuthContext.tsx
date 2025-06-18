@@ -1,6 +1,7 @@
 import React, { createContext, useState, useContext, useEffect, ReactNode } from 'react';
 import { User, UserRole, TimeLog } from '../types'; // User might still be used for other contexts or can be replaced by AuthUser if sufficient
 import { loginAPI, fetchUserProfileAPI, ApiError, AuthUser, UserLoginData } from '../apiService';
+export type { AuthUser }; // Export AuthUser
 import { addTimeLogAPI, updateUserAPI } from '../apiService'; // Keep other necessary imports
 
 

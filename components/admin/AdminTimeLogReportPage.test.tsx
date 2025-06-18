@@ -1,9 +1,17 @@
 import React from 'react';
+<<<<<<< Updated upstream
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { UserRole } from '../../types';
 import AdminTimeLogReportPage from './AdminTimeLogReportPage';
 import { useAuth } from '../AuthContext';
+=======
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react'; // Added within
+import '@testing-library/jest-dom';
+import { UserRole } from '../../types';
+import AdminTimeLogReportPage from './AdminTimeLogReportPage';
+import { useAuth, AuthUser } from '../AuthContext'; // Import AuthUser
+>>>>>>> Stashed changes
 import * as apiService from '../../apiService';
 
 // Mock API service
@@ -18,7 +26,11 @@ const mockAdminUpdateTimeLogAPI = apiService.adminUpdateTimeLogAPI as jest.Mock;
 jest.mock('../AuthContext');
 const mockUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 
+<<<<<<< Updated upstream
 const mockAdminUser = { id: 'admin1', name: 'Admin User', role: UserRole.ADMIN };
+=======
+const mockAdminUser: AuthUser = { id: 1, username: 'admin1', email: 'admin@example.com', role: UserRole.ADMIN }; // Removed name property
+>>>>>>> Stashed changes
 const mockProjects = [
   {
     id: 'proj1', title: 'Project X', clientId: 'client1',
@@ -49,7 +61,11 @@ describe('AdminTimeLogReportPage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockUseAuth.mockReturnValue({
+<<<<<<< Updated upstream
       user: mockAdminUser,
+=======
+      user: { id: 1, username: 'admin1', email: 'admin@example.com', role: UserRole.ADMIN }, // Ensured mock user matches AuthUser type
+>>>>>>> Stashed changes
       token: 'test-token',
       isLoading: false,
       login: jest.fn(), logout: jest.fn(), updateCurrentUserDetails: jest.fn(),
@@ -67,6 +83,13 @@ describe('AdminTimeLogReportPage', () => {
 
   test('fetches and displays time logs with enriched data', async () => {
     render(<AdminTimeLogReportPage />);
+<<<<<<< Updated upstream
+=======
+    // Wait for loading to complete by checking for an element that appears after loading
+    // or by waiting for the loading text to disappear.
+    await waitFor(() => expect(screen.queryByText(/Loading time log reports.../i)).not.toBeInTheDocument(), { timeout: 5000 });
+
+>>>>>>> Stashed changes
     await waitFor(() => {
       expect(mockFetchAllTimeLogsAPI).toHaveBeenCalled();
       expect(mockFetchAllProjectsWithTimeLogsAPI).toHaveBeenCalled();
@@ -128,6 +151,7 @@ describe('AdminTimeLogReportPage', () => {
       const editButtons = screen.getAllByRole('button', { name: /edit/i });
       fireEvent.click(editButtons[0]); // Edit first log
 
+<<<<<<< Updated upstream
       expect(screen.getByRole('heading', { name: /edit time log/i })).toBeInTheDocument();
       expect(screen.getByLabelText(/date/i)).toHaveValue('2023-01-01');
       expect(screen.getByLabelText(/start time/i)).toHaveValue('09:00');
@@ -135,6 +159,17 @@ describe('AdminTimeLogReportPage', () => {
       expect(screen.getByLabelText(/notes/i)).toHaveValue('Admin Log 1');
       expect(screen.getByLabelText(/job card id/i)).toHaveValue('jc1');
       expect(screen.getByLabelText(/architect id/i)).toHaveValue('freelancer1');
+=======
+      const editModal = await screen.findByRole('dialog', { name: /edit time log/i });
+      expect(editModal).toBeInTheDocument();
+      
+      expect(within(editModal).getByLabelText(/date/i)).toHaveValue('2023-01-01');
+      expect(within(editModal).getByLabelText(/start time/i)).toHaveValue('09:00');
+      expect(within(editModal).getByLabelText(/end time/i)).toHaveValue('10:00');
+      expect(within(editModal).getByLabelText(/notes/i)).toHaveValue('Admin Log 1');
+      expect(within(editModal).getByLabelText(/job card id/i)).toHaveValue('jc1');
+      expect(within(editModal).getByLabelText(/architect id/i)).toHaveValue('freelancer1');
+>>>>>>> Stashed changes
     });
 
     test('successfully updates a time log', async () => {
@@ -142,12 +177,23 @@ describe('AdminTimeLogReportPage', () => {
       await waitFor(() => expect(screen.getByText('Admin Log 1')).toBeInTheDocument());
 
       fireEvent.click(screen.getAllByRole('button', { name: /edit/i })[0]); // Open modal
+<<<<<<< Updated upstream
 
       // Modify data
       fireEvent.change(screen.getByLabelText(/notes/i), { target: { value: 'Updated Admin Log 1' } });
       fireEvent.change(screen.getByLabelText(/end time/i), { target: { value: '10:30' } }); // Change end time
 
       fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+=======
+      
+      const editModal = await screen.findByRole('dialog', { name: /edit time log/i });
+
+      // Modify data
+      fireEvent.change(within(editModal).getByLabelText(/notes/i), { target: { value: 'Updated Admin Log 1' } });
+      fireEvent.change(within(editModal).getByLabelText(/end time/i), { target: { value: '10:30' } }); // Change end time
+
+      fireEvent.click(within(editModal).getByRole('button', { name: /save changes/i }));
+>>>>>>> Stashed changes
 
       await waitFor(() => expect(mockAdminUpdateTimeLogAPI).toHaveBeenCalledWith(
         'tl1',
@@ -171,8 +217,14 @@ describe('AdminTimeLogReportPage', () => {
         await waitFor(() => expect(screen.getByText('Admin Log 1')).toBeInTheDocument());
 
         fireEvent.click(screen.getAllByRole('button', { name: /edit/i })[0]);
+<<<<<<< Updated upstream
         fireEvent.change(screen.getByLabelText(/notes/i), { target: { value: 'Attempted Update' } });
         fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+=======
+        const editModal = await screen.findByRole('dialog', { name: /edit time log/i });
+        fireEvent.change(within(editModal).getByLabelText(/notes/i), { target: { value: 'Attempted Update' } });
+        fireEvent.click(within(editModal).getByRole('button', { name: /save changes/i }));
+>>>>>>> Stashed changes
 
         await waitFor(() => expect(mockAdminUpdateTimeLogAPI).toHaveBeenCalled());
         expect(window.alert).toHaveBeenCalledWith('Error updating time log: Update failed');
@@ -183,9 +235,17 @@ describe('AdminTimeLogReportPage', () => {
         render(<AdminTimeLogReportPage />);
         await waitFor(() => expect(screen.getByText('Admin Log 1')).toBeInTheDocument());
         fireEvent.click(screen.getAllByRole('button', { name: /edit/i })[0]);
+<<<<<<< Updated upstream
 
         fireEvent.change(screen.getByLabelText(/end time/i), { target: { value: '08:00' } }); // Start time is 09:00
         fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+=======
+        
+        const editModal = await screen.findByRole('dialog', { name: /edit time log/i });
+
+        fireEvent.change(within(editModal).getByLabelText(/end time/i), { target: { value: '08:00' } }); // Start time is 09:00
+        fireEvent.click(within(editModal).getByRole('button', { name: /save changes/i }));
+>>>>>>> Stashed changes
 
         expect(window.alert).toHaveBeenCalledWith('End time must be after start time.');
         expect(mockAdminUpdateTimeLogAPI).not.toHaveBeenCalled();

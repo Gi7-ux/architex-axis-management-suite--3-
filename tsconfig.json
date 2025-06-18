@@ -22,10 +22,13 @@
     "noUnusedLocals": true,
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
-
-    "paths": {
-      "@/*" :  ["./*"]
-    }
+    "noUncheckedSideEffectImports": true,    "paths": {
+      "@/*": ["./*"],
+      "components/*": ["./components/*"],
+      "types": ["./types"],
+      "apiService": ["./apiService"],
+      "constants": ["./constants"]
+    },
+    "baseUrl": "."
   }
 }

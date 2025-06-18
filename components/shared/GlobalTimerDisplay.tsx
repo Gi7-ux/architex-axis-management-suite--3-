@@ -1,13 +1,14 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { useAuth } from '../AuthContext';
+import { useAuth, AuthUser } from '../AuthContext'; // Import AuthUser if needed for user type, or use UserRole directly
 import Button from './Button';
 import { StopIcon, ClockIcon } from './IconComponents';
+import { UserRole } from '../../types'; // Import UserRole
 import { formatDurationToHHMMSS } from '../../constants';
 
 const TIMER_REMINDER_THRESHOLD_MINUTES = 1; // For testing, set to 60 for 1 hour in production
 
 const GlobalTimerDisplay: React.FC = () => {
-  const { activeTimerInfo, stopGlobalTimerAndLog } = useAuth();
+  const { user, activeTimerInfo, stopGlobalTimerAndLog } = useAuth(); // Add user
   const [elapsedTime, setElapsedTime] = useState(0); // in seconds
   const intervalRef = useRef<number | null>(null);
   const reminderShownRef = useRef<Record<number, boolean>>({}); // To track which reminders were shown
@@ -57,7 +58,7 @@ const GlobalTimerDisplay: React.FC = () => {
     }
   }, [elapsedTime, activeTimerInfo, stopGlobalTimerAndLog]);
 
-  if (!activeTimerInfo) {
+  if (!activeTimerInfo || user?.role !== UserRole.FREELANCER) { // Add role check
     return null;
   }
 

@@ -1,4 +1,4 @@
-import { User, Project, Application, JobCard, TimeLog, ManagedFile, Conversation, Message, UserRole, ProjectStatus, JobCardStatus, MessageStatus } from './types';
+import { User, Project, Application, JobCard, TimeLog, ManagedFile, UserRole, ProjectStatus, FreelancerDashboardStats, AdminDashboardStatsResponse, ClientDashboardStats, RecentActivity } from './types';
 
 // Payload for user registration
 export interface UserRegistrationData {
@@ -623,7 +623,6 @@ export interface JobCardPHPResponse extends Omit<JobCard, 'id' | 'projectId' | '
   // created_at and updated_at are strings, compatible with JobCard type
 }
 
-
 // Payload for updating an existing Job Card
 // All fields are optional.
 export interface UpdateJobCardPayload {
@@ -676,8 +675,15 @@ export const deleteJobCardAPI = (jobCardId: number | string): Promise<DeleteJobC
 };
 
 // Commenting out old/placeholder JobCard APIs:
+// Placeholder export to satisfy component import until proper PHP endpoint is made
+export const fetchFreelancerJobCardsAPI = async (freelancerId: string | number): Promise<JobCard[]> => {
+  console.warn(`fetchFreelancerJobCardsAPI called with ${freelancerId} - using placeholder in apiService.ts`);
+  // This would typically call an endpoint like /api.php?action=get_freelancer_job_cards&freelancer_id=${freelancerId}
+  // For now, returning an empty array or mock data if needed for basic compilation.
+  return Promise.resolve([]);
+};
 /*
-export const fetchFreelancerJobCardsAPI = (freelancerId: string): Promise<JobCard[]> => apiFetch<JobCard[]>(`/users/${freelancerId}/jobcards`);
+// export const fetchFreelancerJobCardsAPI = (freelancerId: string): Promise<JobCard[]> => apiFetch<JobCard[]>(`/users/${freelancerId}/jobcards`);
 export const addJobCardAPI = (projectId: string, jobCardData: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt' | 'projectId' | 'status' | 'timeLogs' | 'actualTimeLogged'>): Promise<JobCard> => {
   return apiFetch<JobCard>(`/projects/${projectId}/jobcards`, { method: 'POST', body: JSON.stringify(jobCardData) });
 };
@@ -696,13 +702,14 @@ export const updateJobCardStatusAPI = (projectId: string, jobCardId: string, sta
 
 // Payload for creating a new Time Log
 export interface LogTimePayload {
-  job_card_id: number; // PHP backend expects integer job_card_id
-  start_time: string;  // ISO8601 format
-  end_time: string;    // ISO8601 format
-  notes?: string | null;
-  // duration_minutes is calculated by backend
-  // user_id is taken from authenticated user by backend
+  jobCardId: string; // Using camelCase for consistency with frontend
+  startTime: string;
+  endTime: string;
+  notes?: string;
+  manualEntry?: boolean;
 }
+
+// Response from logging time
 export interface LogTimeResponse {
   message: string;
   time_log_id: number; // PHP returns integer ID
@@ -773,12 +780,21 @@ export const deleteTimeLogAPI = (timeLogId: number | string): Promise<DeleteTime
   }, true); // Requires Auth
 };
 
-// Commenting out a potentially conflicting older addTimeLogAPI
-/*
 export const addTimeLogAPI = (projectId: string, jobCardId: string, timeLogData: Omit<TimeLog, 'id' | 'createdAt'>): Promise<TimeLog> => {
-  return apiFetch<TimeLog>(`/projects/${projectId}/jobcards/${jobCardId}/timelogs`, { method: 'POST', body: JSON.stringify(timeLogData) });
+  const payload = {
+    projectId,
+    jobCardId,
+    startTime: timeLogData.startTime,
+    endTime: timeLogData.endTime,
+    durationMinutes: timeLogData.durationMinutes,
+    notes: timeLogData.notes,
+    manualEntry: timeLogData.manualEntry
+  };
+  return apiFetch<TimeLog>(`/api.php?action=add_time_log`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
 };
-*/
 export const fetchProjectTimeLogsForAdminAPI = (projectId: string): Promise<TimeLog[]> => {
     return apiFetch<TimeLog[]>(`/admin/projects/${projectId}/timelogs`); // Example specific admin endpoint
 };
@@ -827,7 +843,7 @@ export const uploadFileAPI = (projectId: string, formData: FormData): Promise<Ma
   return apiFetch<ManagedFile>(`/projects/${projectId}/files`, {
     method: 'POST',
     body: formData,
-    headers: { 'Content-Type': undefined } // Remove default Content-Type for FormData
+    headers: {} // Remove default Content-Type for FormData
   });
 };
 export const deleteFileAPI = (fileId: string): Promise<void> => {
@@ -987,33 +1003,46 @@ export const adminAddSkillAPI = (payload: AdminAddSkillPayload): Promise<AdminAd
 
 // --- Dashboard Stats API ---
 
-export interface AdminDashboardStatsResponse {
-  total_active_users: number;
-  users_by_role: {
-    admin: number;
-    client: number;
-    freelancer: number;
-  };
-  total_projects: number;
-  projects_by_status: {
-    // Keys will be the project status strings as returned by backend
+export const fetchUserRecentFilesAPI = (): Promise<ManagedFile[]> => {
+  return apiFetch<ManagedFile[]>(`/api.php?action=get_user_recent_files`);
+};
     // e.g., 'Pending Approval', 'Open', 'In Progress', 'Completed', 'Cancelled'
-    // The exact keys should match what the PHP backend's $project_statuses_to_count produces as keys.
-    [status_key: string]: number;
-  };
-  total_open_applications: number;
-}
+    // The exact keys should match what the PHP backend's $project_statuses_to_count produces as keys.// AdminDashboardStatsResponse is now defined in types.ts
 
+<<<<<<< Updated upstream
+=======
+// Stats for Client Dashboard - This local definition will be removed to use the one from types.ts
+// export interface ClientDashboardStats {
+//   myProjectsCount: number;
+//   openProjectsCount: number; // Platform-wide
+//   myInProgressProjectsCount: number;
+//   myCompletedProjectsCount: number;
+// }
+
+>>>>>>> Stashed changes
 export const fetchAdminDashboardStatsAPI = (): Promise<AdminDashboardStatsResponse> => {
   return apiFetch<AdminDashboardStatsResponse>(`/api.php?action=get_admin_dashboard_stats`, {
     method: 'GET',
   }, true); // Requires Admin Auth
 };
 
+<<<<<<< Updated upstream
 export const fetchFreelancerDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
 export const fetchClientDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
 export const fetchRecentActivityAPI = (userId: string): Promise<any[]> => apiFetch<any[]>(`/users/${userId}/recent-activity`);
 export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`);
+=======
+export const fetchFreelancerDashboardStatsAPI = (userId: number | string): Promise<FreelancerDashboardStats> => apiFetch<FreelancerDashboardStats>(`/users/${userId}/dashboard/stats`);
+export const fetchClientDashboardStatsAPI = (): Promise<ClientDashboardStats> => {
+  return apiFetch<ClientDashboardStats>(`/api.php?action=get_client_dashboard_stats`, {
+    method: 'GET',
+  }, true); // Requires Client Auth
+};
+
+export const fetchRecentActivityAPI = (userId: string): Promise<RecentActivity[]> => 
+  apiFetch<RecentActivity[]>(`/users/${userId}/recent-activity`); // Placeholder
+export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`); // Placeholder
+>>>>>>> Stashed changes
 
 // Reports
 export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetch<Project[]>('/reports/projects-with-timelogs');

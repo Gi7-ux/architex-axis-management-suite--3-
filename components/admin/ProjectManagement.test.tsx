@@ -1,5 +1,9 @@
 import React from 'react';
+<<<<<<< Updated upstream
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+=======
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
+>>>>>>> Stashed changes
 import { HashRouter } from 'react-router-dom';
 import { AuthContext, AuthUser } from '../AuthContext'; // Adjusted AuthUser import
 import { ToastProvider } from '../shared/toast/ToastContext';
@@ -42,7 +46,22 @@ const mockAdminUser: AuthUser = {
 const renderProjectManagement = () => {
   return render(
     <HashRouter>
+<<<<<<< Updated upstream
       <AuthContext.Provider value={{ user: mockAdminUser, login: jest.fn(), logout: jest.fn(), isLoading: false, activeTimerInfo: null, startGlobalTimer: jest.fn(), stopGlobalTimerAndLog: jest.fn(), fetchCurrentUser: jest.fn() }}>
+=======
+      <AuthContext.Provider value={{ 
+        user: mockAdminUser, 
+        token: 'mock-token', // Added
+        login: jest.fn(), 
+        logout: jest.fn(), 
+        isLoading: false, 
+        updateCurrentUserDetails: jest.fn().mockResolvedValue(true), // Added
+        activeTimerInfo: null, 
+        startGlobalTimer: jest.fn(), 
+        stopGlobalTimerAndLog: jest.fn(),
+        clearGlobalTimerState: jest.fn() // Added
+      }}>
+>>>>>>> Stashed changes
         <ToastProvider>
           <ProjectManagement />
         </ToastProvider>
@@ -52,11 +71,19 @@ const renderProjectManagement = () => {
 };
 
 // Helper to find modal buttons more reliably
+<<<<<<< Updated upstream
 const getButtonInModal = (name: RegExp) => {
   const buttons = screen.getAllByRole('button');
   // This is a simple heuristic; might need refinement based on actual modal structure
   // It assumes the modal is one of the last complex elements rendered.
   return buttons.find(button => name.test(button.textContent || ''));
+=======
+const getButtonInModal = async (modalTitle: RegExp, buttonName: RegExp) => {
+  // Wait for the modal with the specific title to be present
+  const modal = await screen.findByRole('dialog', { name: modalTitle });
+  // Then find the button within that modal
+  return within(modal).getByRole('button', { name: buttonName });
+>>>>>>> Stashed changes
 };
 
 
@@ -79,6 +106,12 @@ describe('ProjectManagement Component - Toast Interactions', () => {
 
     renderProjectManagement();
 
+<<<<<<< Updated upstream
+=======
+    // Wait for initial loading to complete
+    await waitFor(() => expect(screen.queryByText(/Loading projects.../i)).not.toBeInTheDocument());
+
+>>>>>>> Stashed changes
     await act(async () => {
       fireEvent.click(screen.getByText(/Create Project/i));
     });
@@ -88,7 +121,13 @@ describe('ProjectManagement Component - Toast Interactions', () => {
     await act(async () => {
       fireEvent.change(screen.getByLabelText(/Project Title/i), { target: { value: 'New Test Project' } });
       fireEvent.change(screen.getByLabelText(/Project Description/i), { target: { value: 'A description' } });
+<<<<<<< Updated upstream
       fireEvent.click(getButtonInModal(/Create Project/i)!);
+=======
+      // More specific modal and button targeting
+      const createButtonInModal = await getButtonInModal(/Create New Project/i, /Create Project/i);
+      fireEvent.click(createButtonInModal);
+>>>>>>> Stashed changes
     });
 
     await waitFor(() => expect(apiService.createProjectAPI).toHaveBeenCalledTimes(1));
@@ -100,6 +139,12 @@ describe('ProjectManagement Component - Toast Interactions', () => {
     (apiService.createProjectAPI as jest.Mock).mockRejectedValueOnce(new Error(errorMessage));
 
     renderProjectManagement();
+<<<<<<< Updated upstream
+=======
+    // Wait for initial loading to complete
+    await waitFor(() => expect(screen.queryByText(/Loading projects.../i)).not.toBeInTheDocument());
+
+>>>>>>> Stashed changes
     await act(async () => {
       fireEvent.click(screen.getByText(/Create Project/i));
     });
@@ -108,7 +153,13 @@ describe('ProjectManagement Component - Toast Interactions', () => {
     await act(async () => {
       fireEvent.change(screen.getByLabelText(/Project Title/i), { target: { value: 'Error Project' } });
       fireEvent.change(screen.getByLabelText(/Project Description/i), { target: { value: 'Desc' } });
+<<<<<<< Updated upstream
       fireEvent.click(getButtonInModal(/Create Project/i)!);
+=======
+      // More specific modal and button targeting
+      const createButtonInModal = await getButtonInModal(/Create New Project/i, /Create Project/i);
+      fireEvent.click(createButtonInModal);
+>>>>>>> Stashed changes
     });
 
     await waitFor(() => expect(apiService.createProjectAPI).toHaveBeenCalledTimes(1));
@@ -130,8 +181,16 @@ describe('ProjectManagement Component - Toast Interactions', () => {
 
     await screen.findByLabelText('Title*');
     await act(async () => {
+<<<<<<< Updated upstream
       fireEvent.change(screen.getByLabelText(/Description/i), { target: { value: 'Updated Description' } });
       fireEvent.click(getButtonInModal(/Save Changes/i)!);
+=======
+      // Target description within the edit modal specifically
+      const modal = await screen.findByRole('dialog', { name: /Edit Project: Test Project to Edit/i });
+      fireEvent.change(within(modal).getByLabelText(/Description/i), { target: { value: 'Updated Description' } });
+      const saveButtonInModal = await getButtonInModal(/Edit Project: Test Project to Edit/i, /Save Changes/i);
+      fireEvent.click(saveButtonInModal);
+>>>>>>> Stashed changes
     });
 
     await waitFor(() => expect(apiService.updateProjectAPI).toHaveBeenCalledTimes(1));
@@ -153,8 +212,16 @@ describe('ProjectManagement Component - Toast Interactions', () => {
 
     await screen.findByLabelText('Title*');
     await act(async () => {
+<<<<<<< Updated upstream
       fireEvent.change(screen.getByLabelText(/Description/i), { target: { value: 'Attempted Update' } });
       fireEvent.click(getButtonInModal(/Save Changes/i)!);
+=======
+      // Target description within the edit modal specifically
+      const modal = await screen.findByRole('dialog', { name: /Edit Project: Test Project Update Fail/i });
+      fireEvent.change(within(modal).getByLabelText(/Description/i), { target: { value: 'Attempted Update' } });
+      const saveButtonInModal = await getButtonInModal(/Edit Project: Test Project Update Fail/i, /Save Changes/i);
+      fireEvent.click(saveButtonInModal);
+>>>>>>> Stashed changes
     });
 
     await waitFor(() => expect(apiService.updateProjectAPI).toHaveBeenCalledTimes(1));

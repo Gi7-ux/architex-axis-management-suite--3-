@@ -22,10 +22,13 @@ export default defineConfig(({ mode }) => {
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
         'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY)
-      },
-      resolve: {
+      },      resolve: {
         alias: {
           '@': path.resolve(__dirname, '.'),
+          'components': path.resolve(__dirname, './components'),
+          'types': path.resolve(__dirname, './types'),
+          'apiService': path.resolve(__dirname, './apiService'),
+          'constants': path.resolve(__dirname, './constants')
         }
       }
     };
