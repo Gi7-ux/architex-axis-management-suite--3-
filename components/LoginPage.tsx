@@ -80,16 +80,46 @@ const LoginPage: React.FC = () => {
 
 
   const resetRecaptcha = () => {
-    if (window.grecaptcha && recaptchaContainerRef.current?.firstChild) { // Check if widget exists
-        // This assumes the widget ID is 0, which is usually the case for the first explicit render.
-        // A more robust solution might involve storing the widget ID returned by grecaptcha.render.
-        try {
-            window.grecaptcha.reset();
-        } catch(e) {
-            console.error("Error resetting reCAPTCHA:", e);
+// Add this at the top of your component (with your other refs/imports)
+const recaptchaWidgetId = useRef<number | null>(null);
+
+useEffect(() => {
+  if (
+    isRecaptchaScriptLoaded &&
+    recaptchaContainerRef.current &&
+    window.grecaptcha &&
+    window.grecaptcha.render
+  ) {
+    try {
+      const widgetId = window.grecaptcha.render(
+        recaptchaContainerRef.current,
+        {
+          sitekey: RECAPTCHA_SITE_KEY,
+          callback: window.onRecaptchaChangeLogin,
+          'expired-callback': () => {
+            setRecaptchaToken(null);
+            setError("CAPTCHA expired. Please try again.");
+          },
         }
+      );
+      recaptchaWidgetId.current = widgetId;
+    } catch (e) {
+      console.error("Error rendering reCAPTCHA:", e);
+      setError("Failed to load CAPTCHA. Please refresh the page.");
     }
-    setRecaptchaToken(null);
+  }
+}, [isRecaptchaScriptLoaded]);
+
+const resetRecaptcha = () => {
+  if (window.grecaptcha && recaptchaWidgetId.current !== null) {
+    try {
+      window.grecaptcha.reset(recaptchaWidgetId.current);
+    } catch (e) {
+      console.error("Error resetting reCAPTCHA:", e);
+    }
+  }
+  setRecaptchaToken(null);
+};
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
