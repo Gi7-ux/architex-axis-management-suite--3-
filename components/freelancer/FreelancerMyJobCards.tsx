@@ -85,7 +85,9 @@ const FreelancerMyJobCards: React.FC = () => {
                 }`}>{jobCard.status.replace('_', ' ')}</span>
               </p>
               {jobCard.description && (
-                <p className="text-gray-600 text-sm mt-2 mb-3 whitespace-pre-wrap truncate h-20">{jobCard.description}</p>
+                <p className="text-gray-600 text-sm mt-2 mb-3 line-clamp-3">
+                  {jobCard.description}
+                </p>
               )}
               {jobCard.estimated_hours !== null && (
                 <p className="text-xs text-gray-500">Estimated Hours: {jobCard.estimated_hours}</p>
