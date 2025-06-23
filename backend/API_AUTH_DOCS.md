@@ -76,6 +76,116 @@ Requests are typically made by appending a `?action=some_action` query parameter
   }
   ```
 
+## Project File Management Endpoints
+
+These endpoints manage files associated with projects. A new table `project_files` is assumed.
+
+**`project_files` Table Schema (Example)**
+- `id` (INT, PK, AI)
+- `project_id` (INT, FK to `projects.id`, ON DELETE CASCADE)
+- `uploader_id` (INT, FK to `users.id`)
+- `file_name` (VARCHAR(255)) - Original client-side filename.
+- `file_path` (VARCHAR(512), UNIQUE) - Path on server where file is stored.
+- `file_type` (VARCHAR(100)) - MIME type.
+- `file_size` (INT) - Size in bytes.
+- `uploaded_at` (DATETIME, DEFAULT CURRENT_TIMESTAMP)
+
+### 1. Get Project Files
+- **Action**: `get_project_files`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_project_files&project_id=<project_id>`
+- **Authentication**: **Required**. User must be admin, project client, or assigned freelancer.
+- **Response (Success - 200 OK)**: Array of file metadata objects.
+  ```json
+  [
+    {
+      "id": 1,
+      "project_id": 123,
+      "uploader_id": 456,
+      "file_name": "project_brief.pdf",
+      "file_path": "uploads/project_files/123/unique_id_project_brief.pdf", // Example server path
+      "file_type": "application/pdf",
+      "file_size": 102400, // In bytes
+      "uploaded_at": "YYYY-MM-DD HH:MM:SS",
+      "uploader_username": "client_user"
+    }
+    // ... more files
+  ]
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Project ID required, Project not found, Forbidden)."
+  }
+  ```
+
+### 3. Get Freelancer's Time Logs
+- **Action**: `get_freelancer_time_logs`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_freelancer_time_logs`
+- **Authentication**: **Required** (User role must be 'freelancer').
+- **Query Parameters (Optional)**:
+  - `project_id` (int): Filter time logs by a specific project ID.
+  - `job_card_id` (int): Filter time logs by a specific job card ID.
+  - `date_from` (string, YYYY-MM-DD): Filter logs starting from this date (inclusive).
+  - `date_to` (string, YYYY-MM-DD): Filter logs up to this date (inclusive).
+- **Response (Success - 200 OK)**: Array of time log objects, including job card and project titles.
+  ```json
+  [
+    {
+      "id": 5,
+      "job_card_id": 101,
+      "user_id": 789, // Authenticated freelancer's ID
+      "start_time": "YYYY-MM-DD HH:MM:SS",
+      "end_time": "YYYY-MM-DD HH:MM:SS",
+      "duration_minutes": 120,
+      "notes": "Worked on API integration.",
+      "time_log_created_at": "YYYY-MM-DD HH:MM:SS",
+      "time_log_updated_at": "YYYY-MM-DD HH:MM:SS",
+      "job_card_title": "Develop User Authentication Module",
+      "project_id": 123,
+      "project_title": "E-commerce Platform Phase 1"
+    }
+    // ... more time logs
+  ]
+  ```
+- **Response (Error - 403 Forbidden / 5xx Server Error)**:
+  ```json
+  {
+    "error": "Error message (e.g., Forbidden: Only freelancers can view their time logs.)."
+  }
+  ```
+
+### 2. Get Freelancer's Job Cards
+- **Action**: `get_freelancer_job_cards`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_freelancer_job_cards`
+- **Authentication**: **Required** (User role must be 'freelancer').
+- **Response (Success - 200 OK)**: Array of job card objects assigned to the freelancer, including project title.
+  ```json
+  [
+    {
+      "id": 101,
+      "project_id": 123,
+      "title": "Develop User Authentication Module",
+      "description": "Implement registration and login functionality.",
+      "status": "in_progress",
+      "assigned_freelancer_id": 789, // Matches authenticated freelancer's ID
+      "estimated_hours": 16.0,
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "updated_at": "YYYY-MM-DD HH:MM:SS",
+      "project_title": "E-commerce Platform Phase 1"
+    }
+    // ... more job cards
+  ]
+  ```
+- **Response (Error - 403 Forbidden / 5xx Server Error)**:
+  ```json
+  {
+    "error": "Error message (e.g., Forbidden: Only freelancers can view their job cards.)."
+  }
+  ```
+
 ### 3. Get User Profile
 
 - **Action**: `get_user_profile`
@@ -98,6 +208,39 @@ Requests are typically made by appending a `?action=some_action` query parameter
   {
     "error": "Authorization header missing or malformed. Usage: Bearer <token>"
     // or "Invalid or expired session token. Please log in again."
+  }
+  ```
+
+### 4. Update Own User Profile
+- **Action**: `update_own_profile`
+- **Method**: `POST` (or `PUT`)
+- **URL**: `/backend/api.php?action=update_own_profile`
+- **Authentication**: **Required**.
+- **Request Body (JSON) - Include only fields to update**:
+  ```json
+  {
+    "name": "My Full Name Updated",
+    "phone_number": "123-456-7890",
+    "company": "My Company Inc.",
+    "experience": "My updated bio and experience details.",
+    "avatar_url": "https://example.com/myavatar.png",
+    "hourly_rate": 55.75, // Only applicable if user role is 'freelancer'
+    "skill_ids": [1, 5, 10] // Array of skill IDs. Existing skills will be replaced.
+  }
+  ```
+  *If `skill_ids` is provided, the user's existing skills will be replaced with this new set.*
+  *Username, email, and role cannot be changed via this endpoint.*
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "Profile updated successfully."
+    // or "No update data provided for profile or skills."
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., No data provided, Hourly rate cannot be negative, Invalid skill IDs, Failed to update profile)."
   }
   ```
 
@@ -318,6 +461,29 @@ These endpoints are typically restricted to users with the 'admin' role.
   ```json
   {
     "error": "Error message."
+  }
+  ```
+
+## Freelancer Specific Endpoints (Beyond Project/Application Management)
+
+### 1. Get Freelancer Dashboard Stats
+- **Action**: `get_freelancer_dashboard_stats`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_freelancer_dashboard_stats`
+- **Authentication**: **Required** (User role must be 'freelancer').
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "pending_applications_count": 5,
+    "active_projects_count": 2,
+    "total_minutes_logged": 7200,
+    "completed_projects_count": 10
+  }
+  ```
+- **Response (Error - 403 Forbidden / 5xx Server Error)**:
+  ```json
+  {
+    "error": "Error message (e.g., Forbidden: Only freelancers can access these statistics.)."
   }
   ```
 
@@ -1149,6 +1315,61 @@ Endpoints for managing and retrieving skills.
   ```json
   {
     "error": "Error message (e.g., Skill name is required, Skill already exists)."
+  }
+  ```
+
+### 3. Admin Update Skill
+- **Action**: `admin_update_skill`
+- **Method**: `POST` (or `PUT`)
+- **URL**: `/backend/api.php?action=admin_update_skill`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON)**:
+  ```json
+  {
+    "skill_id": 1,
+    "name": "Updated Skill Name"
+  }
+  ```
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "Skill updated successfully.",
+    "skill": {
+      "id": 1,
+      "name": "Updated Skill Name",
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "updated_at": "YYYY-MM-DD HH:MM:SS"
+    }
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Skill ID and name required, Skill not found, Name conflict)."
+  }
+  ```
+
+### 4. Admin Delete Skill
+- **Action**: `admin_delete_skill`
+- **Method**: `DELETE` (or `POST`)
+- **URL**: `/backend/api.php?action=admin_delete_skill&skill_id=<skill_id>` (if DELETE)
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON, if POST)**:
+  ```json
+  {
+    "skill_id": 1
+  }
+  ```
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "Skill ID X deleted successfully. Associated user and project skills were also removed."
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Skill ID required, Skill not found)."
   }
   ```
 
