@@ -2,24 +2,39 @@
 
 **Project Name**: Architex Axis Management Suite
 
-**Overview**:  
-This project is a management suite designed to facilitate project management, time tracking, and user interactions for different roles including admin, client, and freelancer.
+## 1. Project Goal
 
-**Core Requirements**:  
+The primary goal of the Architex Axis Management Suite is to provide a comprehensive platform for managing freelance projects, connecting clients, freelancers, and administrators. The current task is to adapt the existing React frontend to work with a PHP backend, enabling deployment on shared cPanel hosting.
 
-- User authentication and role-based access control.
-- Dashboard for different user roles (Admin, Client, Freelancer).
-- Project management and time tracking functionalities.
-- Messaging and notification systems.
-- User profile management.
+## 2. Core Requirements
 
-**Goals**:  
+*   **User Roles:** Support for distinct user roles (Admin, Client, Freelancer) with role-specific dashboards and functionalities.
+*   **Project Management:** Allow clients to post projects, freelancers to apply, and admins to oversee project lifecycles.
+*   **Communication:** Facilitate messaging between users.
+*   **Time Tracking & Billing:** Enable freelancers to log time and admins to generate reports (future scope, but consider in architecture).
+*   **Deployment:** The system must be deployable on a standard shared cPanel hosting environment.
 
-- To provide a comprehensive tool for managing projects and time logs.
-- To ensure secure and efficient user interaction based on roles.
-- To streamline administrative tasks and reporting.
+## 3. Key Success Metrics
 
-**Scope**:  
-The application will cater to multiple user types with tailored dashboards and functionalities specific to their roles within the system.
+*   Successful migration of the frontend to communicate with the PHP backend.
+*   All existing frontend functionalities remain operational after the migration.
+*   The application is deployable and runs smoothly on a cPanel server.
+*   Clear and maintainable codebase for both frontend and backend.
 
-**Date Created**: 2025-06-22
+## 4. Scope
+
+*   **In Scope (Current Task):**
+    *   Modify the React frontend (`apiService.ts` and related components) to make API calls to a PHP backend.
+    *   Develop PHP API endpoints (`api.php`) to handle all requests currently managed by the presumed Node.js/Express backend.
+    *   Ensure database connectivity (`db_connect.php`) and interaction for all features.
+    *   Configure the project for cPanel deployment (e.g., `.htaccess` for routing, build process adjustments).
+    *   Implement basic authentication (e.g., JWT) between frontend and PHP backend.
+*   **Out of Scope (Current Task, but for future consideration):**
+    *   Advanced real-time features (e.g., live chat updates beyond basic polling).
+    *   Complex reporting and analytics.
+    *   Payment gateway integrations.
+
+## 5. Stakeholders
+
+*   Development Team (Cline)
+*   Project Owner/User

@@ -162,6 +162,11 @@ test('handleCreateProject should call addToast with error on failed API call', a
     // Ensure fetchProjectDetailsAPI returns the specific project being edited for this test
     (apiService.fetchProjectDetailsAPI as jest.Mock).mockResolvedValueOnce(projectToEdit);
     (apiService.updateProjectAPI as jest.Mock).mockResolvedValueOnce({ message: 'Project updated' });
+test('handleUpdateProjectDetails should call addToast with success on successful API call', async () => {
+  (apiService.fetchProjectsAPI as jest.Mock).mockResolvedValueOnce([
+    { id: 1, title: 'Test Project to Edit', description: 'Initial Description', status: ProjectStatus.OPEN, client_id: 1, client_username: 'Client A', freelancer_id: null, freelancer_username: null, created_at: new Date().toISOString(), skills_required: [] }
+  ]);
+  (apiService.updateProjectAPI as jest.Mock).mockResolvedValueOnce({ message: 'Project updated' });
 
   renderProjectManagement();
   await screen.findByText('Test Project to Edit');
@@ -194,6 +199,12 @@ test('handleCreateProject should call addToast with error on failed API call', a
     // Ensure fetchProjectDetailsAPI returns the specific project for this test
     (apiService.fetchProjectDetailsAPI as jest.Mock).mockResolvedValueOnce(projectToEditFail);
     (apiService.updateProjectAPI as jest.Mock).mockRejectedValueOnce(new Error(errorMessage));
+test('handleUpdateProjectDetails should call addToast with error on failed API call', async () => {
+  const errorMessage = 'Update Failed';
+  (apiService.fetchProjectsAPI as jest.Mock).mockResolvedValueOnce([
+    { id: 1, title: 'Test Project Update Fail', description: 'Desc', status: ProjectStatus.OPEN, client_id: 1, skills_required: [] }
+  ]);
+  (apiService.updateProjectAPI as jest.Mock).mockRejectedValueOnce(new Error(errorMessage));
 
     renderProjectManagement();
     await screen.findByText('Test Project Update Fail');
