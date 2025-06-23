@@ -217,6 +217,25 @@ export const fetchUserProfileAPI = (): Promise<UserProfileResponse> => {
   }, true); // Pass true for requiresAuth
 };
 
+// Payload for updating own user profile
+export interface UpdateOwnProfilePayload {
+  name?: string | null;
+  phone_number?: string | null;
+  company?: string | null;
+  experience?: string | null;
+  avatar_url?: string | null;
+  hourly_rate?: number | null; // Relevant only if user is freelancer
+  skill_ids?: number[]; // For managing own skills
+}
+
+export const updateOwnProfileAPI = (payload: UpdateOwnProfilePayload): Promise<AdminActionResponse> => { // AdminActionResponse is generic {message: string}
+  return apiFetch<AdminActionResponse>(`/api.php?action=update_own_profile`, {
+    method: 'POST', // Or 'PUT'
+    body: JSON.stringify(payload),
+  }, true); // Requires Auth
+};
+
+
 // --- Admin Service ---
 // (Could also be placed in User Service, but Admin Service makes it distinct)
 
@@ -1000,6 +1019,39 @@ export const adminAddSkillAPI = (payload: AdminAddSkillPayload): Promise<AdminAd
     body: JSON.stringify(payload),
   }, true); // Requires Admin Auth
 };
+
+// New adminUpdateSkillAPI
+export interface AdminUpdateSkillPayload {
+  skill_id: number;
+  name: string;
+}
+export interface AdminUpdateSkillResponse {
+  message: string;
+  skill: Skill; // Returns the updated skill object
+}
+export const adminUpdateSkillAPI = (payload: AdminUpdateSkillPayload): Promise<AdminUpdateSkillResponse> => {
+  return apiFetch<AdminUpdateSkillResponse>(`/api.php?action=admin_update_skill`, {
+    method: 'POST', // Or 'PUT'
+    body: JSON.stringify(payload),
+  }, true); // Requires Admin Auth
+};
+
+// New adminDeleteSkillAPI
+export interface AdminDeleteSkillPayload { // Can be by skill_id in URL or payload
+  skill_id?: number;
+}
+export interface AdminDeleteSkillResponse {
+  message: string;
+}
+export const adminDeleteSkillAPI = (skillId: number, payload?: AdminDeleteSkillPayload): Promise<AdminDeleteSkillResponse> => {
+  // Assuming skillId in URL for DELETE, or in payload for POST
+  const effectivePayload = payload || { skill_id: skillId };
+  return apiFetch<AdminDeleteSkillResponse>(`/api.php?action=admin_delete_skill&skill_id=${skillId}`, { // Example with skill_id in query for DELETE method
+    method: 'DELETE', // Or 'POST' if using payload for ID
+    // body: JSON.stringify(effectivePayload), // Uncomment if using POST and payload for ID
+  }, true); // Requires Admin Auth
+};
+
 
 // --- Dashboard Stats API ---
 
