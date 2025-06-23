@@ -39,35 +39,10 @@ const ClientProjectTimeLogPage: React.FC = () => {
       setIsLoadingProjects(true);
       setError(null);
       try {
-        const [fetchedProjectsRaw, fetchedUsers] = await Promise.all([
-          fetchProjectsAPI(),
-          fetchUsersAPI(UserRole.FREELANCER)
+        const [fetchedProjects, fetchedUsers] = await Promise.all([
+          fetchProjectsAPI({ clientId: String(clientId) }),
+          fetchUsersAPI(UserRole.FREELANCER) // Fetch only freelancers
         ]);
-        // Map ProjectPHPResponse[] to Project[]
-        const fetchedProjects = (fetchedProjectsRaw as any[]).map((p) => ({
-          id: String(p.id),
-          title: p.title,
-          description: p.description,
-          budget: p.budget ?? 0,
-          currency: p.currency ?? 'ZAR',
-          deadline: p.deadline ?? '',
-          clientId: String(p.client_id ?? ''),
-          clientName: p.client_username ?? '',
-          status: p.status,
-          skillsRequired: p.skills_required ?? [],
-          createdAt: p.created_at ?? '',
-          adminCreatorId: p.adminCreatorId ?? undefined,
-          freelancerId: p.freelancer_id ? String(p.freelancer_id) : undefined,
-          assignedFreelancerId: p.assignedFreelancerId ?? undefined,
-          assignedFreelancerName: p.freelancer_username ?? undefined,
-          jobCards: p.jobCards ?? [],
-          isArchived: p.isArchived ?? false,
-          updatedAt: p.updated_at ?? '',
-          paymentType: p.paymentType ?? 'fixed',
-          experienceLevel: p.experienceLevel ?? 'beginner',
-          duration: p.duration ?? '',
-          isFeatured: p.isFeatured ?? false,
-        }));
         setProjects(fetchedProjects);
         setUsers(fetchedUsers);
       } catch (err) {

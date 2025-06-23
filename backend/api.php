@@ -151,7 +151,7 @@ if ($action === 'register_user' && $method === 'POST') {
     $stmt_check->close();
 
     $hashed_password = password_hash($password, PASSWORD_BCRYPT);
-    $stmt = $conn->prepare("INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)");
+    $stmt = $conn->prepare("INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)");
     if ($stmt === false) {
         send_json_response(500, ['error' => 'Server error: Could not prepare statement for user registration.']);
     }
@@ -175,7 +175,7 @@ if ($action === 'register_user' && $method === 'POST') {
         send_json_response(400, ['error' => 'Email and password are required.']);
     }
 
-    $stmt = $conn->prepare("SELECT id, username, email, role, password FROM users WHERE email = ?");
+    $stmt = $conn->prepare("SELECT id, username, email, role, password_hash FROM users WHERE email = ?");
     if ($stmt === false) {
         send_json_response(500, ['error' => 'Server error: Could not prepare statement for login.']);
     }
@@ -185,7 +185,7 @@ if ($action === 'register_user' && $method === 'POST') {
     $user = $result->fetch_assoc();
     $stmt->close();
 
-    if ($user && password_verify($password, $user['password'])) {
+    if ($user && password_verify($password, $user['password_hash'])) {
         $session_token = bin2hex(random_bytes(32));
         $expires_at = date('Y-m-d H:i:s', strtotime('+1 day'));
 
@@ -220,6 +220,151 @@ if ($action === 'register_user' && $method === 'POST') {
     send_json_response(200, $authenticated_user);
 
 }
+
+// NEW: User - Update Own Profile
+elseif ($action === 'update_own_profile' && ($method === 'POST' || $method === 'PUT')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_to_update = (int)$authenticated_user['id'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (empty($data) && !isset($data['skill_ids'])) { // Check if $data is empty OR only skill_ids is set
+        send_json_response(400, ['error' => 'No data provided for update. If only updating skills, ensure skill_ids is provided.']);
+    }
+
+    $conn->begin_transaction();
+    try {
+        $fields_to_update_sql = [];
+        $params_for_bind = [];
+        $param_types = "";
+
+        // Fetch current user data for validation if necessary (e.g. if username/email were changeable here)
+        // For this endpoint, we assume username and email are not changed by the user themselves here.
+        // If they were, uniqueness checks like in admin_update_user_details would be needed.
+
+        // Optional String Fields (name, phone_number, company, avatar_url)
+        foreach (['name', 'phone_number', 'company', 'avatar_url'] as $field) {
+            if (array_key_exists($field, $data)) { // Use array_key_exists to allow setting to null or empty string
+                $fields_to_update_sql[] = "$field = ?"; $params_for_bind[] = $data[$field]; $param_types .= "s";
+            }
+        }
+        // Optional TEXT Field (experience)
+        if (array_key_exists('experience', $data)) {
+            $fields_to_update_sql[] = "experience = ?"; $params_for_bind[] = $data['experience']; $param_types .= "s";
+        }
+        // Optional DECIMAL Field (hourly_rate) - Only if user is a freelancer
+        if ($authenticated_user['role'] === 'freelancer' && array_key_exists('hourly_rate', $data)) {
+            $hourlyRate = $data['hourly_rate'] === null || $data['hourly_rate'] === '' ? null : (float)$data['hourly_rate'];
+            if ($hourlyRate !== null && $hourlyRate < 0) {throw new Exception('Hourly rate cannot be negative.');}
+            $fields_to_update_sql[] = "hourly_rate = ?"; $params_for_bind[] = $hourlyRate; $param_types .= "d";
+        }
+
+        $user_table_updated = false;
+        if (!empty($fields_to_update_sql)) {
+            $fields_to_update_sql[] = "updated_at = NOW()"; // Always update this
+
+            $sql_update = "UPDATE users SET " . implode(", ", $fields_to_update_sql) . " WHERE id = ?";
+            $current_params_for_user = $params_for_bind; // Use a new array for user table params
+            $current_params_for_user[] = $user_id_to_update;
+            $current_types_for_user = $param_types . "i";
+
+            $stmt_update = $conn->prepare($sql_update);
+            if ($stmt_update === false) {
+                throw new Exception('Failed to prepare user profile update statement: ' . $conn->error);
+            }
+            if (strlen($current_types_for_user) !== count($current_params_for_user)){
+                 throw new Exception('Param count mismatch for user profile update. Types: '.$current_types_for_user.' Params: '.count($current_params_for_user));
+            }
+            if (!empty($current_types_for_user)) {
+                $stmt_update->bind_param($current_types_for_user, ...$current_params_for_user);
+            }
+
+            if (!$stmt_update->execute()) {
+                throw new Exception('Failed to update user profile: ' . $stmt_update->error);
+            }
+            if($stmt_update->affected_rows > 0) $user_table_updated = true;
+            $stmt_update->close();
+        }
+
+        // Handle skills update (similar to admin_update_user_details)
+        $skills_table_updated = false;
+        if (isset($data['skill_ids']) && is_array($data['skill_ids'])) {
+            $skill_ids = array_map('intval', $data['skill_ids']); // Sanitize to integers
+
+            // Delete existing skills for the user
+            $stmt_delete_skills = $conn->prepare("DELETE FROM user_skills WHERE user_id = ?");
+            if (!$stmt_delete_skills) { throw new Exception('Failed to prepare deleting user skills. ' . $conn->error); }
+            $stmt_delete_skills->bind_param("i", $user_id_to_update);
+            if (!$stmt_delete_skills->execute()) { throw new Exception('Failed to delete user skills. ' . $stmt_delete_skills->error); }
+            // We consider skills updated if the key 'skill_ids' is present, even if it's empty (means remove all)
+            // or if rows were deleted or inserted.
+            if ($stmt_delete_skills->affected_rows > 0 || !empty($skill_ids)) {
+                $skills_table_updated = true;
+            }
+            $stmt_delete_skills->close();
+
+            // Add new skills if any
+            if (!empty($skill_ids)) {
+                // Optional: Validate if skill IDs exist in the `skills` table
+                $placeholders = implode(',', array_fill(0, count($skill_ids), '?'));
+                $stmt_check_skills = $conn->prepare("SELECT id FROM skills WHERE id IN ($placeholders)");
+                if (!$stmt_check_skills) { throw new Exception('Failed to prepare skill ID validation. ' . $conn->error); }
+                $types_skills_check = str_repeat('i', count($skill_ids));
+                $stmt_check_skills->bind_param($types_skills_check, ...$skill_ids);
+                if (!$stmt_check_skills->execute()) { throw new Exception('Failed to execute skill ID validation. ' . $stmt_check_skills->error); }
+                $valid_skill_result = $stmt_check_skills->get_result();
+                if ($valid_skill_result->num_rows !== count($skill_ids)) {
+                    throw new Exception('One or more provided skill IDs are invalid.');
+                }
+                $stmt_check_skills->close();
+
+
+                $sql_insert_skill = "INSERT INTO user_skills (user_id, skill_id) VALUES (?, ?)";
+                $stmt_insert_skill = $conn->prepare($sql_insert_skill);
+                if (!$stmt_insert_skill) { throw new Exception('Failed to prepare adding user skill. ' . $conn->error); }
+
+                $inserted_skill_rows = 0;
+                foreach ($skill_ids as $skill_id) {
+                    $stmt_insert_skill->bind_param("ii", $user_id_to_update, $skill_id);
+                    if (!$stmt_insert_skill->execute()) {
+                        // Check for duplicate entry error (MySQL error code 1062)
+                        if ($conn->errno === 1062) {
+                            // Ignore duplicate skill entry, or log it as a warning
+                            error_log("Attempted to insert duplicate skill_id {$skill_id} for user_id {$user_id_to_update}. Skipped.");
+                        } else {
+                            throw new Exception('Failed to add skill ID ' . $skill_id . '. ' . $stmt_insert_skill->error);
+                        }
+                    }
+                    if ($stmt_insert_skill->affected_rows > 0) $inserted_skill_rows++;
+                }
+                $stmt_insert_skill->close();
+                if ($inserted_skill_rows > 0) $skills_table_updated = true;
+            }
+        }
+
+        if (!$user_table_updated && !$skills_table_updated && !(isset($data['skill_ids']) && empty($data['skill_ids']))) {
+            // This condition means no user table fields were in $data to update (so $fields_to_update_sql was empty)
+            // AND skill_ids was not provided at all (so no attempt to clear/update skills)
+            // OR skill_ids was provided but was identical to existing skills (not easily checkable here without fetching old skills)
+            if (empty($fields_to_update_sql) && !isset($data['skill_ids'])) {
+                 $conn->rollback(); // Nothing to commit
+                 send_json_response(200, ['message' => 'No update data provided for profile or skills.']);
+            }
+        }
+
+        $conn->commit();
+        send_json_response(200, ['message' => 'Profile updated successfully.']);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        if (strpos($e->getMessage(), 'Duplicate entry') !== false || strpos($e->getMessage(), 'already exists') !== false) {
+            send_json_response(409, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response(500, ['error' => 'Failed to update profile: ' . $e->getMessage()]);
+        }
+    }
+}
+// END NEW: User - Update Own Profile
+
 
 // NEW: Admin - Get All Users
 elseif ($action === 'get_all_users' && $method === 'GET') {
@@ -372,15 +517,17 @@ elseif ($action === 'admin_create_user' && $method === 'POST') {
     // And these need to be added to db_connect.php comments for users table.
     // (This schema update is outside this subtask's direct instructions but implied by wanting full user edits)
 
-    $sql_insert_user = "INSERT INTO users (username, email, password, role, name, phone_number, company, experience, hourly_rate, avatar_url, created_at, updated_at)
+    $sql_insert_user = "INSERT INTO users (username, email, password_hash, role, name, phone_number, company, experience, hourly_rate, avatar_url, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
     $stmt_insert = $conn->prepare($sql_insert_user);
     if ($stmt_insert === false) {
         send_json_response(500, ['error' => 'Server error: Could not prepare statement for user creation. ' . $conn->error]);
     }
-    // Types: s (username), s (email), s (password), s (role), s (name), s (phoneNumber), s (company), s (experience), d (hourlyRate), s (avatarUrl)
+    // Types: s (username), s (email), s (password_hash), s (role), s (name), s (phoneNumber), s (company), s (experience), d (hourlyRate), s (avatarUrl)
+    // Note: The actual column name for password hash is `password_hash` as per schema.
+    // The variable $hashed_password contains the hash.
     $stmt_insert->bind_param("ssssssssds",
-        $username, $email, $hashed_password, $role,
+        $username, $email, $hashed_password, $role, // $hashed_password is correct here.
         $name, $phoneNumber, $company, $experience, $hourlyRate, $avatarUrl
     );
 
@@ -943,6 +1090,397 @@ elseif ($action === 'get_all_skills' && $method === 'GET') {
     send_json_response(200, $skills_list);
 
 } // END NEW: Get All Skills
+
+// NEW: Admin Add Skill
+elseif ($action === 'admin_add_skill' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can add skills.']);
+    }
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $skill_name = trim($data['name'] ?? '');
+
+    if (empty($skill_name)) {
+        send_json_response(400, ['error' => 'Skill name is required.']);
+    }
+
+    // Check if skill already exists
+    $stmt_check = $conn->prepare("SELECT id FROM skills WHERE name = ?");
+    $stmt_check->bind_param("s", $skill_name);
+    $stmt_check->execute();
+    if ($stmt_check->get_result()->num_rows > 0) {
+        send_json_response(409, ['error' => "Skill '{$skill_name}' already exists."]);
+    }
+    $stmt_check->close();
+
+    $stmt_insert = $conn->prepare("INSERT INTO skills (name) VALUES (?)");
+    $stmt_insert->bind_param("s", $skill_name);
+    if ($stmt_insert->execute()) {
+        $new_skill_id = $stmt_insert->insert_id;
+        $stmt_get_new_skill = $conn->prepare("SELECT id, name, created_at FROM skills WHERE id = ?");
+        $stmt_get_new_skill->bind_param("i", $new_skill_id);
+        $stmt_get_new_skill->execute();
+        $new_skill_data = $stmt_get_new_skill->get_result()->fetch_assoc();
+        $stmt_get_new_skill->close();
+        send_json_response(201, ['message' => 'Skill added successfully.', 'skill' => $new_skill_data]);
+    } else {
+        send_json_response(500, ['error' => 'Failed to add skill: ' . $stmt_insert->error]);
+    }
+    $stmt_insert->close();
+} // END NEW: Admin Add Skill
+
+// NEW: Admin Update Skill
+elseif ($action === 'admin_update_skill' && ($method === 'POST' || $method === 'PUT')) {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can update skills.']);
+    }
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $skill_id = isset($data['skill_id']) ? (int)$data['skill_id'] : null;
+    $new_skill_name = trim($data['name'] ?? '');
+
+    if (!$skill_id || empty($new_skill_name)) {
+        send_json_response(400, ['error' => 'Skill ID and new name are required.']);
+    }
+
+    // Check if skill exists
+    $stmt_check_exist = $conn->prepare("SELECT name FROM skills WHERE id = ?");
+    $stmt_check_exist->bind_param("i", $skill_id);
+    $stmt_check_exist->execute();
+    $result_exist = $stmt_check_exist->get_result();
+    if ($result_exist->num_rows === 0) {
+        send_json_response(404, ['error' => "Skill with ID {$skill_id} not found."]);
+    }
+    $current_skill = $result_exist->fetch_assoc();
+    $stmt_check_exist->close();
+
+    // Check if new name conflicts with another skill
+    if (strtolower($new_skill_name) !== strtolower($current_skill['name'])) {
+        $stmt_check_conflict = $conn->prepare("SELECT id FROM skills WHERE name = ? AND id != ?");
+        $stmt_check_conflict->bind_param("si", $new_skill_name, $skill_id);
+        $stmt_check_conflict->execute();
+        if ($stmt_check_conflict->get_result()->num_rows > 0) {
+            send_json_response(409, ['error' => "Another skill with the name '{$new_skill_name}' already exists."]);
+        }
+        $stmt_check_conflict->close();
+    }
+
+    $stmt_update = $conn->prepare("UPDATE skills SET name = ?, updated_at = NOW() WHERE id = ?");
+    $stmt_update->bind_param("si", $new_skill_name, $skill_id);
+    if ($stmt_update->execute()) {
+        if ($stmt_update->affected_rows > 0) {
+            $stmt_get_updated_skill = $conn->prepare("SELECT id, name, created_at, updated_at FROM skills WHERE id = ?");
+            $stmt_get_updated_skill->bind_param("i", $skill_id);
+            $stmt_get_updated_skill->execute();
+            $updated_skill_data = $stmt_get_updated_skill->get_result()->fetch_assoc();
+            $stmt_get_updated_skill->close();
+            send_json_response(200, ['message' => 'Skill updated successfully.', 'skill' => $updated_skill_data]);
+        } else {
+            send_json_response(200, ['message' => 'Skill name was not changed or skill not found.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to update skill: ' . $stmt_update->error]);
+    }
+    $stmt_update->close();
+} // END NEW: Admin Update Skill
+
+// NEW: Admin Delete Skill
+elseif ($action === 'admin_delete_skill' && ($method === 'POST' || $method === 'DELETE')) {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can delete skills.']);
+    }
+
+    $skill_id = null;
+    if ($method === 'DELETE') {
+        $skill_id = isset($_GET['skill_id']) ? (int)$_GET['skill_id'] : null;
+    } elseif ($method === 'POST') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $skill_id = isset($data['skill_id']) ? (int)$data['skill_id'] : (isset($_GET['skill_id']) ? (int)$_GET['skill_id'] : null);
+    }
+
+    if (!$skill_id) {
+        send_json_response(400, ['error' => 'Skill ID is required.']);
+    }
+
+    // Check if skill exists before attempting delete
+    $stmt_check = $conn->prepare("SELECT id FROM skills WHERE id = ?");
+    $stmt_check->bind_param("i", $skill_id);
+    $stmt_check->execute();
+    if ($stmt_check->get_result()->num_rows === 0) {
+        send_json_response(404, ['error' => "Skill with ID {$skill_id} not found."]);
+    }
+    $stmt_check->close();
+
+    // ON DELETE CASCADE in user_skills and project_skills will handle related deletions.
+    $stmt_delete = $conn->prepare("DELETE FROM skills WHERE id = ?");
+    $stmt_delete->bind_param("i", $skill_id);
+    if ($stmt_delete->execute()) {
+        if ($stmt_delete->affected_rows > 0) {
+            send_json_response(200, ['message' => "Skill ID {$skill_id} deleted successfully. Associated user and project skills were also removed."]);
+        } else {
+            // Should be caught by the check above, but as a fallback.
+            send_json_response(404, ['message' => 'Skill not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete skill: ' . $stmt_delete->error]);
+    }
+    $stmt_delete->close();
+} // END NEW: Admin Delete Skill
+
+// NEW: Get Freelancer Dashboard Stats
+elseif ($action === 'get_freelancer_dashboard_stats' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'freelancer') {
+        send_json_response(403, ['error' => 'Forbidden: Only freelancers can access these statistics.']);
+    }
+    $freelancer_id = (int)$authenticated_user['id'];
+    $stats = [];
+
+    // Number of active applications (status = 'pending')
+    $stmt_pending_apps = $conn->prepare("SELECT COUNT(*) AS count FROM applications WHERE freelancer_id = ? AND status = 'pending'");
+    $stmt_pending_apps->bind_param("i", $freelancer_id);
+    $stmt_pending_apps->execute();
+    $stats['pending_applications_count'] = (int)$stmt_pending_apps->get_result()->fetch_assoc()['count'];
+    $stmt_pending_apps->close();
+
+    // Number of assigned/in-progress projects
+    // Define active project statuses for a freelancer
+    $active_project_statuses = ['in_progress', 'assigned']; // Add other relevant statuses if any
+    $status_placeholders = implode(',', array_fill(0, count($active_project_statuses), '?'));
+    $sql_active_projects = "SELECT COUNT(*) AS count FROM projects WHERE freelancer_id = ? AND status IN ({$status_placeholders})";
+    $stmt_active_projects = $conn->prepare($sql_active_projects);
+    $types_active_projects = 'i' . str_repeat('s', count($active_project_statuses));
+    $params_active_projects = array_merge([$freelancer_id], $active_project_statuses);
+    $stmt_active_projects->bind_param($types_active_projects, ...$params_active_projects);
+    $stmt_active_projects->execute();
+    $stats['active_projects_count'] = (int)$stmt_active_projects->get_result()->fetch_assoc()['count'];
+    $stmt_active_projects->close();
+
+    // Total time logged (all time, in minutes)
+    $stmt_total_time = $conn->prepare("SELECT SUM(duration_minutes) AS total_minutes FROM time_logs WHERE user_id = ?");
+    $stmt_total_time->bind_param("i", $freelancer_id);
+    $stmt_total_time->execute();
+    $total_minutes_result = $stmt_total_time->get_result()->fetch_assoc();
+    $stats['total_minutes_logged'] = $total_minutes_result['total_minutes'] ? (int)$total_minutes_result['total_minutes'] : 0;
+    $stmt_total_time->close();
+
+    // Number of completed projects where this freelancer was assigned
+    $stmt_completed_projects = $conn->prepare("SELECT COUNT(*) AS count FROM projects WHERE freelancer_id = ? AND status = 'completed'");
+    $stmt_completed_projects->bind_param("i", $freelancer_id);
+    $stmt_completed_projects->execute();
+    $stats['completed_projects_count'] = (int)$stmt_completed_projects->get_result()->fetch_assoc()['count'];
+    $stmt_completed_projects->close();
+
+    send_json_response(200, $stats);
+} // END NEW: Get Freelancer Dashboard Stats
+
+// NEW: Get Freelancer's Job Cards
+elseif ($action === 'get_freelancer_job_cards' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'freelancer') {
+        send_json_response(403, ['error' => 'Forbidden: Only freelancers can view their job cards.']);
+    }
+    $freelancer_id = (int)$authenticated_user['id'];
+
+    // Fetch job cards directly assigned to the freelancer
+    // Optionally, also consider job cards from projects where the freelancer is the main assignee,
+    // even if the job card itself is unassigned or assigned to them.
+    // For now, focusing on direct assignment or assignment to them on projects they lead.
+    $sql = "SELECT
+                jc.id, jc.project_id, jc.title, jc.description, jc.status,
+                jc.assigned_freelancer_id, jc.estimated_hours,
+                jc.created_at, jc.updated_at,
+                p.title AS project_title
+            FROM job_cards jc
+            JOIN projects p ON jc.project_id = p.id
+            WHERE jc.assigned_freelancer_id = ?
+               OR (p.freelancer_id = ? AND jc.assigned_freelancer_id IS NULL)
+               OR (p.freelancer_id = ? AND jc.assigned_freelancer_id = p.freelancer_id)
+            ORDER BY p.title ASC, jc.created_at ASC";
+
+    $stmt = $conn->prepare($sql);
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for freelancer job cards: ' . $conn->error]);
+    }
+    // Bind freelancer_id three times for the OR conditions
+    $stmt->bind_param("iii", $freelancer_id, $freelancer_id, $freelancer_id);
+
+    if (!$stmt->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for freelancer job cards: ' . $stmt->error]);
+    }
+
+    $result = $stmt->get_result();
+    $job_cards_list = [];
+    while ($row = $result->fetch_assoc()) {
+        if ($row['estimated_hours'] !== null) {
+            $row['estimated_hours'] = (float)$row['estimated_hours'];
+        }
+        if ($row['assigned_freelancer_id'] !== null) {
+            $row['assigned_freelancer_id'] = (int)$row['assigned_freelancer_id'];
+        }
+        // Ensure project_id is int
+        $row['project_id'] = (int)$row['project_id'];
+        $job_cards_list[] = $row;
+    }
+    $stmt->close();
+
+    send_json_response(200, $job_cards_list);
+} // END NEW: Get Freelancer's Job Cards
+
+// NEW: Get Freelancer's Time Logs
+elseif ($action === 'get_freelancer_time_logs' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'freelancer') {
+        send_json_response(403, ['error' => 'Forbidden: Only freelancers can view their time logs.']);
+    }
+    $freelancer_id = (int)$authenticated_user['id'];
+
+    // Filters
+    $project_id_filter = isset($_GET['project_id']) ? (int)$_GET['project_id'] : null;
+    $job_card_id_filter = isset($_GET['job_card_id']) ? (int)$_GET['job_card_id'] : null;
+    $date_from_filter = isset($_GET['date_from']) ? $_GET['date_from'] : null; // Expect YYYY-MM-DD
+    $date_to_filter = isset($_GET['date_to']) ? $_GET['date_to'] : null;       // Expect YYYY-MM-DD
+
+    $sql = "SELECT
+                tl.id, tl.job_card_id, tl.user_id,
+                tl.start_time, tl.end_time, tl.duration_minutes, tl.notes,
+                tl.created_at AS time_log_created_at, tl.updated_at AS time_log_updated_at,
+                jc.title AS job_card_title,
+                p.id AS project_id,
+                p.title AS project_title
+            FROM time_logs tl
+            JOIN job_cards jc ON tl.job_card_id = jc.id
+            JOIN projects p ON jc.project_id = p.id
+            WHERE tl.user_id = ?";
+
+    $params = [$freelancer_id];
+    $types = "i";
+
+    if ($project_id_filter) {
+        $sql .= " AND p.id = ?";
+        $params[] = $project_id_filter;
+        $types .= "i";
+    }
+    if ($job_card_id_filter) {
+        $sql .= " AND jc.id = ?";
+        $params[] = $job_card_id_filter;
+        $types .= "i";
+    }
+    if ($date_from_filter) {
+        // Assuming start_time is a DATETIME or TIMESTAMP field
+        $sql .= " AND DATE(tl.start_time) >= ?";
+        $params[] = $date_from_filter;
+        $types .= "s";
+    }
+    if ($date_to_filter) {
+        $sql .= " AND DATE(tl.start_time) <= ?"; // Could also use end_time, depending on desired logic
+        $params[] = $date_to_filter;
+        $types .= "s";
+    }
+
+    $sql .= " ORDER BY tl.start_time DESC";
+
+    $stmt = $conn->prepare($sql);
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for freelancer time logs: ' . $conn->error]);
+    }
+    if (!empty($types)) {
+        $stmt->bind_param($types, ...$params);
+    }
+
+    if (!$stmt->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for freelancer time logs: ' . $stmt->error]);
+    }
+
+    $result = $stmt->get_result();
+    $time_logs_list = [];
+    while ($row = $result->fetch_assoc()) {
+        $row['duration_minutes'] = (int)$row['duration_minutes'];
+        // Ensure IDs are integers
+        $row['id'] = (int)$row['id'];
+        $row['job_card_id'] = (int)$row['job_card_id'];
+        $row['user_id'] = (int)$row['user_id'];
+        $row['project_id'] = (int)$row['project_id'];
+        $time_logs_list[] = $row;
+    }
+    $stmt->close();
+
+    send_json_response(200, $time_logs_list);
+} // END NEW: Get Freelancer's Time Logs
+
+// NEW: Project File Management - Get Project Files
+elseif ($action === 'get_project_files' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $project_id = isset($_GET['project_id']) ? (int)$_GET['project_id'] : null;
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required.']);
+    }
+
+    // Authorization: Check if user can view this project (client owner, assigned freelancer, or admin)
+    $stmt_proj_check = $conn->prepare("SELECT client_id, freelancer_id FROM projects WHERE id = ?");
+    if (!$stmt_proj_check) { send_json_response(500, ['error' => 'Server error preparing project check.']); }
+    $stmt_proj_check->bind_param("i", $project_id);
+    if (!$stmt_proj_check->execute()) { send_json_response(500, ['error' => 'Server error executing project check.']); }
+    $result_proj_check = $stmt_proj_check->get_result();
+    if ($result_proj_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found.']);
+    }
+    $project_data_auth = $result_proj_check->fetch_assoc();
+    $stmt_proj_check->close();
+
+    $can_view = false;
+    if ($authenticated_user['role'] === 'admin' ||
+        (int)$project_data_auth['client_id'] === (int)$authenticated_user['id'] ||
+        ($project_data_auth['freelancer_id'] !== null && (int)$project_data_auth['freelancer_id'] === (int)$authenticated_user['id'])) {
+        $can_view = true;
+    }
+
+    if (!$can_view) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to view files for this project.']);
+    }
+
+    // Assuming a `project_files` table exists with columns: id, project_id, uploader_id, file_name, file_path, file_type, file_size, uploaded_at
+    // And `users` table for uploader_username
+    $sql = "SELECT
+                pf.id, pf.project_id, pf.uploader_id, pf.file_name, pf.file_path,
+                pf.file_type, pf.file_size, pf.uploaded_at,
+                u.username as uploader_username
+            FROM project_files pf
+            JOIN users u ON pf.uploader_id = u.id
+            WHERE pf.project_id = ?
+            ORDER BY pf.uploaded_at DESC";
+
+    $stmt_files = $conn->prepare($sql);
+    if ($stmt_files === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for project files: ' . $conn->error]);
+    }
+    $stmt_files->bind_param("i", $project_id);
+    if (!$stmt_files->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for project files: ' . $stmt_files->error]);
+    }
+
+    $result_files = $stmt_files->get_result();
+    $files_list = [];
+    while ($row = $result_files->fetch_assoc()) {
+        // Potentially construct a public URL for file_path if it's stored as a relative server path
+        // For now, returning the raw path.
+        $row['id'] = (int)$row['id'];
+        $row['project_id'] = (int)$row['project_id'];
+        $row['uploader_id'] = (int)$row['uploader_id'];
+        $row['file_size'] = (int)$row['file_size'];
+        // Example: $row['url'] = "/download_file.php?file_id=" . $row['id']; // If implementing a download script
+        $files_list[] = $row;
+    }
+    $stmt_files->close();
+    send_json_response(200, $files_list);
+
+} // END NEW: Get Project Files
+
+
 // --- END NEW User Authentication API ---
 
 // NEW: Get Client's Own Projects

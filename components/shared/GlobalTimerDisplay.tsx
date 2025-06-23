@@ -17,29 +17,32 @@ const GlobalTimerDisplay: React.FC = () => {
 
   useEffect(() => {
     if (activeTimerInfo) {
-      const calculateElapsedTime = () => {
-        const now = new Date();
-        const start = new Date(activeTimerInfo.startTime);
-        setElapsedTime(Math.floor((now.getTime() - start.getTime()) / 1000));
+      // Function to calculate and set elapsed time
+      const updateCurrentElapsedTime = () => {
+        const now = new Date().getTime();
+        const start = new Date(activeTimerInfo.startTime).getTime();
+        setElapsedTime(Math.max(0, Math.floor((now - start) / 1000)));
       };
 
-      calculateElapsedTime(); // Initial calculation
-      intervalRef.current = window.setInterval(calculateElapsedTime, 1000); // Use window.setInterval
+      updateCurrentElapsedTime(); // Calculate and set immediately when timer info is active
+
+      const intervalId = window.setInterval(updateCurrentElapsedTime, 1000);
+      intervalRef.current = intervalId;
       reminderShownRef.current = {}; // Reset reminders when a new timer starts
+
+      return () => {
+        window.clearInterval(intervalId);
+        intervalRef.current = null;
+      };
     } else {
-      if (intervalRef.current !== null) { // Check for null before clearing
-        window.clearInterval(intervalRef.current); // Use window.clearInterval
+      // Timer is not active
+      if (intervalRef.current !== null) {
+        window.clearInterval(intervalRef.current);
         intervalRef.current = null;
       }
-      setElapsedTime(0);
+      setElapsedTime(0); // Reset elapsed time to 0
     }
-
-    return () => {
-      if (intervalRef.current !== null) { // Check for null before clearing
-        window.clearInterval(intervalRef.current); // Use window.clearInterval
-      }
-    };
-  }, [activeTimerInfo]);
+  }, [activeTimerInfo]); // Effect depends only on activeTimerInfo presence/change
 
   useEffect(() => {
     if (activeTimerInfo && elapsedTime > 0) {
@@ -74,7 +77,11 @@ const GlobalTimerDisplay: React.FC = () => {
       <ClockIcon className="w-6 h-6 animate-pulse" />
       <div>
         <div className="text-xs font-medium">ACTIVE TIMER</div>
-        <div className="text-lg font-bold">{formatDurationToHHMMSS(elapsedTime)}</div>
+        <div className="text-lg font-bold" data-testid="elapsed-time-display">{formatDurationToHHMMSS(elapsedTime)}</div>
+        {/* The ternary operator was: {elapsedTime !== null ? formatDurationToHHMMSS(elapsedTime) : '00:00:00'}
+            Since elapsedTime is initialized to 0 and is a number, it won't be null.
+            This simplifies to formatDurationToHHMMSS(elapsedTime).
+        */}
         <div className="text-xs truncate max-w-[150px] sm:max-w-[200px]" title={activeTimerInfo.jobCardTitle}>
           Task: {activeTimerInfo.jobCardTitle}
         </div>

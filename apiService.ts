@@ -219,6 +219,25 @@ export const fetchUserProfileAPI = (): Promise<UserProfileResponse> => {
   }, true); // Pass true for requiresAuth
 };
 
+// Payload for updating own user profile
+export interface UpdateOwnProfilePayload {
+  name?: string | null;
+  phone_number?: string | null;
+  company?: string | null;
+  experience?: string | null;
+  avatar_url?: string | null;
+  hourly_rate?: number | null; // Relevant only if user is freelancer
+  skill_ids?: number[]; // For managing own skills
+}
+
+export const updateOwnProfileAPI = (payload: UpdateOwnProfilePayload): Promise<AdminActionResponse> => { // AdminActionResponse is generic {message: string}
+  return apiFetch<AdminActionResponse>(`/api.php?action=update_own_profile`, {
+    method: 'POST', // Or 'PUT'
+    body: JSON.stringify(payload),
+  }, true); // Requires Auth
+};
+
+
 // --- Admin Service ---
 // (Could also be placed in User Service, but Admin Service makes it distinct)
 
@@ -1005,6 +1024,39 @@ export const adminAddSkillAPI = (payload: AdminAddSkillPayload): Promise<AdminAd
   }, true); // Requires Admin Auth
 };
 
+// New adminUpdateSkillAPI
+export interface AdminUpdateSkillPayload {
+  skill_id: number;
+  name: string;
+}
+export interface AdminUpdateSkillResponse {
+  message: string;
+  skill: Skill; // Returns the updated skill object
+}
+export const adminUpdateSkillAPI = (payload: AdminUpdateSkillPayload): Promise<AdminUpdateSkillResponse> => {
+  return apiFetch<AdminUpdateSkillResponse>(`/api.php?action=admin_update_skill`, {
+    method: 'POST', // Or 'PUT'
+    body: JSON.stringify(payload),
+  }, true); // Requires Admin Auth
+};
+
+// New adminDeleteSkillAPI
+export interface AdminDeleteSkillPayload { // Can be by skill_id in URL or payload
+  skill_id?: number;
+}
+export interface AdminDeleteSkillResponse {
+  message: string;
+}
+export const adminDeleteSkillAPI = (skillId: number, payload?: AdminDeleteSkillPayload): Promise<AdminDeleteSkillResponse> => {
+  // Assuming skillId in URL for DELETE, or in payload for POST
+  const effectivePayload = payload || { skill_id: skillId };
+  return apiFetch<AdminDeleteSkillResponse>(`/api.php?action=admin_delete_skill&skill_id=${skillId}`, { // Example with skill_id in query for DELETE method
+    method: 'DELETE', // Or 'POST' if using payload for ID
+    // body: JSON.stringify(effectivePayload), // Uncomment if using POST and payload for ID
+  }, true); // Requires Admin Auth
+};
+
+
 // --- Dashboard Stats API ---
 
 export const fetchUserRecentFilesAPI = (): Promise<ManagedFile[]> => {
@@ -1013,8 +1065,6 @@ export const fetchUserRecentFilesAPI = (): Promise<ManagedFile[]> => {
     // e.g., 'Pending Approval', 'Open', 'In Progress', 'Completed', 'Cancelled'
     // The exact keys should match what the PHP backend's $project_statuses_to_count produces as keys.// AdminDashboardStatsResponse is now defined in types.ts
 
-<<<<<<< Updated upstream
-=======
 // Stats for Client Dashboard - This local definition will be removed to use the one from types.ts
 // export interface ClientDashboardStats {
 //   myProjectsCount: number;
@@ -1023,19 +1073,12 @@ export const fetchUserRecentFilesAPI = (): Promise<ManagedFile[]> => {
 //   myCompletedProjectsCount: number;
 // }
 
->>>>>>> Stashed changes
 export const fetchAdminDashboardStatsAPI = (): Promise<AdminDashboardStatsResponse> => {
   return apiFetch<AdminDashboardStatsResponse>(`/api.php?action=get_admin_dashboard_stats`, {
     method: 'GET',
   }, true); // Requires Admin Auth
 };
 
-<<<<<<< Updated upstream
-export const fetchFreelancerDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
-export const fetchClientDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
-export const fetchRecentActivityAPI = (userId: string): Promise<any[]> => apiFetch<any[]>(`/users/${userId}/recent-activity`);
-export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`);
-=======
 export const fetchFreelancerDashboardStatsAPI = (userId: number | string): Promise<FreelancerDashboardStats> => apiFetch<FreelancerDashboardStats>(`/users/${userId}/dashboard/stats`);
 export const fetchClientDashboardStatsAPI = (): Promise<ClientDashboardStats> => {
   return apiFetch<ClientDashboardStats>(`/api.php?action=get_client_dashboard_stats`, {
@@ -1046,7 +1089,6 @@ export const fetchClientDashboardStatsAPI = (): Promise<ClientDashboardStats> =>
 export const fetchRecentActivityAPI = (userId: string): Promise<RecentActivity[]> => 
   apiFetch<RecentActivity[]>(`/users/${userId}/recent-activity`); // Placeholder
 export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`); // Placeholder
->>>>>>> Stashed changes
 
 // Reports
 export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetch<Project[]>('/reports/projects-with-timelogs');

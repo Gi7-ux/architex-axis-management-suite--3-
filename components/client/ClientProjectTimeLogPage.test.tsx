@@ -1,13 +1,9 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
-<<<<<<< Updated upstream
-import { UserRole } from '../../types';
-=======
 import { UserRole, AuthUser } from '../../types'; // Import AuthUser
->>>>>>> Stashed changes
 import ClientProjectTimeLogPage from './ClientProjectTimeLogPage';
-import { AuthContext, useAuth } from '../AuthContext';
+import { AuthContext } from '../AuthContext'; // Import AuthContext for Provider
 import * as apiService from '../../apiService';
 
 // Mock API service
@@ -16,13 +12,10 @@ const mockFetchProjectsAPI = apiService.fetchProjectsAPI as jest.Mock;
 const mockFetchUsersAPI = apiService.fetchUsersAPI as jest.Mock;
 const mockFetchClientProjectTimeLogsAPI = apiService.fetchClientProjectTimeLogsAPI as jest.Mock;
 
-// Mock AuthContext
-jest.mock('../AuthContext');
-const mockUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 
-const mockClientProjects: Partial<Project>[] = [
-  { id: 'proj1', title: 'Project Alpha', clientId: '1', description: '', budget: 0, deadline: '', skillsRequired: [], status: 'Open' as any },
-  { id: 'proj2', title: 'Project Beta', clientId: '1', description: '', budget: 0, deadline: '', skillsRequired: [], status: 'Open' as any },
+const mockClientProjects = [
+  { id: 'proj1', title: 'Project Alpha', clientId: 'client1', description: '', budget: 0, deadline: '', skillsRequired: [], status: 'Open' },
+  { id: 'proj2', title: 'Project Beta', clientId: 'client1', description: '', budget: 0, deadline: '', skillsRequired: [], status: 'Open' },
 ];
 
 const mockFreelancerUsers: Partial<User>[] = [
@@ -36,16 +29,12 @@ const mockTimeLogsForProj1: Partial<TimeLog>[] = [
 ];
 
 describe('ClientProjectTimeLogPage', () => {
-  const mockClientUser: AuthUser = { id: 1, username: 'clientuser', name: 'clientuser', email: 'client@test.com', role: UserRole.CLIENT };
+  let mockAuthContextValue: any;
 
   beforeEach(() => {
     jest.clearAllMocks();
-    mockUseAuth.mockReturnValue({
-<<<<<<< Updated upstream
-      user: { id: 'client1', name: 'Client User', role: UserRole.CLIENT },
-=======
+    mockAuthContextValue = {
       user: { id: 2, username: 'clientuser', name: 'Client User', email: 'client@example.com', role: UserRole.CLIENT } as AuthUser,
->>>>>>> Stashed changes
       token: 'test-token',
       isLoading: false,
       login: jest.fn(),
@@ -55,7 +44,7 @@ describe('ClientProjectTimeLogPage', () => {
       startGlobalTimer: jest.fn(),
       stopGlobalTimerAndLog: jest.fn(),
       clearGlobalTimerState: jest.fn(),
-    });
+    };
 
     mockFetchProjectsAPI.mockResolvedValue(mockClientProjects as any);
     mockFetchUsersAPI.mockResolvedValue(mockFreelancerUsers as any);
@@ -63,9 +52,9 @@ describe('ClientProjectTimeLogPage', () => {
   });
 
   test('renders loading state for projects initially', () => {
-    mockFetchProjectsAPI.mockImplementationOnce(() => new Promise(() => { })); // Keep it pending
+    mockFetchProjectsAPI.mockImplementationOnce(() => new Promise(() => {})); // Keep it pending
     render(
-      <AuthContext.Provider value={mockUseAuth()}>
+      <AuthContext.Provider value={mockAuthContextValue}>
         <ClientProjectTimeLogPage />
       </AuthContext.Provider>
     );
@@ -73,12 +62,12 @@ describe('ClientProjectTimeLogPage', () => {
   });
 
   test('fetches and displays client projects in dropdown', async () => {
-    render(<ClientProjectTimeLogPage />);
-<<<<<<< Updated upstream
-    await waitFor(() => expect(mockFetchProjectsAPI).toHaveBeenCalledWith({ clientId: 'client1' }));
-=======
+    render(
+      <AuthContext.Provider value={mockAuthContextValue}>
+        <ClientProjectTimeLogPage />
+      </AuthContext.Provider>
+    );
     await waitFor(() => expect(mockFetchProjectsAPI).toHaveBeenCalledWith({ clientId: '2' })); // clientId should be string '2' if user.id is 2 (number)
->>>>>>> Stashed changes
     await waitFor(() => expect(mockFetchUsersAPI).toHaveBeenCalledWith(UserRole.FREELANCER));
 
     expect(screen.getByRole('combobox', { name: /select project/i })).toBeInTheDocument();
@@ -89,7 +78,7 @@ describe('ClientProjectTimeLogPage', () => {
   test('displays "no projects" message if client has no projects', async () => {
     mockFetchProjectsAPI.mockResolvedValueOnce([]);
     render(
-      <AuthContext.Provider value={mockUseAuth()}>
+      <AuthContext.Provider value={mockAuthContextValue}>
         <ClientProjectTimeLogPage />
       </AuthContext.Provider>
     );
@@ -97,9 +86,9 @@ describe('ClientProjectTimeLogPage', () => {
   });
 
   test('fetches and displays time logs when a project is selected', async () => {
-    mockFetchClientProjectTimeLogsAPI.mockResolvedValueOnce(mockTimeLogsForProj1 as any);
+    mockFetchClientProjectTimeLogsAPI.mockResolvedValueOnce(mockTimeLogsForProj1);
     render(
-      <AuthContext.Provider value={mockUseAuth()}>
+      <AuthContext.Provider value={mockAuthContextValue}>
         <ClientProjectTimeLogPage />
       </AuthContext.Provider>
     );
@@ -107,11 +96,7 @@ describe('ClientProjectTimeLogPage', () => {
 
     fireEvent.change(screen.getByRole('combobox', { name: /select project/i }), { target: { value: 'proj1' } });
 
-<<<<<<< Updated upstream
-    await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith('client1', 'proj1'));
-=======
     await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith('2', 'proj1')); // clientId should be string '2'
->>>>>>> Stashed changes
     expect(screen.getByText(/work on alpha feature 1/i)).toBeInTheDocument();
     expect(screen.getByText(/work on alpha feature 2/i)).toBeInTheDocument();
     // Check for freelancer name mapping
@@ -124,7 +109,7 @@ describe('ClientProjectTimeLogPage', () => {
 
   test('displays loading state for time logs', async () => {
     render(
-      <AuthContext.Provider value={mockUseAuth()}>
+      <AuthContext.Provider value={mockAuthContextValue}>
         <ClientProjectTimeLogPage />
       </AuthContext.Provider>
     );
@@ -139,7 +124,7 @@ describe('ClientProjectTimeLogPage', () => {
   test('displays "no time logs" message if selected project has no logs', async () => {
     mockFetchClientProjectTimeLogsAPI.mockResolvedValueOnce([]); // Ensure it resolves to empty
     render(
-      <AuthContext.Provider value={mockUseAuth()}>
+      <AuthContext.Provider value={mockAuthContextValue}>
         <ClientProjectTimeLogPage />
       </AuthContext.Provider>
     );
@@ -147,18 +132,14 @@ describe('ClientProjectTimeLogPage', () => {
 
     fireEvent.change(screen.getByRole('combobox', { name: /select project/i }), { target: { value: 'proj1' } });
 
-<<<<<<< Updated upstream
-    await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith('client1', 'proj1'));
-=======
     await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith('2', 'proj1')); // clientId should be string '2'
->>>>>>> Stashed changes
     expect(screen.getByText(/no time logs have been recorded for this project yet/i)).toBeInTheDocument();
   });
 
   test('displays error message if fetching projects fails', async () => {
     mockFetchProjectsAPI.mockRejectedValueOnce(new Error('Failed to fetch projects'));
     render(
-      <AuthContext.Provider value={mockUseAuth()}>
+      <AuthContext.Provider value={mockAuthContextValue}>
         <ClientProjectTimeLogPage />
       </AuthContext.Provider>
     );
@@ -168,7 +149,7 @@ describe('ClientProjectTimeLogPage', () => {
   test('displays error message if fetching time logs fails', async () => {
     mockFetchClientProjectTimeLogsAPI.mockRejectedValueOnce(new Error('Failed to fetch logs'));
     render(
-      <AuthContext.Provider value={mockUseAuth()}>
+      <AuthContext.Provider value={mockAuthContextValue}>
         <ClientProjectTimeLogPage />
       </AuthContext.Provider>
     );
