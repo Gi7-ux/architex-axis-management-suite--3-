@@ -250,7 +250,7 @@ const AdminBillingPage: React.FC = () => {
           await apiUpdateInvoice(invoiceId, { status: newStatus });
           successMessage = 'Invoice marked as Sent.';
           break;
-        case 'mark_paid':
+        case 'mark_paid': {
           newStatus = InvoiceStatus.PAID;
           const invoiceToPay = invoices.find(inv => inv.id === invoiceId);
           if (invoiceToPay) {
@@ -261,6 +261,7 @@ const AdminBillingPage: React.FC = () => {
             throw new Error('Invoice not found for payment.');
           }
           break;
+        }
         case 'void':
           if (window.confirm('Are you sure you want to void this invoice? This action cannot be undone easily.')) {
             newStatus = InvoiceStatus.VOID;
@@ -277,6 +278,12 @@ const AdminBillingPage: React.FC = () => {
       }
 
       if (successMessage) { // Only alert and reload if an action was successfully processed.
+        ...
+      }
+    } catch (err) {
+      ...
+    }
+  };
         alert(successMessage);
         loadInvoices(); // Refresh list
       }
