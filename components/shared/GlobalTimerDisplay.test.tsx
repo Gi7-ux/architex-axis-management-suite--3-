@@ -3,11 +3,16 @@ import { render, screen, fireEvent, act, waitFor } from '@testing-library/react'
 import '@testing-library/jest-dom';
 import { UserRole } from '../../types';
 import GlobalTimerDisplay from './GlobalTimerDisplay';
-import { useAuth, ActiveTimerInfo, AuthUser } from '../../contexts/AuthContext';
+import { useAuth, ActiveTimerInfo, AuthUser } from '../AuthContext'; // Import ActiveTimerInfo and AuthUser type
+>>>>>>> Stashed changes
+import { useAuth, ActiveTimerInfo, AuthUser } from '../AuthContext'; // Import ActiveTimerInfo and AuthUser type
+=======
+import { useAuth, ActiveTimerInfo, AuthUser } from '../AuthContext'; // Import ActiveTimerInfo and AuthUser type
+>>>>>>> Stashed changes
 import * as constants from '../../constants';
 
 // Mock AuthContext
-jest.mock('../../contexts/AuthContext');
+jest.mock('../AuthContext');
 const mockUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 
 // Mock API service and other dependencies first
@@ -21,67 +26,62 @@ jest.mock('../../constants', () => ({
   }),
 }));
 
+// Create base context value
+let mockContextValue: AuthContextType = {
+  user: mockUser,
+  activeTimerInfo: undefined,
+  login: () => Promise.resolve(),
+  logout: () => Promise.resolve(),
+  startGlobalTimer: () => Promise.resolve(),
+  stopGlobalTimerAndLog: () => Promise.resolve(),
+  isAuthenticated: true,
+  token: 'test-token',
+  updateCurrentUserDetails: () => Promise.resolve(),
+  clearGlobalTimerState: () => { },
+  isLoading: false
+};
+
+// Mock AuthContext module
+jest.mock('../../contexts/AuthContext', () => {
+  const mockContext = React.createContext({} as AuthContextType);
+  const mockUseAuth = () => React.useContext(mockContext);
+  const MockProvider = ({ children }: { children: React.ReactNode }) => (
+    <mockContext.Provider value={mockContextValue}>{children}</mockContext.Provider>
+  );
+
+  return {
+    __esModule: true,
+    useAuth: mockUseAuth,
+    default: MockProvider,
+  };
+});
+
+// Import after mocking
+import GlobalTimerDisplay from './GlobalTimerDisplay';
+import AuthProvider from '../../contexts/AuthContext';
+import * as constants from '../../constants';
+
 const mockFormatDurationToHHMMSS = constants.formatDurationToHHMMSS as jest.Mock;
 
 describe('GlobalTimerDisplay', () => {
   let mockStopGlobalTimerAndLog: jest.Mock;
-  const mockUser: AuthUser = {
-    id: 1,
-    username: 'freelancer1',
-    email: 'freelancer@example.com',
-    role: UserRole.FREELANCER
-  };
+  const mockUser: AuthUser = { id: 1, username: 'freelancer1', email: 'freelancer@example.com', role: UserRole.FREELANCER }; // Removed name property from main mockUser
+>>>>>>> Stashed changes
+  const mockUser: AuthUser = { id: 1, username: 'freelancer1', email: 'freelancer@example.com', role: UserRole.FREELANCER };
+=======
+  const mockUser: AuthUser = { id: 1, username: 'freelancer1', email: 'freelancer@example.com', role: UserRole.FREELANCER }; // Removed name property from main mockUser
+>>>>>>> Stashed changes
 
   beforeEach(() => {
     jest.useFakeTimers({ doNotFake: ['nextTick', 'setImmediate'] });
     jest.clearAllMocks();
     mockStopGlobalTimerAndLog = jest.fn().mockResolvedValue(undefined);
     mockFormatDurationToHHMMSS.mockClear();
-  });
 
-  afterEach(() => {
-    jest.useRealTimers();
-    jest.restoreAllMocks();
-  });
-
-  test('renders nothing if activeTimerInfo is null', () => {
-    mockUseAuth.mockReturnValueOnce({
+    // Reset mock context value
+    mockContextValue = {
       user: mockUser,
-      activeTimerInfo: null,
-      isAuthenticated: true,
-      token: 'test-token',
-      isLoading: false,
-      login: jest.fn(),
-      logout: jest.fn(),
-      updateCurrentUserDetails: jest.fn(),
-      startGlobalTimer: jest.fn(),
-      stopGlobalTimerAndLog: mockStopGlobalTimerAndLog,
-      clearGlobalTimerState: jest.fn()
-    });
-    render(<GlobalTimerDisplay />);
-    expect(screen.queryByText(/active timer/i)).not.toBeInTheDocument();
-  });
-
-  test('renders nothing if user is not a freelancer', () => {
-    mockUseAuth.mockReturnValueOnce({
-      user: {
-        id: 2,
-        username: 'admin1',
-        email: 'admin@example.com',
-        role: UserRole.ADMIN
-      },
-      activeTimerInfo: {
-        jobCardId: 'jc1',
-        jobCardTitle: 'Test Job',
-        projectId: 'p1',
-        startTime: new Date()
-      } as ActiveTimerInfo,
-      isAuthenticated: true,
-      token: 'test-token',
-      isLoading: false,
-      login: jest.fn(),
-      logout: jest.fn(),
-      updateCurrentUserDetails: jest.fn(),
+      activeTimerInfo: undefined,
       login: () => Promise.resolve(),
       logout: () => Promise.resolve(),
       startGlobalTimer: () => Promise.resolve(),
@@ -175,12 +175,12 @@ describe('GlobalTimerDisplay', () => {
   test('displays timer info and stop button when timer is active for a freelancer', async () => { // Made test async
     const startTime = new Date(new Date().getTime() - 5000); // 5 seconds ago
     mockFormatDurationToHHMMSS.mockReturnValue('00:00:05'); // Mock formatted output
-
+    
     const specificMockUser: AuthUser = { id: 1, username: 'freelancer1', email: 'freelancer@example.com', role: UserRole.FREELANCER };
     const specificActiveTimerInfo: ActiveTimerInfo = { jobCardId: 'jc1', jobCardTitle: 'Test Job Card Title', projectId: 'p1', startTime };
 
     mockUseAuth.mockReturnValueOnce({
-      user: specificMockUser,
+      user: specificMockUser, 
       activeTimerInfo: specificActiveTimerInfo,
       token: 'test-token-specific',
       isLoading: false,
@@ -188,7 +188,7 @@ describe('GlobalTimerDisplay', () => {
       logout: jest.fn(),
       updateCurrentUserDetails: jest.fn().mockResolvedValue(true),
       startGlobalTimer: jest.fn(),
-      stopGlobalTimerAndLog: mockStopGlobalTimerAndLog,
+      stopGlobalTimerAndLog: mockStopGlobalTimerAndLog, 
       clearGlobalTimerState: jest.fn(),
     });
     render(<GlobalTimerDisplay />);

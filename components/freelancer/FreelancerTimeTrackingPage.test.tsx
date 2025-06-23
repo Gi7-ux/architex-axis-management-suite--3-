@@ -1,23 +1,11 @@
 import React from 'react';
-<<<<<<< Updated upstream
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
-import '@testing-library/jest-dom';
-import { UserRole } from '../../types';
-=======
 import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import { UserRole, AuthUser } from '../../types'; // Import AuthUser
->>>>>>> Stashed changes
 import FreelancerTimeTrackingPage from './FreelancerTimeTrackingPage';
 import * as apiService from '../../apiService';
 
 // Mock API service
-<<<<<<< Updated upstream
-jest.mock('../../apiService');
-const mockFetchFreelancerJobCardsAPI = apiService.fetchFreelancerJobCardsAPI as jest.Mock;
-const mockFetchMyTimeLogsAPI = apiService.fetchMyTimeLogsAPI as jest.Mock;
-const mockAddTimeLogAPI = apiService.addTimeLogAPI as jest.Mock; // Used by manual log
-=======
 jest.mock('../../apiService', () => ({
  __esModule: true,
  ...jest.requireActual('../../apiService'), // Keep other exports
@@ -25,7 +13,6 @@ jest.mock('../../apiService', () => ({
  fetchMyTimeLogsAPI: jest.fn(),
  addTimeLogAPI: jest.fn(),
 }));
->>>>>>> Stashed changes
 
 // Mock AuthContext
 jest.mock('../AuthContext');
@@ -37,11 +24,7 @@ const mockJobCards = [
 ];
 
 const mockTimeLogs = [
-<<<<<<< Updated upstream
-  { id: 'tl1', jobCardId: 'jc1', architectId: 'freelancer1', startTime: new Date().toISOString(), endTime: new Date().toISOString(), durationMinutes: 60, notes: 'Log 1', manualEntry: false },
-=======
   { id: 'tl1', jobCardId: 'jc1', architectId: 'freelancer1', startTime: new Date().toISOString(), endTime: new Date().toISOString(), durationMinutes: 60, notes: 'Log 1', manualEntry: false, createdAt: new Date().toISOString() },
->>>>>>> Stashed changes
 ];
 
 describe('FreelancerTimeTrackingPage', () => {

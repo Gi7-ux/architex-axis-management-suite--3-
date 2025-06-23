@@ -13,11 +13,12 @@ export default defineConfig(({ mode }) => {
       server: {
         proxy: {
           '/backend': {
-            target: 'http://localhost/architex-axis-management-suite/backend', // Adjust to your local PHP server path
+            target: 'http://localhost:8000',
             changeOrigin: true,
             secure: false,
-          },
-        },
+            rewrite: (reqPath) => reqPath.replace(/^\/backend/, '')
+          }
+        }
       },
       define: {
         'process.env.API_KEY': JSON.stringify(env.GEMINI_API_KEY),
@@ -31,14 +32,5 @@ export default defineConfig(({ mode }) => {
           'constants': path.resolve(__dirname, './constants')
         }
       },
-      server: {
-       proxy: {
-         '/backend': {
-           target: 'http://localhost:8000',
-           changeOrigin: true,
-           rewrite: (reqPath) => reqPath.replace(/^\/backend/, '')
-         }
-       }
-     }
     };
 });

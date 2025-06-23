@@ -6,9 +6,14 @@
         "php": "^7.4 || ^8.0",
         "firebase/php-jwt": "6.10.*"
     },
+    "require-dev": {
+        "pestphp/pest": "^2.0",
+        "phpunit/phpunit": "^10.0"
+    },
     "autoload": {
         "psr-4": {
-            "Architex\\AxisSuite\\Backend\\": "src/"
+            "Architex\\AxisSuite\\Backend\\": "src/",
+            "Tests\\": "tests/"
         }
     },
     "authors": [
@@ -17,20 +22,10 @@
             "email": "dev@example.com"
         }
     ],
-    "minimum-stability": "stable"
-}{
-    "require-dev": {
-        "pestphp/pest": "^2.0",
-        "phpunit/phpunit": "^10.0"
-    },
-    "autoload": {
-        "psr-4": {
-            "Tests\\": "tests/"
-        }
-    },
     "config": {
         "allow-plugins": {
             "pestphp/pest-plugin": true
         }
-    }
+    },
+    "minimum-stability": "stable"
 }

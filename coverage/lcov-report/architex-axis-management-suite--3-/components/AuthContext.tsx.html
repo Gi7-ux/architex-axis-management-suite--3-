@@ -23,16 +23,16 @@
         <div class='clearfix'>
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">9.61% </span>
+                <span class="strong">10.57% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>10/104</span>
+                <span class='fraction'>11/104</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">4.34% </span>
+                <span class="strong">8.69% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>1/23</span>
+                <span class='fraction'>2/23</span>
             </div>
         
             
@@ -44,9 +44,9 @@
         
             
             <div class='fl pad1y space-right2'>
-                <span class="strong">7.84% </span>
+                <span class="strong">8.82% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>8/102</span>
+                <span class='fraction'>9/102</span>
             </div>
         
             
@@ -268,9 +268,9 @@
 <a name='L203'></a><a href='#L203'>203</a>
 <a name='L204'></a><a href='#L204'>204</a>
 <a name='L205'></a><a href='#L205'>205</a>
-<a name='L206'></a><a href='#L206'>206</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">11x</span>
+<a name='L206'></a><a href='#L206'>206</a></td><td class="line-coverage quiet"><span class="cline-any cline-yes">7x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">7x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -294,9 +294,9 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">7x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">11x</span>
+<span class="cline-any cline-yes">7x</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -466,17 +466,17 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">11x</span>
-<span class="cline-any cline-yes">56x</span>
-<span class="cline-any cline-yes">56x</span>
-<span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-yes">7x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">19x</span>
+<span class="cline-any cline-yes">2x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-yes">56x</span>
+<span class="cline-any cline-yes">17x</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js">import React, { createContext, useState, useContext, useEffect, ReactNode } from 'react';
 import { TimeLog } from '../types';
-import { loginAPI, fetchUserProfileAPI, ApiError, AuthUser, UserLoginData, addTimeLogAPI } from '../apiService';
-&nbsp;
+import { loginAPI, fetchUserProfileAPI, ApiError, AuthUser, UserLoginData, addTimeLogAPI, updateUserAPI } from '../apiService';
+export type { AuthUser }; // Export AuthUser
 &nbsp;
 export interface ActiveTimerInfo {
   jobCardId: string;
@@ -592,7 +592,7 @@ export const AuthProvider: React.FC&lt;{ children: ReactNode }&gt; = <span class
     };
 &nbsp;
 <span class="cstat-no" title="statement not covered" >    try {</span>
-<span class="cstat-no" title="statement not covered" >      await addTimeLogAPI(activeTimerInfo.projectId, activeTimerInfo.jobCardId, timeLogData);</span>
+<span class="cstat-no" title="statement not covered" >      await addTimeLogAPI(activeTimerInfo.projectId, timeLogData);</span>
 <span class="cstat-no" title="statement not covered" >      console.log("Time log saved successfully via API.");</span>
     } catch (error) {
 <span class="cstat-no" title="statement not covered" >      console.error("API call to log time failed:", error);</span>
@@ -673,8 +673,8 @@ export const AuthProvider: React.FC&lt;{ children: ReactNode }&gt; = <span class
 &nbsp;
 export const useAuth = (): AuthContextType =&gt; {
   const context = useContext(AuthContext);
-  <span class="missing-if-branch" title="if path not taken" >I</span>if (context === undefined) {
-<span class="cstat-no" title="statement not covered" >    throw new Error('useAuth must be used within an AuthProvider');</span>
+  if (context === undefined) {
+    throw new Error('useAuth must be used within an AuthProvider');
   }
   return context;
 };
@@ -685,7 +685,7 @@ export const useAuth = (): AuthContextType =&gt; {
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2025-06-23T00:09:33.175Z
+                at 2025-06-23T07:52:12.113Z
             </div>
         <script src="../../prettify.js"></script>
         <script>

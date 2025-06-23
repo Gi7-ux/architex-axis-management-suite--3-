@@ -1,7 +1,18 @@
 <?php
-// This file bootstraps Pest for your test suite.
-// Run `composer require pestphp/pest --dev` if Pest is not installed.
 
-use Pest\TestSuite;
+use Tests\TestCase;
 
-// You can add custom functions, setup, or helpers here if needed.
+uses(TestCase::class)->in(__DIR__);
+
+function getAuthToken(string $role = 'admin', string $username = 'admin', string $password = 'password'): string
+{
+    $client = new \GuzzleHttp\Client(['base_uri' => 'http://localhost:8000']); // Ensure this matches your test server
+    $response = $client->post('/api.php?action=login_user', [
+        'json' => [
+            'email' => $username . '@example.com',
+            'password' => $password,
+        ]
+    ]);
+    $body = json_decode($response->getBody()->getContents(), true);
+    return $body['token'];
+}

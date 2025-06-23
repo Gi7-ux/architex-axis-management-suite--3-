@@ -1,17 +1,12 @@
 <?php
 
-use GuzzleHttp\Client;
-
-// Note: This assumes a test database is set up and seeded.
-// The tests will perform real database operations.
+use GuzzleHttp\Exception\ClientException;
 
 test('can register a new user successfully', function () {
-    $client = new Client(['base_uri' => 'http://localhost']); // Adjust base_uri if your test server is different
-
     $unique_email = 'testuser_' . time() . '@example.com';
     $username = 'testuser_' . time();
 
-    $response = $client->post('/backend/api.php?action=register_user', [
+    $response = $this->http->post('/api.php?action=register_user', [
         'json' => [
             'username' => $username,
             'email' => $unique_email,
@@ -26,12 +21,10 @@ test('can register a new user successfully', function () {
 });
 
 test('cannot register a user with a duplicate email', function () {
-    $client = new Client(['base_uri' => 'http://localhost']);
-
     // First, create a user to ensure the email exists
     $unique_email = 'duplicate_' . time() . '@example.com';
     $username = 'originaluser_' . time();
-    $client->post('/backend/api.php?action=register_user', [
+    $this->http->post('/api.php?action=register_user', [
         'json' => [
             'username' => $username,
             'email' => $unique_email,
@@ -42,7 +35,7 @@ test('cannot register a user with a duplicate email', function () {
 
     // Now, attempt to register again with the same email
     try {
-        $client->post('/backend/api.php?action=register_user', [
+        $this->http->post('/api.php?action=register_user', [
             'json' => [
                 'username' => 'anotheruser',
                 'email' => $unique_email,
@@ -50,7 +43,7 @@ test('cannot register a user with a duplicate email', function () {
                 'role' => 'client'
             ]
         ]);
-    } catch (GuzzleHttp\Exception\ClientException $e) {
+    } catch (ClientException $e) {
         expect($e->getResponse()->getStatusCode())->toBe(409);
         $body = json_decode($e->getResponse()->getBody()->getContents(), true);
         expect($body['error'])->toContain('Username or email already exists');

@@ -28,3 +28,20 @@
 - All failing tests.
 - Out-of-memory errors when running tests by adding the `--runInBand` flag to the `test` script in `package.json`.
 - Workspace problems, including unused imports and functions, and markdownlint warnings.
+
+## [0.3.0] - 2025-06-23
+### Added
+- Explicit LoginResponse type to AuthContext for better type safety.
+- Environment variable loading in db_connect.php for more secure configuration management.
+
+### Changed
+- Moved AuthContext from components/ to contexts/ directory for better organization.
+- Enhanced MyJobCards component with user information display and better styling.
+- Updated backend/composer.json to properly handle test dependencies and autoloading.
+- Improved db_connect.php to use environment variables with fallbacks.
+
+### Fixed
+- Merge conflicts in multiple files:
+  - AuthContext.tsx (moved to contexts/ with enhanced functionality)
+  - MyJobCards.tsx (resolved in favor of enhanced version)
+  - composer.json (fixed duplicate sections and improved structure)

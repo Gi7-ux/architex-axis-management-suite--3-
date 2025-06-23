@@ -3,11 +3,7 @@ import { User, JobCard, TimeLog } from '../../types';
 import {
   fetchFreelancerJobCardsAPI,
   fetchMyTimeLogsAPI,
-<<<<<<< Updated upstream
-  // addTimeLogAPI, // Will be handled by AuthContext's stopGlobalTimerAndLog
-=======
   addTimeLogAPI, // Will be handled by AuthContext's stopGlobalTimerAndLog
->>>>>>> Stashed changes
   deleteTimeLogAPI, // Keep for future direct delete on this page
   updateTimeLogAPI  // Keep for future direct edit on this page
 } from '../../apiService';
