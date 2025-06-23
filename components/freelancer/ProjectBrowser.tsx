@@ -30,69 +30,76 @@ const ProjectBrowser: React.FC = () => {
   const [filterSkills, setFilterSkills] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
-  const loadInitialData = async () => {
-    setIsLoading(true);
-    setError(null);
-    let errorMessages: string[] = [];
+useEffect(() => {
+    // interface RawPhpProject { // Removed, use ProjectPHPResponse from apiService
+    //   id: number;
+    //   title: string;
+    //   description: string;
+    //   client_id: number;
+    //   freelancer_id: number | null;
+    //   status: string;
+    //   created_at: string;
+    //   updated_at: string;
+    // }
 
-    try {
-      const rawProjects = await fetchProjectsAPI();
-      const mappedProjects: Project[] = rawProjects.map((rawProject): Project => ({
-        id: String(rawProject.id),
-        title: rawProject.title,
-        description: rawProject.description,
-        clientId: String(rawProject.client_id),
-        freelancerId: rawProject.freelancer_id ? String(rawProject.freelancer_id) : undefined,
-        status: rawProject.status as ProjectStatus,
-        createdAt: rawProject.created_at,
-        updatedAt: rawProject.updated_at,
-        clientName: `Client ${rawProject.client_id}`,
-        budget: 0,
-        deadline: '',
-        currency: 'USD',
-        skillsRequired: [],
-        paymentType: 'fixed',
-        experienceLevel: 'intermediate',
-        duration: 'unknown',
-        isFeatured: false,
-        jobCards: [],
-        adminCreatorId: undefined,
-        isArchived: false,
-        assignedFreelancerName: rawProject.freelancer_id ? `Freelancer ${rawProject.freelancer_id}` : undefined,
-      }));
-      setProjects(mappedProjects);
-    } catch (projError: any) {
-      console.error("Failed to load projects:", projError);
-      errorMessages.push(projError.message || "Could not load projects.");
-      setProjects([]);
-    }
+    const loadInitialData = async () => {
+      setIsLoading(true);
+      setError(null);
 
-    try {
-      const fetchedSkills = await fetchAllSkillsAPI();
-      setAllSkills(fetchedSkills.map(skill => skill.name).sort());
-    } catch (skillError: any) {
-      console.warn("fetchAllSkillsAPI failed, using empty skills list:", skillError);
-      setAllSkills([]);
-    }
-
-    if (user && user.role === UserRole.FREELANCER) {
+      // Fetch projects
       try {
-        const freelancerApps: FreelancerApplicationResponseItem[] = await fetchFreelancerApplicationsAPI();
-        setAppliedProjectIds(new Set(freelancerApps.map(app => String(app.project_id))));
-      } catch (appError: any) {
-        console.warn("fetchFreelancerApplicationsAPI failed:", appError);
-        setAppliedProjectIds(new Set());
+        const rawProjects = await fetchProjectsAPI(); // Type is ProjectPHPResponse[] from apiService.ts
+        const mappedProjects: Project[] = rawProjects.map((rawProject): Project => ({
+          id: String(rawProject.id), // ProjectPHPResponse has id as number
+          title: rawProject.title,
+          description: rawProject.description,
+          clientId: String(rawProject.client_id), // ProjectPHPResponse has client_id as number
+          assignedFreelancerId: rawProject.freelancer_id ? String(rawProject.freelancer_id) : undefined, // ProjectPHPResponse has freelancer_id as number | null
+          status: rawProject.status as ProjectStatus, // ProjectPHPResponse has status as string
+          createdAt: rawProject.createdAt, // Corrected to camelCase
+          deadline: rawProject.deadline, // ProjectPHPResponse should have this from Project base
+          clientName: rawProject.client_username || `Client ${rawProject.client_id}`, // Use client_username if available
+          budget: rawProject.budget, // ProjectPHPResponse should have this from Project base
+          skillsRequired: rawProject.skills_required ? rawProject.skills_required.map(s => s.name) : [], // Map skills if present
+          jobCards: [], // Placeholder, or fetch separately
+          adminCreatorId: rawProject.adminCreatorId, // If ProjectPHPResponse includes it
+          isArchived: rawProject.isArchived || false, // If ProjectPHPResponse includes it
+          assignedFreelancerName: rawProject.freelancer_username || (rawProject.freelancer_id ? `Freelancer ${rawProject.freelancer_id}` : undefined), // Use freelancer_username
+        }));
+        setProjects(mappedProjects);
+      } catch (projError: any) {
+        console.error("Failed to load projects:", projError);
+        setError(projError.message || "Could not load projects.");
+        setProjects([]);
       }
-    }
 
-    if (errorMessages.length > 0) {
-      setError(errorMessages.join(' '));
-    }
+      // Fetch all skills
+      try {
+        const fetchedSkills = await fetchAllSkillsAPI();
+        setAllSkills(fetchedSkills.map(skill => skill.name).sort());
+      } catch (skillError: any) {
+        console.warn("fetchAllSkillsAPI failed, using empty skills list:", skillError);
+        // setError(prevError => prevError ? `${prevError} Could not load skills.` : "Could not load skills."); // Optionally append
+        setAllSkills([]);
+      }
 
-    setIsLoading(false);
-  };
+      // Fetch user applications if freelancer
+      if (user && user.role === UserRole.FREELANCER) {
+        try {
+          const freelancerApps: FreelancerApplicationResponseItem[] = await fetchFreelancerApplicationsAPI();
+          setAppliedProjectIds(new Set(freelancerApps.map(app => String(app.project_id))));
+        } catch (appError: any) {
+          console.warn("fetchFreelancerApplicationsAPI failed:", appError);
+          // setError(prevError => prevError ? `${prevError} Could not load applications.` : "Could not load applications."); // Optionally append
+          setAppliedProjectIds(new Set());
+        }
+      }
 
-  useEffect(() => {
+      // if (errorMessages.length > 0) { // Removed
+      //   setError(errorMessages.join(' '));
+      // }
+      setIsLoading(false); // Moved here, will run after all attempts
+    };
     loadInitialData();
   }, [user]);
 

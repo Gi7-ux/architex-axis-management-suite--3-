@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+<<<<<<< Updated upstream
+	]
+=======
+	],
+	"settings": {
+		"codium.codeCompletion.enable": false
+	}
+>>>>>>> Stashed changes
+}

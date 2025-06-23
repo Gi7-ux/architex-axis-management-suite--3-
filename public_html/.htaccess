@@ -1,0 +1,18 @@
+# public_html/.htaccess
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Allow direct access to backend files
+  # This rule ensures that any request starting with /backend/ is passed through as is.
+  RewriteRule ^backend/(.*)$ backend/$1 [L,NC]
+
+  # If the request is not for an existing file or directory,
+  # and not for the backend API,
+  # then rewrite to the React app's entry point in the /dist/ folder.
+  RewriteCond %{REQUEST_URI} !^/backend/
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule . /dist/index.html [L]
+</IfModule>

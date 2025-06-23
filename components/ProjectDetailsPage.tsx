@@ -1,26 +1,27 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { Project, ProjectStatus, UserRole, JobCard, JobCardStatus, TimeLog, ManagedFile } from '../types';
-import {
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { Project, ProjectStatus, Application, UserRole, JobCard, JobCardStatus, TimeLog, User, MessageStatus, ManagedFile, Conversation, Message } from '../types';
+import { 
     fetchProjectDetailsAPI, fetchApplicationsForProjectAPI, fetchProjectFilesAPI, submitApplicationAPI,
     createJobCardAPI,
     updateJobCardAPI,
     deleteJobCardAPI,
     fetchJobCardsForProjectAPI,
-    // NEW Time Log APIs:
     logTimeAPI,
     fetchTimeLogsForJobCardAPI,
-    fetchTimeLogsForProjectAPI, // For admin/client project-wide view
+    fetchTimeLogsForProjectAPI,
+    updateTimeLogAPI,
+    deleteTimeLogAPI,
     uploadFileAPI, deleteFileAPI, findOrCreateConversationAPI, sendMessageAPI,
     CreateJobCardPayload, UpdateJobCardPayload, JobCardPHPResponse,
-    // New Time Log Types:
     LogTimePayload,
     TimeLogPHPResponse,
+    ProjectApplicationPHPResponse
 } from '../apiService';
 import { NAV_LINKS, getMockFileIconPath, formatDurationToHHMMSS } from '../constants';
 import LoadingSpinner from './shared/LoadingSpinner';
 import Button from './shared/Button';
-import { useAuth } from './AuthContext';
+import { useAuth } from '../contexts/AuthContext';
 import Modal from './shared/Modal';
 import { PencilIcon as EditIcon, PlayIcon, StopIcon, PlusIcon, TrashIcon, ChatBubbleLeftRightIcon, DownloadIcon, UploadIcon, ArrowLeftIcon } from './shared/IconComponents';
 
@@ -525,7 +526,7 @@ const ProjectDetailsPage: React.FC = () => {
         status: newStatus.toLowerCase().replace('_', '-')
       };
       await updateJobCardAPI(jobCardId, payload);
-      loadProjectDetails();
+      loadProjectDetails(); // Reload to reflect changes
     } catch (err: any) { 
         console.error("Failed to update job card status:", err); 
         alert(err.message || "Failed to update status.");
@@ -538,15 +539,17 @@ const ProjectDetailsPage: React.FC = () => {
   ) => {
     if (!user) return;
 
+    // Corrected payload to match LogTimePayload in apiService.ts
     const payload: LogTimePayload = {
-      job_card_id: parseInt(jobCardIdToLog, 10),
-      start_time: logDataFromModal.startTime,
-      end_time: logDataFromModal.endTime,
-      notes: logDataFromModal.notes || null,
+      jobCardId: jobCardIdToLog, // Ensure this is a string
+      startTime: logDataFromModal.startTime,
+      endTime: logDataFromModal.endTime,
+      notes: logDataFromModal.notes || undefined, // Use undefined for optional fields
+      manualEntry: true // Assuming manual log modal implies manual entry
     };
     try {
       await logTimeAPI(payload);
-      loadProjectDetails();
+      loadProjectDetails(); // Reload to reflect changes
     } catch (err: any) { 
         alert(err.message || "Failed to log time."); 
         console.error("Failed to log time:", err);
@@ -587,20 +590,17 @@ const ProjectDetailsPage: React.FC = () => {
 
   const handleOpenProjectChat = async () => {
     if (!project || !user) return;
-    // Ensure all IDs are strings for findOrCreateConversationAPI if it expects string[]
+    
     const participantIds = Array.from(new Set([
-        String(user.id),
-        String(project.clientId),
-        project.assignedFreelancerId ? String(project.assignedFreelancerId) : undefined,
-        project.adminCreatorId ? String(project.adminCreatorId) : undefined
-    ].filter(Boolean) as string[]));
+        user.id,
+        project.clientId,
+        project.assignedFreelancerId,
+        project.adminCreatorId
+    ].filter(Boolean)));
     
     try {
-        // The API now only takes one argument for the recipient, not a list of participants or project ID.
-        // This logic needs to be re-evaluated. For now, let's assume we are creating a chat with the project's client.
-        const recipientId = project.clientId;
-        const conversation = await findOrCreateConversationAPI(recipientId);
-        navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.conversation_id }});
+        const conversation = await findOrCreateConversationAPI(participantIds, project.id);
+        navigate('/messages', { state: { conversationId: conversation.id }});
     } catch (err: any) {
         alert(err.message || "Could not open or create chat for this project.");
         console.error("Chat creation/navigation error:", err);
@@ -609,25 +609,21 @@ const ProjectDetailsPage: React.FC = () => {
   
   const handleRequestStatusUpdate = async () => {
     if (!project || !user || user.role !== UserRole.CLIENT) return;
+    
     const participantIds = [
-        String(user.id),
-        project.assignedFreelancerId ? String(project.assignedFreelancerId) : undefined,
-        project.adminCreatorId ? String(project.adminCreatorId) : undefined,
-    ].filter(Boolean) as string[];
+        user.id,
+        project.assignedFreelancerId,
+        project.adminCreatorId
+    ].filter(Boolean);
+
     try {
-        // This logic needs re-evaluation based on the new API.
-        // Assuming the client wants to message the assigned freelancer.
-        if (!project.assignedFreelancerId) {
-            alert("No freelancer assigned to message.");
-            return;
-        }
-        const conversation = await findOrCreateConversationAPI(project.assignedFreelancerId);
+        const conversation = await findOrCreateConversationAPI(participantIds, project.id);
         await sendMessageAPI({
-            conversation_id: conversation.conversation_id,
-            content: `Client ${user.username} requests a status update for project '${project.title}'.`,
-        },);
+            conversation_id: conversation.id,
+            content: `Client ${user.name} requests a status update for project '${project.title}'`,
+        });
         alert("Status update request sent via messages.");
-        navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.conversation_id } });
+        navigate('/messages', { state: { conversationId: conversation.id } });
     } catch (err: any) {
         alert(err.message || "Failed to send status update request.");
         console.error("Status update request error:", err);

@@ -1,7 +1,7 @@
 // In components/admin/UserManagement.tsx
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { UserRole } from '../../types'; // Keep UserRole
+import { UserRole, User } from '../../types'; // Keep UserRole, import User. Skill is from apiService.
 import {
     adminFetchAllUsersAPI,
     // adminUpdateUserRoleAPI, // Keep for simple role updates if separate button, or merge into full edit
@@ -15,8 +15,10 @@ import {
     AdminUpdateUserDetailsPayload,
     // AdminActionResponse, // Not directly used in component state, but for API calls
     ApiError,
-    Skill, // Import Skill
-    fetchAllSkillsAPI // Import fetchAllSkillsAPI
+    Skill, // This Skill is from apiService
+    fetchAllSkillsAPI, // Import fetchAllSkillsAPI
+    getUsersFromPhp, // Ensure this is imported
+    createUserInPhp // Ensure this is imported
 } from '../../apiService';
 import Button from '../shared/Button';
 import { PencilIcon, TrashIcon, PlusCircleIcon, CheckCircleIcon, XCircleIcon } from '../shared/IconComponents';
@@ -28,6 +30,7 @@ import { useAuth } from '../AuthContext'; // Import useAuth to get current admin
 // Extend AdminUserListEntry to include is_active for the main list display
 interface AdminUserView extends AdminUserListEntry {
     is_active: boolean;
+    skills?: Skill[]; // Use Skill from apiService
 }
 
 const UserManagement: React.FC = () => {
@@ -35,6 +38,11 @@ const UserManagement: React.FC = () => {
   const [users, setUsers] = useState<AdminUserView[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  const [phpUsers, setPhpUsers] = useState<User[]>([]);
+  const [isPhpUsersLoading, setIsPhpUsersLoading] = useState(true);
+  const [phpUsersError, setPhpUsersError] = useState<string | null>(null);
+
   const [isModalOpen, setIsModalOpen] = useState(false);
 
   // For Add/Edit form. Can hold data for new user or full details of existing user.
@@ -44,7 +52,20 @@ const UserManagement: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const [allGlobalSkills, setAllGlobalSkills] = useState<Skill[]>([]);
+  // New state for creating user via PHP backend
+  const [showPhpCreateForm, setShowPhpCreateForm] = useState(false);
+  const [phpUserFormData, setPhpUserFormData] = useState({
+    username: '',
+    email: '',
+    password: '',
+    role: UserRole.CLIENT, // Default role
+    first_name: '',
+    last_name: ''
+  });
+  const [isCreatingPhpUser, setIsCreatingPhpUser] = useState(false);
+  const [createPhpUserError, setCreatePhpUserError] = useState<string | null>(null);
+
+  const [allGlobalSkills, setAllGlobalSkills] = useState<Skill[]>([]); // Use Skill from apiService
   const [selectedSkillIds, setSelectedSkillIds] = useState<Set<number>>(new Set());
 
   const loadUsersAndSkills = useCallback(async () => { // Combined initial load
@@ -60,6 +81,24 @@ const UserManagement: React.FC = () => {
     finally {setIsLoading(false);}
   }, []);
 
+  const loadPhpUsers = async () => {
+    setIsPhpUsersLoading(true);
+    setPhpUsersError(null);
+    try {
+      const fetchedPhpUsers = await getUsersFromPhp();
+      setPhpUsers(fetchedPhpUsers);
+    } catch (err: any) {
+      console.error("Error fetching PHP users:", err);
+      setPhpUsersError(err.message || "Failed to load users from PHP backend.");
+    } finally {
+      setIsPhpUsersLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadPhpUsers();
+  }, []);
+
   useEffect(() => { loadUsersAndSkills(); }, [loadUsersAndSkills]); // Use combined loader
 
   const handleOpenModal = async (userToEdit: AdminUserView | null = null) => {
@@ -69,8 +108,14 @@ const UserManagement: React.FC = () => {
       try {
         setIsSubmitting(true); // Use isSubmitting for loading state of modal form
         const fullDetails = await adminFetchUserDetailsAPI(userToEdit.id);
-        setCurrentUserFormData(fullDetails);
-        if (fullDetails.skills) {
+        
+        // Sanitize fullDetails to convert nulls to undefined to match the form state type
+        const sanitizedFullDetails = Object.fromEntries(
+          Object.entries(fullDetails).map(([key, value]) => [key, value === null ? undefined : value])
+        ) as Partial<AdminUserDetailsResponse & AdminCreateUserPayload>;
+        setCurrentUserFormData(sanitizedFullDetails);
+
+        if (fullDetails.skills) { // original fullDetails can be used here or sanitizedFullDetails
           setSelectedSkillIds(new Set(fullDetails.skills.map(s => s.id)));
         } else {
           setSelectedSkillIds(new Set());
@@ -78,14 +123,17 @@ const UserManagement: React.FC = () => {
       } catch (err: any) {
         setError(err.message || "Failed to fetch user details.");
         // Fallback to list data if full fetch fails, though some fields might be missing
-        setCurrentUserFormData({
-            id: userToEdit.id,
-            username: userToEdit.username,
-            email: userToEdit.email,
-            role: userToEdit.role,
-            is_active: userToEdit.is_active,
-            // other fields will be undefined
-        });
+        // Convert null values to undefined to match the expected type
+        const sanitizedDetails = Object.fromEntries(
+          Object.entries(userToEdit).map(([key, value]) => [key, value === null ? undefined : value])
+        ) as Partial<AdminUserDetailsResponse & AdminCreateUserPayload>;
+        setCurrentUserFormData(sanitizedDetails);
+        // Set selected skills based on userToEdit data as a fallback
+        if (userToEdit.skills) {
+          setSelectedSkillIds(new Set(userToEdit.skills.map(s => s.id)));
+        } else {
+          setSelectedSkillIds(new Set());
+        }
       } finally {
         setIsSubmitting(false);
       }
@@ -115,7 +163,7 @@ const UserManagement: React.FC = () => {
     } else if (name === 'is_active_text_input_for_some_reason') { // Example if not checkbox
         processedValue = value.toLowerCase() === 'true';
     }
-    setCurrentUserFormData(prev => ({ ...prev, [name]: processedValue }));
+    setCurrentUserFormData((prev: Partial<AdminUserDetailsResponse & AdminCreateUserPayload>) => ({ ...prev, [name]: processedValue }));
   };
 
   const handleSaveUser = async () => {
@@ -181,23 +229,66 @@ const UserManagement: React.FC = () => {
     }
   };
 
-  const filteredUsers = users.filter(user => 
+  const filteredUsers = users.filter((user: AdminUserView) =>
     user.username.toLowerCase().includes(searchTerm.toLowerCase()) ||
     user.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-    user.role.toLowerCase().includes(searchTerm.toLowerCase())
+    user.role.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    (user.skills && user.skills.some((skill: Skill) => skill.name.toLowerCase().includes(searchTerm.toLowerCase())))
   );
+
+  const handlePhpUserFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setPhpUserFormData((prev: typeof phpUserFormData) => ({ ...prev, [name]: value }));
+  };
+
+  const handleCreatePhpUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsCreatingPhpUser(true);
+    setCreatePhpUserError(null);
+    try {
+      // Basic validation frontend side (can be more extensive)
+      if (!phpUserFormData.username || !phpUserFormData.email || !phpUserFormData.password) {
+        throw new Error("Username, email, and password are required.");
+      }
+      await createUserInPhp({
+        username: phpUserFormData.username,
+        email: phpUserFormData.email,
+        password: phpUserFormData.password, // Sending raw password
+        role: phpUserFormData.role,
+        first_name: phpUserFormData.first_name || undefined,
+        last_name: phpUserFormData.last_name || undefined,
+      });
+      setShowPhpCreateForm(false); // Close form on success
+      setPhpUserFormData({ username: '', email: '', password: '', role: UserRole.CLIENT, first_name: '', last_name: '' }); // Reset form
+      await loadPhpUsers(); // Refresh the list of PHP users
+      alert('User created successfully via PHP backend!'); // Simple feedback
+    } catch (err: any) {
+      console.error("Error creating PHP user:", err);
+      setCreatePhpUserError(err.message || "Failed to create user via PHP backend.");
+    } finally {
+      setIsCreatingPhpUser(false);
+    }
+  };
+
+  if (isLoading && users.length === 0) { 
+    return (
+      <div className="p-6 text-center flex flex-col items-center justify-center h-64">
+        <LoadingSpinner text="Loading users..." />
+      </div>
+    );
+  }
 
   return (
     <div className="p-4 md:p-6 bg-white shadow-xl rounded-lg">
       <div className="flex justify-between items-center mb-6 pb-4 border-b border-gray-200">
-        <h2 className="text-2xl font-semibold text-primary">User Management</h2>
+        <h2 className="text-2xl font-semibold text-primary">User Management (Existing API)</h2>
         <Button onClick={() => handleOpenModal()} leftIcon={<PlusCircleIcon className="w-5 h-5"/>} variant="primary">
           Add User
         </Button>
       </div>
 
       {error && !isModalOpen && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md">{error}</div>}
-      <input type="text" placeholder="Search users..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)}
+      <input type="text" placeholder="Search users..." value={searchTerm} onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSearchTerm(e.target.value)}
         className="mb-6 p-2.5 border rounded-lg w-full sm:w-1/2"/>
 
       {isLoading && <LoadingSpinner text="Loading users..." />}
@@ -218,7 +309,7 @@ const UserManagement: React.FC = () => {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-200">
-              {filteredUsers.map((user) => (
+              {filteredUsers.map((user: AdminUserView) => (
                 <tr key={user.id} className={`${!user.is_active ? 'bg-gray-100 opacity-70' : ''} hover:bg-gray-50`}>
                   <td className="px-4 py-3 whitespace-nowrap text-sm">{user.id}</td>
                   <td className="px-4 py-3 whitespace-nowrap text-sm font-medium">{user.username}</td>
@@ -252,7 +343,7 @@ const UserManagement: React.FC = () => {
       {isModalOpen && (
         <Modal isOpen={isModalOpen} onClose={handleCloseModal} title={isEditMode ? `Edit User: ${currentUserFormData.username || ''}` : 'Add New User'} size="2xl">
           {error && isModalOpen && <div className="mb-3 p-2 bg-red-100 text-red-600 rounded-md text-sm">{error}</div>}
-          <form onSubmit={(e) => { e.preventDefault(); handleSaveUser(); }} className="space-y-3 max-h-[75vh] overflow-y-auto p-1">
+          <form onSubmit={(e: React.FormEvent) => { e.preventDefault(); handleSaveUser(); }} className="space-y-3 max-h-[75vh] overflow-y-auto p-1">
             {/* Common Fields */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div><label className="block text-sm font-medium">Username:*</label><input type="text" name="username" value={currentUserFormData.username || ''} onChange={handleFormChange} required className="w-full mt-1 p-2 border rounded"/></div>
@@ -273,7 +364,7 @@ const UserManagement: React.FC = () => {
               <div><label className="block text-sm font-medium">Avatar URL:</label><input type="url" name="avatarUrl" value={currentUserFormData.avatarUrl || ''} onChange={handleFormChange} className="w-full mt-1 p-2 border rounded"/></div>
             </div>
             <div><label className="block text-sm font-medium">Experience/Bio:</label><textarea name="experience" value={currentUserFormData.experience || ''} onChange={handleFormChange} rows={3} className="w-full mt-1 p-2 border rounded"/></div>
-            { (currentUserFormData.role === UserRole.FREELANCER || (!isEditMode && currentUserFormData.role === UserRole.FREELANCER) ) && // Show if role is freelancer or if adding a freelancer
+            { (currentUserFormData.role as UserRole) === UserRole.FREELANCER && // Show if role is freelancer
               <div><label className="block text-sm font-medium">Hourly Rate (R):</label><input type="number" name="hourlyRate" value={currentUserFormData.hourlyRate === null ? '' : currentUserFormData.hourlyRate || ''} onChange={handleFormChange} min="0" step="0.01" className="w-full mt-1 p-2 border rounded"/></div>
             }
             {isEditMode &&
@@ -287,13 +378,13 @@ const UserManagement: React.FC = () => {
             <div className="pt-3">
               <label className="block text-sm font-medium text-gray-700">Skills</label>
               <div className="mt-1 max-h-40 overflow-y-auto border rounded p-2 space-y-1 bg-gray-50">
-                {allGlobalSkills.map(skill => (
+                {allGlobalSkills.map((skill: Skill) => (
                   <div key={skill.id} className="flex items-center">
                     <input
                       type="checkbox"
                       id={`skill-${skill.id}-user-${currentUserFormData.id}`}
                       checked={selectedSkillIds.has(skill.id)}
-                      onChange={(e) => {
+                      onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
                         const newSet = new Set(selectedSkillIds);
                         if (e.target.checked) newSet.add(skill.id);
                         else newSet.delete(skill.id);
@@ -316,6 +407,95 @@ const UserManagement: React.FC = () => {
           </form>
         </Modal>
       )}
+
+      {/* New Section for Users from PHP Backend */}
+      <div className="mt-12 pt-6 border-t border-gray-300">
+        <div className="flex justify-between items-center mb-4">
+            <h3 className="text-xl font-semibold text-primary">Users from PHP Backend</h3>
+            <Button onClick={() => setShowPhpCreateForm(!showPhpCreateForm)} variant="secondary" size="sm">
+                {showPhpCreateForm ? 'Cancel' : 'Add User (PHP Backend)'}
+            </Button>
+        </div>
+
+        {showPhpCreateForm && (
+            <form onSubmit={handleCreatePhpUser} className="mb-6 p-4 border border-gray-200 rounded-lg bg-gray-50">
+                <h4 className="text-md font-semibold mb-3">New PHP User Form</h4>
+                {createPhpUserError && <div className="mb-3 p-2 bg-red-100 text-red-700 rounded-md">{createPhpUserError}</div>}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+                    <div>
+                        <label htmlFor="php_username" className="block text-sm font-medium text-gray-700 mb-1">Username*</label>
+                        <input type="text" name="username" id="php_username" value={phpUserFormData.username} onChange={handlePhpUserFormChange} required className="p-2 border border-gray-300 rounded-md w-full" />
+                    </div>
+                    <div>
+                        <label htmlFor="php_email" className="block text-sm font-medium text-gray-700 mb-1">Email*</label>
+                        <input type="email" name="email" id="php_email" value={phpUserFormData.email} onChange={handlePhpUserFormChange} required className="p-2 border border-gray-300 rounded-md w-full" />
+                    </div>
+                    <div>
+                        <label htmlFor="php_password" className="block text-sm font-medium text-gray-700 mb-1">Password*</label>
+                        <input type="password" name="password" id="php_password" value={phpUserFormData.password} onChange={handlePhpUserFormChange} required className="p-2 border border-gray-300 rounded-md w-full" />
+                    </div>
+                    <div>
+                        <label htmlFor="php_role" className="block text-sm font-medium text-gray-700 mb-1">Role*</label>
+                        <select name="role" id="php_role" value={phpUserFormData.role} onChange={handlePhpUserFormChange} className="p-2 border border-gray-300 rounded-md w-full bg-white">
+                            <option value={UserRole.CLIENT}>Client</option>
+                            <option value={UserRole.FREELANCER}>Freelancer</option>
+                            <option value={UserRole.ADMIN}>Admin</option>
+                        </select>
+                    </div>
+                     <div>
+                        <label htmlFor="php_first_name" className="block text-sm font-medium text-gray-700 mb-1">First Name</label>
+                        <input type="text" name="first_name" id="php_first_name" value={phpUserFormData.first_name} onChange={handlePhpUserFormChange} className="p-2 border border-gray-300 rounded-md w-full" />
+                    </div>
+                    <div>
+                        <label htmlFor="php_last_name" className="block text-sm font-medium text-gray-700 mb-1">Last Name</label>
+                        <input type="text" name="last_name" id="php_last_name" value={phpUserFormData.last_name} onChange={handlePhpUserFormChange} className="p-2 border border-gray-300 rounded-md w-full" />
+                    </div>
+                </div>
+                <Button type="submit" variant="primary" disabled={isCreatingPhpUser} isLoading={isCreatingPhpUser}>
+                    {isCreatingPhpUser ? 'Creating...' : 'Create PHP User'}
+                </Button>
+            </form>
+        )}
+
+        {phpUsersError && !showPhpCreateForm && <div className="mb-4 p-3 bg-red-100 text-red-700 rounded-md">{phpUsersError}</div>}
+
+        {isPhpUsersLoading ? (
+          <div className="p-6 text-center flex flex-col items-center justify-center h-40">
+            <LoadingSpinner text="Loading users from PHP backend..." />
+          </div>
+        ) : phpUsers.length === 0 && !phpUsersError ? (
+          <div className="p-6 text-center text-gray-500">
+            <p>No users found from the PHP backend.</p>
+          </div>
+        ) : phpUsers.length > 0 ? (
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <table className="min-w-full divide-y divide-gray-200">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ID</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Username</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Email</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Role</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">First Name</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Last Name</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {phpUsers.map((user: any) => ( // Temporary cast to any
+                  <tr key={user.id} className="hover:bg-green-50 transition-colors duration-150">
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-700">{user.id}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{user.username}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{user.email}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{user.role}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{(user as any).first_name || 'N/A'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">{(user as any).last_name || 'N/A'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : null}
+      </div>
     </div>
   );
 };

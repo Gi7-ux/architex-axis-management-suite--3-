@@ -1,3 +1,4 @@
+
 <?php
 define('DB_SERVER', 'cp60.domains.co.za');
 define('DB_USERNAME', 'architex_greg1');

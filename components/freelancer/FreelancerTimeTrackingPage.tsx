@@ -1,47 +1,54 @@
-import React, { useState, useEffect } from 'react'; // Removed unused 'useContext' if AuthContext import changes to useAuth hook
-import { JobCard, TimeLog } from '../../types';
-import * as apiService from '../../apiService';
+import React, { useState, useEffect, useContext } from 'react'; // Removed unused 'useContext' if AuthContext import changes to useAuth hook
+import { User, JobCard, TimeLog } from '../../types';
+import {
+  fetchFreelancerJobCardsAPI,
+  fetchMyTimeLogsAPI,
+<<<<<<< Updated upstream
+  // addTimeLogAPI, // Will be handled by AuthContext's stopGlobalTimerAndLog
+=======
+  addTimeLogAPI, // Will be handled by AuthContext's stopGlobalTimerAndLog
+>>>>>>> Stashed changes
+  deleteTimeLogAPI, // Keep for future direct delete on this page
+  updateTimeLogAPI  // Keep for future direct edit on this page
+} from '../../apiService';
 // import { AuthContext } from '../AuthContext'; // No longer directly used, useAuth hook instead
 import { useAuth } from '../AuthContext'; // Import useAuth
 
 const FreelancerTimeTrackingPage: React.FC = () => {
   const [jobCards, setJobCards] = useState<JobCard[]>([]);
   const [timeLogs, setTimeLogs] = useState<TimeLog[]>([]);
-  const [isLoading, setIsLoading] = useState<boolean>(true); // For page data loading
-  const [isProcessingLog, setIsProcessingLog] = useState<boolean>(false); // For log submission spinner
+  const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [isProcessingLog, setIsProcessingLog] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-  // const [activeTimer, setActiveTimer] = useState<{ jobCardId: string, startTime: Date } | null>(null); // REMOVED - Use global timer from AuthContext
   const [manualLogJobCardId, setManualLogJobCardId] = useState<string | null>(null);
 
-  const { user, activeTimerInfo, startGlobalTimer, stopGlobalTimerAndLog, isLoading: isAuthLoading } = useAuth(); // Get global timer state and functions
+  const { user, activeTimerInfo, startGlobalTimer, stopGlobalTimerAndLog, isLoading: isAuthLoading } = useAuth();
   const freelancerId = user?.id;
 
-
-  // State for manual log form
   const [manualDate, setManualDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [manualStartTime, setManualStartTime] = useState<string>('09:00');
   const [manualEndTime, setManualEndTime] = useState<string>('17:00');
   const [manualNotes, setManualNotes] = useState<string>('');
 
-
-  // const auth = useContext(AuthContext); // REMOVED
-  // const freelancerId = auth?.user?.id; // Now from useAuth().user.id
-
   useEffect(() => {
-    if (!freelancerId && !isAuthLoading) { // Wait for auth to load
+    if (!freelancerId && !isAuthLoading) {
       setError("User ID not found. Please ensure you are logged in.");
       setIsLoading(false);
       return;
     }
-    if(freelancerId){
+    if (freelancerId) {
       const fetchData = async () => {
         setIsLoading(true);
         setError(null);
         try {
-          // Fetch job cards and existing time logs when freelancerId is available
           const [fetchedJobCards, fetchedTimeLogs] = await Promise.all([
-            apiService.fetchFreelancerJobCardsAPI(String(freelancerId)),
-            apiService.fetchMyTimeLogsAPI(String(freelancerId)) // Consider filtering by activeTimerInfo.jobCardId if needed
+<<<<<<< Updated upstream
+            fetchFreelancerJobCardsAPI(freelancerId),
+            fetchMyTimeLogsAPI(freelancerId) // Consider filtering by activeTimerInfo.jobCardId if needed
+=======
+            fetchFreelancerJobCardsAPI(String(freelancerId)),
+            fetchMyTimeLogsAPI(String(freelancerId)) // Consider filtering by activeTimerInfo.jobCardId if needed
+>>>>>>> Stashed changes
           ]);
           setJobCards(fetchedJobCards.map((jc: any) => ({ ...jc, id: String(jc.id), projectId: String(jc.project_id) })));
           setTimeLogs(fetchedTimeLogs.map((tl: any) => ({ ...tl, id: String(tl.id), jobCardId: String(tl.job_card_id) })));
@@ -56,32 +63,28 @@ const FreelancerTimeTrackingPage: React.FC = () => {
     }
   }, [freelancerId, isAuthLoading]);
 
-  // Effect to refresh time logs if a global timer was stopped elsewhere
   useEffect(() => {
     if (freelancerId && !activeTimerInfo && !isLoading) { // If timer was running and now it's not
-        // This could be more sophisticated, e.g. checking if the last log was recent
-        // For now, just re-fetch if timer becomes null
-        // console.log("Global timer stopped, refreshing logs on tracking page.");
-        // setIsProcessingLog(true); // Show a brief loading state for logs
         const refreshLogs = async () => {
+            // This could be more sophisticated, e.g. checking if the last log was recent
+            // For now, just re-fetch if timer becomes null
+            // console.log("Global timer stopped, refreshing logs on tracking page.");
+            // setIsProcessingLog(true); // Show a brief loading state for logs
             try {
-                const fetchedTimeLogs = await apiService.fetchMyTimeLogsAPI(String(freelancerId));
-                setTimeLogs(fetchedTimeLogs.map((tl: any) => ({ ...tl, id: String(tl.id), jobCardId: String(tl.job_card_id) })));
+<<<<<<< Updated upstream
+                const fetchedTimeLogs = await fetchMyTimeLogsAPI(freelancerId);
+=======
+                const fetchedTimeLogs = await fetchMyTimeLogsAPI(String(freelancerId));
+>>>>>>> Stashed changes
+                setTimeLogs(fetchedTimeLogs);
             } catch (err) {
                 console.error("Error refreshing time logs:", err);
-                // setError("Failed to refresh time logs after timer stop.");
-            } finally {
-                // setIsProcessingLog(false);
             }
         };
-        // Only run if there was an active timer previously (requires more complex state tracking or rely on other signals)
-        // This simple version might over-fetch. For now, this is disabled to prevent over-fetching.
-        // A better approach might be an event bus or callback from AuthContext.
-        // refreshLogs();
+        refreshLogs();
     }
   }, [activeTimerInfo, freelancerId, isLoading]);
 
-  // Helper functions for rendering
   const getProjectTitle = (projectId: string): string => {
     return `Project ID: ${projectId}`;
   };
@@ -100,7 +103,7 @@ const FreelancerTimeTrackingPage: React.FC = () => {
     return `${hours}h ${minutes}m`;
   };
 
-  const handleStartTimer = (jobCard: JobCard) => { // Takes full JobCard object
+  const handleStartTimer = (jobCard: JobCard) => {
     if (activeTimerInfo) {
       alert("Another timer is already active globally. Please stop it before starting a new one.");
       return;
@@ -109,7 +112,6 @@ const FreelancerTimeTrackingPage: React.FC = () => {
       alert("User ID not found. Cannot start timer.");
       return;
     }
-    // Use AuthContext to start the global timer
     startGlobalTimer(jobCard.id, jobCard.title, jobCard.projectId);
   };
 
@@ -123,8 +125,12 @@ const FreelancerTimeTrackingPage: React.FC = () => {
     try {
       await stopGlobalTimerAndLog(notes || undefined); // stopGlobalTimerAndLog handles API call and clearing activeTimerInfo
       // Refresh time logs after stopping
-      const fetchedTimeLogs = await apiService.fetchMyTimeLogsAPI(String(freelancerId));
-      setTimeLogs(fetchedTimeLogs.map((tl: any) => ({ ...tl, id: String(tl.id), jobCardId: String(tl.job_card_id) })));
+<<<<<<< Updated upstream
+      const fetchedTimeLogs = await fetchMyTimeLogsAPI(freelancerId);
+=======
+      const fetchedTimeLogs = await fetchMyTimeLogsAPI(String(freelancerId)); // Convert freelancerId to string
+>>>>>>> Stashed changes
+      setTimeLogs(fetchedTimeLogs);
       // alert("Timer stopped and time logged successfully!"); // Already handled by global timer logic potentially
     } catch (err) {
       console.error("Error stopping timer from page:", err);
@@ -137,7 +143,6 @@ const FreelancerTimeTrackingPage: React.FC = () => {
 
   const handleOpenManualLog = (jobCardId: string) => {
     setManualLogJobCardId(jobCardId);
-    // Reset form fields when opening
     setManualDate(new Date().toISOString().split('T')[0]);
     setManualStartTime('09:00');
     setManualEndTime('17:00');
@@ -170,8 +175,8 @@ const FreelancerTimeTrackingPage: React.FC = () => {
 
     const durationMinutes = Math.round((new Date(endTimeISO).getTime() - new Date(startTimeISO).getTime()) / (1000 * 60));
     if (durationMinutes <= 0) {
-        alert("Duration must be positive.");
-        return;
+      alert("Duration must be positive.");
+      return;
     }
 
     const jobCard = jobCards.find(jc => jc.id === manualLogJobCardId);
@@ -185,6 +190,11 @@ const FreelancerTimeTrackingPage: React.FC = () => {
     const newLogData: Omit<TimeLog, 'id' | 'createdAt'> = {
       jobCardId: manualLogJobCardId,
       architectId: String(freelancerId),
+<<<<<<< Updated upstream
+      architectId: freelancerId,
+=======
+      architectId: String(freelancerId),
+>>>>>>> Stashed changes
       startTime: startTimeISO,
       endTime: endTimeISO,
       durationMinutes,
@@ -194,10 +204,16 @@ const FreelancerTimeTrackingPage: React.FC = () => {
 
     setIsProcessingLog(true);
     try {
-      await apiService.addTimeLogAPI(projectId, manualLogJobCardId, newLogData);
+<<<<<<< Updated upstream
+      await addTimeLogAPI(projectId, manualLogJobCardId, newLogData);
       handleCloseManualLog();
-      const fetchedTimeLogs = await apiService.fetchMyTimeLogsAPI(String(freelancerId));
-      setTimeLogs(fetchedTimeLogs.map((tl: any) => ({ ...tl, id: String(tl.id), jobCardId: String(tl.job_card_id) })));
+      const fetchedTimeLogs = await fetchMyTimeLogsAPI(freelancerId);
+=======
+      await addTimeLogAPI(projectId, manualLogJobCardId, newLogData); // Corrected: Call addTimeLogAPI directly
+      handleCloseManualLog();
+      const fetchedTimeLogs = await fetchMyTimeLogsAPI(String(freelancerId));
+>>>>>>> Stashed changes
+      setTimeLogs(fetchedTimeLogs);
       alert("Manual time log added successfully!");
     } catch (err) {
       console.error("Error adding manual time log:", err);
@@ -208,7 +224,6 @@ const FreelancerTimeTrackingPage: React.FC = () => {
     }
   };
 
-  // Combined loading state check
   if (isLoading || (isAuthLoading && !freelancerId)) return <p>Loading page data...</p>;
   if (error) return <p>Error: {error}</p>;
 
@@ -225,13 +240,12 @@ const FreelancerTimeTrackingPage: React.FC = () => {
             {jobCards.map(card => (
               <li key={card.id} style={{ marginBottom: '20px', padding: '10px', border: '1px solid #ccc' }}>
                 <h3>{card.title} ({getProjectTitle(card.projectId)})</h3>
-                {/* <p>{getProjectTitle(card.projectId)}</p> */}
                 <p>Total Time Logged: {calculateTotalTimeForJobCard(card.id)}</p>
                 <button
                   onClick={() => activeTimerInfo?.jobCardId === card.id ? handlePageStopTimer() : handleStartTimer(card)}
                   style={{
                     marginRight: '10px',
-                    backgroundColor: activeTimerInfo?.jobCardId === card.id ? 'red' : (activeTimerInfo ? '#ccc' : 'green'), // Grey out if other timer active
+                    backgroundColor: activeTimerInfo?.jobCardId === card.id ? 'red' : (activeTimerInfo ? '#ccc' : 'green'),
                     color: 'white',
                     cursor: activeTimerInfo && activeTimerInfo.jobCardId !== card.id ? 'not-allowed' : 'pointer'
                   }}
@@ -282,7 +296,7 @@ const FreelancerTimeTrackingPage: React.FC = () => {
           </form>
         </div>
       )}
-      {manualLogJobCardId && <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 999 }} onClick={handleCloseManualLog}></div> /* Modal Backdrop */}
+      {manualLogJobCardId && <div style={{ position: 'fixed', top: 0, left: 0, width: '100%', height: '100%', backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 999 }} onClick={handleCloseManualLog}></div>}
 
 
       <section style={{ marginTop: '30px' }}>
@@ -327,7 +341,6 @@ const FreelancerTimeTrackingPage: React.FC = () => {
   );
 };
 
-// Basic styles (can be moved to a CSS file or styled components later)
 const tableHeaderStyle: React.CSSProperties = {
   borderBottom: '2px solid #ddd',
   padding: '8px',

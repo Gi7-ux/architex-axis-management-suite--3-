@@ -1,4 +1,8 @@
 
+// Re-export types so they can be imported from constants.ts if needed
+export type { User, Project, ProjectStatus, Application, JobCard, JobCardStatus, TimeLog, Message, Conversation, MessageStatus, ManagedFile };
+export { UserRole }; // Export UserRole as a value
+
 export const APP_NAME = "Architex Axis Management Suite";
 export const SHORT_APP_NAME = "Architex Axis"; 
 

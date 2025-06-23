@@ -1,8 +1,11 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import { UserRole, Project, User, TimeLog } from '../../types';
-import { AuthUser } from '../../apiService';
+<<<<<<< Updated upstream
+import { UserRole } from '../../types';
+=======
+import { UserRole, AuthUser } from '../../types'; // Import AuthUser
+>>>>>>> Stashed changes
 import ClientProjectTimeLogPage from './ClientProjectTimeLogPage';
 import { AuthContext, useAuth } from '../AuthContext';
 import * as apiService from '../../apiService';
@@ -38,7 +41,11 @@ describe('ClientProjectTimeLogPage', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockUseAuth.mockReturnValue({
-      user: mockClientUser,
+<<<<<<< Updated upstream
+      user: { id: 'client1', name: 'Client User', role: UserRole.CLIENT },
+=======
+      user: { id: 2, username: 'clientuser', name: 'Client User', email: 'client@example.com', role: UserRole.CLIENT } as AuthUser,
+>>>>>>> Stashed changes
       token: 'test-token',
       isLoading: false,
       login: jest.fn(),
@@ -66,12 +73,12 @@ describe('ClientProjectTimeLogPage', () => {
   });
 
   test('fetches and displays client projects in dropdown', async () => {
-    render(
-      <AuthContext.Provider value={mockUseAuth()}>
-        <ClientProjectTimeLogPage />
-      </AuthContext.Provider>
-    );
-    await waitFor(() => expect(mockFetchProjectsAPI).toHaveBeenCalled());
+    render(<ClientProjectTimeLogPage />);
+<<<<<<< Updated upstream
+    await waitFor(() => expect(mockFetchProjectsAPI).toHaveBeenCalledWith({ clientId: 'client1' }));
+=======
+    await waitFor(() => expect(mockFetchProjectsAPI).toHaveBeenCalledWith({ clientId: '2' })); // clientId should be string '2' if user.id is 2 (number)
+>>>>>>> Stashed changes
     await waitFor(() => expect(mockFetchUsersAPI).toHaveBeenCalledWith(UserRole.FREELANCER));
 
     expect(screen.getByRole('combobox', { name: /select project/i })).toBeInTheDocument();
@@ -100,9 +107,13 @@ describe('ClientProjectTimeLogPage', () => {
 
     fireEvent.change(screen.getByRole('combobox', { name: /select project/i }), { target: { value: 'proj1' } });
 
-    await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith(String(mockClientUser.id), 'proj1'));
-    expect(await screen.findByText(/work on alpha feature 1/i)).toBeInTheDocument();
-    expect(await screen.findByText(/work on alpha feature 2/i)).toBeInTheDocument();
+<<<<<<< Updated upstream
+    await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith('client1', 'proj1'));
+=======
+    await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith('2', 'proj1')); // clientId should be string '2'
+>>>>>>> Stashed changes
+    expect(screen.getByText(/work on alpha feature 1/i)).toBeInTheDocument();
+    expect(screen.getByText(/work on alpha feature 2/i)).toBeInTheDocument();
     // Check for freelancer name mapping
     expect(screen.getByText('John Doe')).toBeInTheDocument();
     expect(screen.getByText('Jane Smith')).toBeInTheDocument();
@@ -136,7 +147,11 @@ describe('ClientProjectTimeLogPage', () => {
 
     fireEvent.change(screen.getByRole('combobox', { name: /select project/i }), { target: { value: 'proj1' } });
 
-    await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith(String(mockClientUser.id), 'proj1'));
+<<<<<<< Updated upstream
+    await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith('client1', 'proj1'));
+=======
+    await waitFor(() => expect(mockFetchClientProjectTimeLogsAPI).toHaveBeenCalledWith('2', 'proj1')); // clientId should be string '2'
+>>>>>>> Stashed changes
     expect(screen.getByText(/no time logs have been recorded for this project yet/i)).toBeInTheDocument();
   });
 

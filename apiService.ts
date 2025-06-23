@@ -1,4 +1,4 @@
-import { User, Project, Application, JobCard, TimeLog, ManagedFile, UserRole, ProjectStatus } from './types';
+import { User, Project, Application, JobCard, TimeLog, ManagedFile, UserRole, ProjectStatus, FreelancerDashboardStats, AdminDashboardStatsResponse, ClientDashboardStats, RecentActivity } from './types';
 
 // Payload for user registration
 export interface UserRegistrationData {
@@ -627,7 +627,6 @@ export interface JobCardPHPResponse extends Omit<JobCard, 'id' | 'projectId' | '
   // created_at and updated_at are strings, compatible with JobCard type
 }
 
-
 // Payload for updating an existing Job Card
 // All fields are optional.
 export interface UpdateJobCardPayload {
@@ -679,30 +678,42 @@ export const deleteJobCardAPI = (jobCardId: number | string): Promise<DeleteJobC
   }, true); // Requires Auth
 };
 
-// Re-enabling fetchFreelancerJobCardsAPI as it's used by tests and potentially components
-export const fetchFreelancerJobCardsAPI = (freelancerId: string): Promise<JobCardPHPResponse[]> => {
-  // Assuming a new PHP endpoint for this, or it's part of an existing one with a filter
-  // For now, let's assume it fetches job cards assigned to a specific freelancer.
-  // This will need to be implemented in api.php to filter by assigned_freelancer_id
-  return apiFetch<JobCardPHPResponse[]>(`/api.php?action=get_freelancer_job_cards&freelancer_id=${freelancerId}`, {
-    method: 'GET',
-  }, true); // Requires Auth
+// Commenting out old/placeholder JobCard APIs:
+// Placeholder export to satisfy component import until proper PHP endpoint is made
+export const fetchFreelancerJobCardsAPI = async (freelancerId: string | number): Promise<JobCard[]> => {
+  console.warn(`fetchFreelancerJobCardsAPI called with ${freelancerId} - using placeholder in apiService.ts`);
+  // This would typically call an endpoint like /api.php?action=get_freelancer_job_cards&freelancer_id=${freelancerId}
+  // For now, returning an empty array or mock data if needed for basic compilation.
+  return Promise.resolve([]);
 };
-
-// The other commented-out JobCard APIs (add, update, delete, update status) are superseded by the new PHP-specific ones above (createJobCardAPI, updateJobCardAPI, deleteJobCardAPI).
-// Keeping them commented out.
+/*
+// export const fetchFreelancerJobCardsAPI = (freelancerId: string): Promise<JobCard[]> => apiFetch<JobCard[]>(`/users/${freelancerId}/jobcards`);
+export const addJobCardAPI = (projectId: string, jobCardData: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt' | 'projectId' | 'status' | 'timeLogs' | 'actualTimeLogged'>): Promise<JobCard> => {
+  return apiFetch<JobCard>(`/projects/${projectId}/jobcards`, { method: 'POST', body: JSON.stringify(jobCardData) });
+};
+export const updateJobCardAPI = (projectId: string, jobCardId: string, updates: Partial<JobCard>): Promise<JobCard> => {
+  return apiFetch<JobCard>(`/projects/${projectId}/jobcards/${jobCardId}`, { method: 'PATCH', body: JSON.stringify(updates) });
+};
+export const deleteJobCardAPI = (projectId: string, jobCardId: string): Promise<void> => {
+  return apiFetch<void>(`/projects/${projectId}/jobcards/${jobCardId}`, { method: 'DELETE' });
+};
+export const updateJobCardStatusAPI = (projectId: string, jobCardId: string, status: JobCardStatus): Promise<JobCard> => {
+  return apiFetch<JobCard>(`/projects/${projectId}/jobcards/${jobCardId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
+};
+*/
 
 // --- TimeLog Service --- (Replace or augment existing)
 
 // Payload for creating a new Time Log
 export interface LogTimePayload {
-  job_card_id: number; // PHP backend expects integer job_card_id
-  start_time: string;  // ISO8601 format
-  end_time: string;    // ISO8601 format
-  notes?: string | null;
-  // duration_minutes is calculated by backend
-  // user_id is taken from authenticated user by backend
+  jobCardId: string; // Using camelCase for consistency with frontend
+  startTime: string;
+  endTime: string;
+  notes?: string;
+  manualEntry?: boolean;
 }
+
+// Response from logging time
 export interface LogTimeResponse {
   message: string;
   time_log_id: number; // PHP returns integer ID
@@ -773,20 +784,20 @@ export const deleteTimeLogAPI = (timeLogId: number | string): Promise<DeleteTime
   }, true); // Requires Auth
 };
 
-// Re-enabling and updating addTimeLogAPI to match the new LogTimePayload and LogTimeResponse
-export const addTimeLogAPI = (projectId: string, jobCardId: string, timeLogData: Omit<TimeLog, 'id' | 'createdAt' | 'manualEntry' | 'architectId'> & { manualEntry: boolean, architectId: string }): Promise<LogTimeResponse> => {
-  // This function is a wrapper for logTimeAPI, adapting its parameters for manual time logging.
-  // It assumes projectId and architectId are available from the context where it's called.
-  // The backend's log_time action takes job_card_id, start_time, end_time, notes.
-  // The user_id (architectId) is taken from the authenticated user.
-  // The manualEntry flag is a frontend concept, not directly sent to backend log_time.
-  const payload: LogTimePayload = {
-    job_card_id: Number(jobCardId), // Convert to number for backend
-    start_time: timeLogData.startTime,
-    end_time: timeLogData.endTime,
+export const addTimeLogAPI = (projectId: string, jobCardId: string, timeLogData: Omit<TimeLog, 'id' | 'createdAt'>): Promise<TimeLog> => {
+  const payload = {
+    projectId,
+    jobCardId,
+    startTime: timeLogData.startTime,
+    endTime: timeLogData.endTime,
+    durationMinutes: timeLogData.durationMinutes,
     notes: timeLogData.notes,
+    manualEntry: timeLogData.manualEntry
   };
-  return logTimeAPI(payload); // Use the new logTimeAPI
+  return apiFetch<TimeLog>(`/api.php?action=add_time_log`, {
+    method: 'POST',
+    body: JSON.stringify(payload)
+  });
 };
 export const fetchProjectTimeLogsForAdminAPI = (projectId: string): Promise<TimeLog[]> => {
     return apiFetch<TimeLog[]>(`/admin/projects/${projectId}/timelogs`); // Example specific admin endpoint
@@ -805,8 +816,6 @@ export const fetchMyTimeLogsAPI = (freelancerId: string, filters?: { dateFrom?: 
   const queryString = queryParams.toString();
   return apiFetch<TimeLog[]>(`/users/${freelancerId}/timelogs${queryString ? `?${queryString}` : ''}`);
 };
-
-
 
 export const fetchClientProjectTimeLogsAPI = (clientId: string, projectId: string, filters?: { dateFrom?: string, dateTo?: string, freelancerId?: string }): Promise<TimeLog[]> => {
   const queryParams = new URLSearchParams();
@@ -838,7 +847,7 @@ export const uploadFileAPI = (projectId: string, formData: FormData): Promise<Ma
   return apiFetch<ManagedFile>(`/projects/${projectId}/files`, {
     method: 'POST',
     body: formData,
-    headers: {} // Remove default Content-Type for FormData by using empty headers
+    headers: {} // Remove default Content-Type for FormData
   });
 };
 export const deleteFileAPI = (fileId: string): Promise<void> => {
@@ -998,33 +1007,170 @@ export const adminAddSkillAPI = (payload: AdminAddSkillPayload): Promise<AdminAd
 
 // --- Dashboard Stats API ---
 
-export interface AdminDashboardStatsResponse {
-  total_active_users: number;
-  users_by_role: {
-    admin: number;
-    client: number;
-    freelancer: number;
-  };
-  total_projects: number;
-  projects_by_status: {
-    // Keys will be the project status strings as returned by backend
+export const fetchUserRecentFilesAPI = (): Promise<ManagedFile[]> => {
+  return apiFetch<ManagedFile[]>(`/api.php?action=get_user_recent_files`);
+};
     // e.g., 'Pending Approval', 'Open', 'In Progress', 'Completed', 'Cancelled'
-    // The exact keys should match what the PHP backend's $project_statuses_to_count produces as keys.
-    [status_key: string]: number;
-  };
-  total_open_applications: number;
-}
+    // The exact keys should match what the PHP backend's $project_statuses_to_count produces as keys.// AdminDashboardStatsResponse is now defined in types.ts
 
+<<<<<<< Updated upstream
+=======
+// Stats for Client Dashboard - This local definition will be removed to use the one from types.ts
+// export interface ClientDashboardStats {
+//   myProjectsCount: number;
+//   openProjectsCount: number; // Platform-wide
+//   myInProgressProjectsCount: number;
+//   myCompletedProjectsCount: number;
+// }
+
+>>>>>>> Stashed changes
 export const fetchAdminDashboardStatsAPI = (): Promise<AdminDashboardStatsResponse> => {
   return apiFetch<AdminDashboardStatsResponse>(`/api.php?action=get_admin_dashboard_stats`, {
     method: 'GET',
   }, true); // Requires Admin Auth
 };
 
+<<<<<<< Updated upstream
 export const fetchFreelancerDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
 export const fetchClientDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
 export const fetchRecentActivityAPI = (userId: string): Promise<any[]> => apiFetch<any[]>(`/users/${userId}/recent-activity`);
 export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`);
+=======
+export const fetchFreelancerDashboardStatsAPI = (userId: number | string): Promise<FreelancerDashboardStats> => apiFetch<FreelancerDashboardStats>(`/users/${userId}/dashboard/stats`);
+export const fetchClientDashboardStatsAPI = (): Promise<ClientDashboardStats> => {
+  return apiFetch<ClientDashboardStats>(`/api.php?action=get_client_dashboard_stats`, {
+    method: 'GET',
+  }, true); // Requires Client Auth
+};
+
+export const fetchRecentActivityAPI = (userId: string): Promise<RecentActivity[]> => 
+  apiFetch<RecentActivity[]>(`/users/${userId}/recent-activity`); // Placeholder
+export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`); // Placeholder
+>>>>>>> Stashed changes
 
 // Reports
 export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetch<Project[]>('/reports/projects-with-timelogs');
+
+// --- NEW PHP Backend API Service ---
+
+const PHP_API_BASE_URL = '/backend/api.php'; // Base URL for the new PHP backend
+
+// Assuming the existing User type from './types' is largely compatible
+// If not, a specific interface for PHP-backed user data might be needed:
+// interface PhpUser {
+//   id: number;
+//   username: string;
+//   email: string;
+//   first_name: string | null;
+//   last_name: string | null;
+//   role: 'admin' | 'client' | 'freelancer';
+//   // ... other fields as returned by PHP backend
+// }
+
+interface PhpApiResponse<T> {
+  status: 'success' | 'error';
+  data?: T;
+  message?: string;
+}
+
+/**
+ * Fetches all users from the NEW PHP backend.
+ */
+export const getUsersFromPhp = async (): Promise<User[]> => {
+  try {
+    const response = await fetch(`${PHP_API_BASE_URL}?action=getUsers`, {
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      let errorMessage = `HTTP error ${response.status}: ${response.statusText}`;
+      try {
+        const errorResult: PhpApiResponse<null> = await response.json();
+        if (errorResult.message) {
+          errorMessage = errorResult.message;
+        }
+      } catch (e) {
+        // Ignore if error response is not JSON
+      }
+      throw new Error(errorMessage);
+    }
+
+    const result: PhpApiResponse<User[]> = await response.json();
+
+    if (result.status === 'success' && result.data) {
+      return result.data.map(user => ({
+        ...user,
+        // Perform any necessary transformations if PHP backend returns slightly different structure
+        // For example, if is_active is 0/1, map to boolean if your User type expects boolean
+        // is_active: user.is_active === 1, 
+      }));
+    } else {
+      throw new Error(result.message || 'Failed to fetch users from PHP backend');
+    }
+  } catch (error) {
+    console.error('Error in getUsersFromPhp:', error);
+    throw error;
+  }
+};
+
+interface CreateUserPhpPayload {
+  username: string;
+  email: string;
+  password: string; // Changed from password_hash to password
+  role: 'admin' | 'client' | 'freelancer';
+  first_name?: string;
+  last_name?: string;
+  // Add other necessary fields as expected by your PHP createUser action
+}
+
+/**
+ * Creates a new user via the NEW PHP backend.
+ */
+export const createUserInPhp = async (userData: CreateUserPhpPayload): Promise<User> => {
+  try {
+    const response = await fetch(`${PHP_API_BASE_URL}?action=createUser`, { // Assuming createUser action
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(userData), // userData now contains raw password
+    });
+
+    if (!response.ok) {
+      let errorMessage = `HTTP error ${response.status}: ${response.statusText}`;
+      try {
+        const errorResult: PhpApiResponse<null> = await response.json();
+        if (errorResult.message) {
+          errorMessage = errorResult.message;
+        }
+      } catch (e) {
+        // Ignore if error response is not JSON
+      }
+      throw new Error(errorMessage);
+    }
+
+    const result: PhpApiResponse<User> = await response.json(); // Assuming PHP returns the created user
+
+    if (result.status === 'success' && result.data) {
+      return {
+        ...result.data
+        // Perform any necessary transformations here as well
+      };
+    } else {
+      throw new Error(result.message || 'Failed to create user in PHP backend');
+    }
+  } catch (error) {
+    console.error('Error in createUserInPhp:', error);
+    throw error;
+  }
+};
+
+// Add other functions to interact with your PHP backend as needed.
+// Example:
+// export const getProjects = async (): Promise<Project[]> => { ... };
+// export const createProject = async (projectData: ProjectPayload): Promise<Project> => { ... };
+
+// You would also define interfaces for Project, ProjectPayload etc.

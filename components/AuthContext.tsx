@@ -1,6 +1,8 @@
 import React, { createContext, useState, useContext, useEffect, ReactNode } from 'react';
-import { TimeLog } from '../types';
-import { loginAPI, fetchUserProfileAPI, ApiError, AuthUser, UserLoginData, addTimeLogAPI } from '../apiService';
+import { User, UserRole, TimeLog } from '../types'; // User might still be used for other contexts or can be replaced by AuthUser if sufficient
+import { loginAPI, fetchUserProfileAPI, ApiError, AuthUser, UserLoginData } from '../apiService';
+export type { AuthUser }; // Export AuthUser
+import { addTimeLogAPI, updateUserAPI } from '../apiService'; // Keep other necessary imports
 
 
 export interface ActiveTimerInfo {
@@ -117,7 +119,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
 
     try {
-      await addTimeLogAPI(activeTimerInfo.projectId, activeTimerInfo.jobCardId, timeLogData);
+      await addTimeLogAPI(activeTimerInfo.projectId, timeLogData);
       console.log("Time log saved successfully via API.");
     } catch (error) {
       console.error("API call to log time failed:", error);

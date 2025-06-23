@@ -1,27 +1,42 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useAuth } from './AuthContext';
+import React, { useState, useEffect, useCallback, useRef } from "react";
+import { useAuth } from "../contexts/AuthContext";
 import {
-    // New Messaging APIs
-    findOrCreateConversationAPI,
-    fetchUserConversationsAPI,
-    fetchConversationMessagesAPI,
-    sendMessageAPI,
-    markConversationAsReadAPI,
-    // New Messaging Types
-    ConversationPreviewPHP,
-    MessagePHP,
-    SendMessagePayload,
-    // Other APIs needed
-    adminFetchAllUsersAPI, AdminUserView
-} from '../apiService';
-// NAV_LINKS might not be needed anymore if navigation is simplified
-// import { NAV_LINKS } from '../../constants';
-import Button from './shared/Button';
-// Adjusted icons
-import { PaperAirplaneIcon, ArrowLeftIcon, ChatBubbleLeftRightIcon, UsersIcon as UserPlusIcon } from './shared/IconComponents';
-import Modal from './shared/Modal';
-import LoadingSpinner from './shared/LoadingSpinner'; // Corrected path
+  ConversationResponse,
+  MessageResponse,
+  SendMessagePayload,
+  findOrCreateConversationAPI,
+  sendMessageAPI
+} from "../apiService";
+import { useNavigate, useLocation } from "react-router-dom";
+import Button from "./shared/Button";
+import {
+  PaperAirplaneIcon,
+  ArrowLeftIcon,
+  ChatBubbleLeftRightIcon,
+  UsersIcon
+} from "./shared/IconComponents";
+import LoadingSpinner from "./shared/LoadingSpinner";
 
+interface AdminUserView {
+  id: string;
+  username: string;
+  email: string;
+  role: string;
+}
+
+interface Conversation extends ConversationResponse {
+  participants: {
+    id: string;
+    username: string;
+    avatarUrl?: string;
+  }[];
+  last_message?: {
+    content: string;
+    timestamp: string;
+    sender_id: string;
+  };
+  unread_count: number;
+}
 
 const formatMessageTimestamp = (isoString: string | null): string => {
   if (!isoString) return '';
@@ -31,13 +46,12 @@ const formatMessageTimestamp = (isoString: string | null): string => {
 
 const MessagingPage: React.FC = () => {
   const { user } = useAuth();
-  // location and navigate might be used less if project-based chat initiation is removed
-  // const location = useLocation();
-  // const navigate = useNavigate();
+  const navigate = useNavigate();
+  const location = useLocation();
 
-  const [conversations, setConversations] = useState<ConversationPreviewPHP[]>([]);
-  const [selectedConversation, setSelectedConversation] = useState<ConversationPreviewPHP | null>(null);
-  const [messages, setMessages] = useState<MessagePHP[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
+  const [messages, setMessages] = useState<MessageResponse[]>([]);
   const [newMessageContent, setNewMessageContent] = useState('');
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
@@ -224,7 +238,7 @@ const MessagingPage: React.FC = () => {
         <div className={`w-full md:w-1/3 lg:w-1/4 border-r border-gray-200 bg-white flex flex-col ${selectedConversation && 'hidden md:flex'}`}>
           <div className="p-3 border-b flex justify-between items-center">
             <h2 className="text-xl font-semibold text-primary">Chats</h2>
-            <Button size="sm" variant="outline" onClick={handleOpenCreateConversationModal} leftIcon={<UserPlusIcon />} disabled={isCreatingConversation || isLoadingConversations}>
+            <Button size="sm" variant="outline" onClick={handleOpenCreateConversationModal} leftIcon={<UsersIcon />} disabled={isCreatingConversation || isLoadingConversations}>
               New Chat
             </Button>
           </div>
