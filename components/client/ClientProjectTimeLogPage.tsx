@@ -40,7 +40,7 @@ const ClientProjectTimeLogPage: React.FC = () => {
       setError(null);
       try {
         const [fetchedProjects, fetchedUsers] = await Promise.all([
-          fetchProjectsAPI({ clientId }),
+          fetchProjectsAPI({ clientId: String(clientId) }),
           fetchUsersAPI(UserRole.FREELANCER) // Fetch only freelancers
         ]);
         setProjects(fetchedProjects);
@@ -66,7 +66,7 @@ const ClientProjectTimeLogPage: React.FC = () => {
       setIsLoadingTimeLogs(true);
       setError(null); // Clear previous errors specific to time log fetching
       try {
-        const fetchedTimeLogs = await fetchClientProjectTimeLogsAPI(clientId, selectedProjectId);
+        const fetchedTimeLogs = await fetchClientProjectTimeLogsAPI(String(clientId), selectedProjectId);
         setTimeLogs(fetchedTimeLogs);
       } catch (err) {
         console.error(`Error fetching time logs for project ${selectedProjectId}:`, err);

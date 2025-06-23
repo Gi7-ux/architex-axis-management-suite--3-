@@ -27,7 +27,9 @@ describe('ToastProvider and ToastContext', () => {
   });
 
   afterEach(() => {
-    jest.runOnlyPendingTimers();
+    act(() => {
+      jest.runOnlyPendingTimers();
+    });
     jest.useRealTimers();
   });
 
@@ -88,6 +90,7 @@ describe('ToastProvider and ToastContext', () => {
     act(() => { jest.advanceTimersByTime(99); });
     expect(screen.getByTestId('toast-count').textContent).toBe('1');
 
+    // Wrap the timer advancement that causes state update in act
     act(() => { jest.advanceTimersByTime(1); }); // Total 100ms
     expect(screen.getByTestId('toast-count').textContent).toBe('0');
   });
@@ -110,6 +113,7 @@ describe('ToastProvider and ToastContext', () => {
     expect(mockSetTimeout).toHaveBeenCalledTimes(1);
     expect(mockSetTimeout).toHaveBeenCalledWith(expect.any(Function), DEFAULT_TOAST_DURATION);
 
+    // Wrap the timer advancement that causes state update in act
     act(() => { jest.advanceTimersByTime(DEFAULT_TOAST_DURATION); }); // Clean up timer
     mockSetTimeout.mockRestore();
   });
