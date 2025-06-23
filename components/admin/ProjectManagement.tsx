@@ -12,6 +12,7 @@ import {
     updateProjectAPI,
     AdminUserView,
     CreateProjectPHPData,
+    UpdateProjectPHPData,
     ProjectPHPResponse, // Import new type
     Skill, // Import Skill
     fetchAllSkillsAPI // Import fetchAllSkillsAPI
@@ -98,9 +99,6 @@ const ProjectManagement: React.FC = () => {
           setAllGlobalSkills(fetchedSkills.sort((a,b) => a.name.localeCompare(b.name)));
 
 
-          if (location.pathname.endsWith(NAV_LINKS.ADMIN_CREATE_PROJECT)) {
-              handleOpenCreateModal();
-          }
       } catch (error: any) {
           console.error("Failed to load initial project management data:", error);
           addToast(error.message || 'Failed to load initial project management data.', 'error');
@@ -500,7 +498,7 @@ const ProjectManagement: React.FC = () => {
       )}
 
       {selectedProject && isDetailModalOpen && ( // Ensure modal only renders if selectedProject and isDetailModalOpen are true
-        <Modal isOpen={isDetailModalOpen} onClose={handleCloseDetailModal} title={`Edit Project: ${editFormData?.title || selectedProject.title}`} size="2xl">
+        <Modal isOpen={isDetailModalOpen} onClose={handleCloseDetailModal} title={`Edit Project: ${editFormData?.title || selectedProject.title}`} size="2xl" testId="edit-project-modal">
           <form onSubmit={(e) => { e.preventDefault(); handleUpdateProjectDetails(); }} className="space-y-4 max-h-[75vh] overflow-y-auto p-1">
             {/* Modal-specific formError display */}
             {formError && isDetailModalOpen && <div className="mb-3 p-2 bg-red-100 text-red-600 rounded-md text-sm">{formError}</div>}
@@ -579,12 +577,12 @@ const ProjectManagement: React.FC = () => {
                             {projectApplications.filter(app => app.status === 'pending').map(app => (
                                 <div key={app.id}
                                      className="p-3 bg-gray-50 rounded-md border hover:shadow-sm">
-                                    <p className="font-semibold text-gray-800">{ (app as any).freelancer_username /* Assuming type cast for now */} <span className="text-xs text-gray-500">({app.freelancer_id})</span></p>
-                                    <p className="text-sm text-gray-600">Bid: R {app.bid_amount ? app.bid_amount.toLocaleString() : 'N/A'}</p>
-                                    <p className="text-sm text-gray-600 mt-1 italic whitespace-pre-wrap">"{app.proposal_text}"</p>
-                                    <Button 
+                                    <p className="font-semibold text-gray-800">{ (app as any).freelancer_username /* Assuming type cast for now */} <span className="text-xs text-gray-500">({app.freelancerId})</span></p>
+                                    <p className="text-sm text-gray-600">Bid: R {app.bidAmount ? app.bidAmount.toLocaleString() : 'N/A'}</p>
+                                    <p className="text-sm text-gray-600 mt-1 italic whitespace-pre-wrap">"{app.proposalText}"</p>
+                                    <Button
                                         onClick={() => handleAcceptApplication(String(app.id), selectedProject.id)}
-                                        variant="primary" size="sm" className="mt-2" 
+                                        variant="primary" size="sm" className="mt-2"
                                         leftIcon={<UserCheckIcon className="w-4 h-4"/>}
                                         isLoading={isSubmitting}>
                                         Accept Application
@@ -615,7 +613,7 @@ const ProjectManagement: React.FC = () => {
 
       {/* Create Project Modal - Skills are deferred for creation */}
       {isCreateModalOpen && (
-        <Modal isOpen={isCreateModalOpen} onClose={handleCloseCreateModal} title="Create New Project (Admin)" size="xl">
+        <Modal isOpen={isCreateModalOpen} onClose={handleCloseCreateModal} title="Create New Project (Admin)" size="xl" testId="create-project-modal">
            <form onSubmit={handleCreateProject} className="space-y-4 p-1">
             <div>
               <label htmlFor="proj_title_create" className="block text-sm font-medium text-gray-700">Project Title*</label>

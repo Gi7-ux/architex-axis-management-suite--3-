@@ -1,4 +1,4 @@
-import { User, Project, Application, JobCard, TimeLog, ManagedFile, Conversation, Message, UserRole, ProjectStatus, JobCardStatus, MessageStatus } from './types';
+import { User, Project, Application, JobCard, TimeLog, ManagedFile, UserRole, ProjectStatus } from './types';
 
 // Payload for user registration
 export interface UserRegistrationData {
@@ -23,8 +23,10 @@ export interface UserLoginData {
 export interface AuthUser {
   id: number; // PHP returns id as number
   username: string;
+  name: string;
   email: string;
   role: UserRole;
+  avatarUrl?: string;
 }
 
 // Response from successful login
@@ -84,7 +86,7 @@ export interface MarkNotificationsReadResponse {
 
 
 // const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api'; // Example if using build-time env vars
-const API_BASE_URL = '/backend'; // Using relative path for API calls
+const API_BASE_URL = process.env.NODE_ENV === 'test' ? 'http://localhost/backend' : '/backend'; // Using relative path for API calls
 
 interface ApiErrorData {
   message?: string;
@@ -355,13 +357,15 @@ export const fetchUserApplicationsAPI = (userId: string): Promise<Application[]>
 // --- Project Service ---
 
 // This represents a project object as returned by PHP backend, including usernames
-export interface ProjectPHPResponse extends Omit<Project, 'id' | 'clientId' | 'freelancerId' | 'clientName' | 'assignedFreelancerName' | 'jobCards' | 'skillsRequired' > {
+export interface ProjectPHPResponse extends Omit<Project, 'id' | 'clientId' | 'freelancerId' | 'clientName' | 'assignedFreelancerName' | 'jobCards' | 'skillsRequired' | 'createdAt' | 'updatedAt' > {
   id: number;
   client_id: number;
   freelancer_id: number | null;
   client_username?: string | null;      // Added by backend
   freelancer_username?: string | null;  // Added by backend
-  // Other fields like title, description, status, budget, deadline, createdAt, updatedAt are assumed compatible
+  created_at: string; // Explicitly added from PHP response
+  updated_at: string; // Explicitly added from PHP response
+  // Other fields like title, description, status, budget, deadline are assumed compatible
   skills_required?: Skill[]; // ADDED for project's required skills
   // jobCards and skillsRequired would be populated by separate calls or if backend includes them
 }
@@ -675,22 +679,18 @@ export const deleteJobCardAPI = (jobCardId: number | string): Promise<DeleteJobC
   }, true); // Requires Auth
 };
 
-// Commenting out old/placeholder JobCard APIs:
-/*
-export const fetchFreelancerJobCardsAPI = (freelancerId: string): Promise<JobCard[]> => apiFetch<JobCard[]>(`/users/${freelancerId}/jobcards`);
-export const addJobCardAPI = (projectId: string, jobCardData: Omit<JobCard, 'id' | 'createdAt' | 'updatedAt' | 'projectId' | 'status' | 'timeLogs' | 'actualTimeLogged'>): Promise<JobCard> => {
-  return apiFetch<JobCard>(`/projects/${projectId}/jobcards`, { method: 'POST', body: JSON.stringify(jobCardData) });
+// Re-enabling fetchFreelancerJobCardsAPI as it's used by tests and potentially components
+export const fetchFreelancerJobCardsAPI = (freelancerId: string): Promise<JobCardPHPResponse[]> => {
+  // Assuming a new PHP endpoint for this, or it's part of an existing one with a filter
+  // For now, let's assume it fetches job cards assigned to a specific freelancer.
+  // This will need to be implemented in api.php to filter by assigned_freelancer_id
+  return apiFetch<JobCardPHPResponse[]>(`/api.php?action=get_freelancer_job_cards&freelancer_id=${freelancerId}`, {
+    method: 'GET',
+  }, true); // Requires Auth
 };
-export const updateJobCardAPI = (projectId: string, jobCardId: string, updates: Partial<JobCard>): Promise<JobCard> => {
-  return apiFetch<JobCard>(`/projects/${projectId}/jobcards/${jobCardId}`, { method: 'PATCH', body: JSON.stringify(updates) });
-};
-export const deleteJobCardAPI = (projectId: string, jobCardId: string): Promise<void> => {
-  return apiFetch<void>(`/projects/${projectId}/jobcards/${jobCardId}`, { method: 'DELETE' });
-};
-export const updateJobCardStatusAPI = (projectId: string, jobCardId: string, status: JobCardStatus): Promise<JobCard> => {
-  return apiFetch<JobCard>(`/projects/${projectId}/jobcards/${jobCardId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
-};
-*/
+
+// The other commented-out JobCard APIs (add, update, delete, update status) are superseded by the new PHP-specific ones above (createJobCardAPI, updateJobCardAPI, deleteJobCardAPI).
+// Keeping them commented out.
 
 // --- TimeLog Service --- (Replace or augment existing)
 
@@ -773,12 +773,21 @@ export const deleteTimeLogAPI = (timeLogId: number | string): Promise<DeleteTime
   }, true); // Requires Auth
 };
 
-// Commenting out a potentially conflicting older addTimeLogAPI
-/*
-export const addTimeLogAPI = (projectId: string, jobCardId: string, timeLogData: Omit<TimeLog, 'id' | 'createdAt'>): Promise<TimeLog> => {
-  return apiFetch<TimeLog>(`/projects/${projectId}/jobcards/${jobCardId}/timelogs`, { method: 'POST', body: JSON.stringify(timeLogData) });
+// Re-enabling and updating addTimeLogAPI to match the new LogTimePayload and LogTimeResponse
+export const addTimeLogAPI = (projectId: string, jobCardId: string, timeLogData: Omit<TimeLog, 'id' | 'createdAt' | 'manualEntry' | 'architectId'> & { manualEntry: boolean, architectId: string }): Promise<LogTimeResponse> => {
+  // This function is a wrapper for logTimeAPI, adapting its parameters for manual time logging.
+  // It assumes projectId and architectId are available from the context where it's called.
+  // The backend's log_time action takes job_card_id, start_time, end_time, notes.
+  // The user_id (architectId) is taken from the authenticated user.
+  // The manualEntry flag is a frontend concept, not directly sent to backend log_time.
+  const payload: LogTimePayload = {
+    job_card_id: Number(jobCardId), // Convert to number for backend
+    start_time: timeLogData.startTime,
+    end_time: timeLogData.endTime,
+    notes: timeLogData.notes,
+  };
+  return logTimeAPI(payload); // Use the new logTimeAPI
 };
-*/
 export const fetchProjectTimeLogsForAdminAPI = (projectId: string): Promise<TimeLog[]> => {
     return apiFetch<TimeLog[]>(`/admin/projects/${projectId}/timelogs`); // Example specific admin endpoint
 };
@@ -797,18 +806,7 @@ export const fetchMyTimeLogsAPI = (freelancerId: string, filters?: { dateFrom?: 
   return apiFetch<TimeLog[]>(`/users/${freelancerId}/timelogs${queryString ? `?${queryString}` : ''}`);
 };
 
-export const updateTimeLogAPI = (timeLogId: string, updates: Partial<Omit<TimeLog, 'id' | 'createdAt' | 'architectId' | 'jobCardId'>>): Promise<TimeLog> => {
-  return apiFetch<TimeLog>(`/timelogs/${timeLogId}`, {
-    method: 'PATCH',
-    body: JSON.stringify(updates),
-  });
-};
 
-export const deleteTimeLogAPI = (timeLogId: string): Promise<void> => {
-  return apiFetch<void>(`/timelogs/${timeLogId}`, {
-    method: 'DELETE',
-  });
-};
 
 export const fetchClientProjectTimeLogsAPI = (clientId: string, projectId: string, filters?: { dateFrom?: string, dateTo?: string, freelancerId?: string }): Promise<TimeLog[]> => {
   const queryParams = new URLSearchParams();
@@ -840,7 +838,7 @@ export const uploadFileAPI = (projectId: string, formData: FormData): Promise<Ma
   return apiFetch<ManagedFile>(`/projects/${projectId}/files`, {
     method: 'POST',
     body: formData,
-    headers: { 'Content-Type': undefined } // Remove default Content-Type for FormData
+    headers: {} // Remove default Content-Type for FormData by using empty headers
   });
 };
 export const deleteFileAPI = (fileId: string): Promise<void> => {

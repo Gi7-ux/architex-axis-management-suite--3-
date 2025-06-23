@@ -2746,7 +2746,6 @@ elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST'
 }
 // END MODIFIED: update_project
 elseif ($action === 'delete_project' && $method === 'DELETE') {
-elseif ($action === 'delete_project' && $method === 'DELETE') {
     $authenticated_user = require_authentication($conn); // 1. Require Authentication
     $user_id = (int)$authenticated_user['id'];
     $user_role = $authenticated_user['role'];

@@ -12,6 +12,15 @@ export default defineConfig(({ mode }) => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
-      }
+      },
+      server: {
+       proxy: {
+         '/backend': {
+           target: 'http://localhost:8000',
+           changeOrigin: true,
+           rewrite: (reqPath) => reqPath.replace(/^\/backend/, '')
+         }
+       }
+     }
     };
 });

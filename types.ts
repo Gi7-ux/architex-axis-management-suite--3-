@@ -24,6 +24,7 @@ export enum ProjectStatus {
   IN_PROGRESS = 'In Progress',
   COMPLETED = 'Completed',
   CANCELLED = 'Cancelled',
+  ARCHIVED = 'archived',
 }
 
 export enum JobCardStatus {
@@ -65,6 +66,7 @@ export interface Project {
   title: string;
   description: string;
   budget: number; // In Rands
+  currency: string;
   deadline: string; // ISO date string
   clientId: string; // Client assigned by Admin
   clientName?: string; // Denormalized for display
@@ -72,10 +74,16 @@ export interface Project {
   skillsRequired: string[];
   createdAt: string; // ISO date string
   adminCreatorId?: string; // Admin who created the project
+  freelancerId?: string;
   assignedFreelancerId?: string;
   assignedFreelancerName?: string; // Denormalized
   jobCards?: JobCard[];
   isArchived?: boolean;
+  updatedAt: string;
+  paymentType: 'fixed' | 'hourly';
+  experienceLevel: 'beginner' | 'intermediate' | 'expert';
+  duration: string;
+  isFeatured?: boolean;
 }
 
 export interface Application {
@@ -83,9 +91,9 @@ export interface Application {
   projectId: string;
   freelancerId: string;
   freelancerName: string;
-  proposal: string;
+  proposalText: string;
   bidAmount: number; // In Rands
-  status: 'PendingAdminApproval' | 'PendingClientReview' | 'Accepted' | 'Rejected'; // Status might need more stages
+  status: 'pending' | 'accepted' | 'rejected'; // Status might need more stages
   appliedAt: string; // ISO date string
 }
 

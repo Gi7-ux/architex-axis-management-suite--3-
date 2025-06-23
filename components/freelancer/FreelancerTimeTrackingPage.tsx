@@ -1,12 +1,6 @@
-import React, { useState, useEffect, useContext } from 'react'; // Removed unused 'useContext' if AuthContext import changes to useAuth hook
-import { User, JobCard, TimeLog } from '../../types';
-import {
-  fetchFreelancerJobCardsAPI,
-  fetchMyTimeLogsAPI,
-  // addTimeLogAPI, // Will be handled by AuthContext's stopGlobalTimerAndLog
-  deleteTimeLogAPI, // Keep for future direct delete on this page
-  updateTimeLogAPI  // Keep for future direct edit on this page
-} from '../../apiService';
+import React, { useState, useEffect } from 'react'; // Removed unused 'useContext' if AuthContext import changes to useAuth hook
+import { JobCard, TimeLog } from '../../types';
+import * as apiService from '../../apiService';
 // import { AuthContext } from '../AuthContext'; // No longer directly used, useAuth hook instead
 import { useAuth } from '../AuthContext'; // Import useAuth
 
@@ -46,11 +40,11 @@ const FreelancerTimeTrackingPage: React.FC = () => {
         try {
           // Fetch job cards and existing time logs when freelancerId is available
           const [fetchedJobCards, fetchedTimeLogs] = await Promise.all([
-            fetchFreelancerJobCardsAPI(freelancerId),
-            fetchMyTimeLogsAPI(freelancerId) // Consider filtering by activeTimerInfo.jobCardId if needed
+            apiService.fetchFreelancerJobCardsAPI(String(freelancerId)),
+            apiService.fetchMyTimeLogsAPI(String(freelancerId)) // Consider filtering by activeTimerInfo.jobCardId if needed
           ]);
-          setJobCards(fetchedJobCards);
-          setTimeLogs(fetchedTimeLogs);
+          setJobCards(fetchedJobCards.map((jc: any) => ({ ...jc, id: String(jc.id), projectId: String(jc.project_id) })));
+          setTimeLogs(fetchedTimeLogs.map((tl: any) => ({ ...tl, id: String(tl.id), jobCardId: String(tl.job_card_id) })));
         } catch (err) {
           console.error("Error fetching page data:", err);
           setError(err instanceof Error ? err.message : "An unknown error occurred while fetching data.");
@@ -65,14 +59,14 @@ const FreelancerTimeTrackingPage: React.FC = () => {
   // Effect to refresh time logs if a global timer was stopped elsewhere
   useEffect(() => {
     if (freelancerId && !activeTimerInfo && !isLoading) { // If timer was running and now it's not
+        // This could be more sophisticated, e.g. checking if the last log was recent
+        // For now, just re-fetch if timer becomes null
+        // console.log("Global timer stopped, refreshing logs on tracking page.");
+        // setIsProcessingLog(true); // Show a brief loading state for logs
         const refreshLogs = async () => {
-            // This could be more sophisticated, e.g. checking if the last log was recent
-            // For now, just re-fetch if timer becomes null
-            // console.log("Global timer stopped, refreshing logs on tracking page.");
-            // setIsProcessingLog(true); // Show a brief loading state for logs
             try {
-                const fetchedTimeLogs = await fetchMyTimeLogsAPI(freelancerId);
-                setTimeLogs(fetchedTimeLogs);
+                const fetchedTimeLogs = await apiService.fetchMyTimeLogsAPI(String(freelancerId));
+                setTimeLogs(fetchedTimeLogs.map((tl: any) => ({ ...tl, id: String(tl.id), jobCardId: String(tl.job_card_id) })));
             } catch (err) {
                 console.error("Error refreshing time logs:", err);
                 // setError("Failed to refresh time logs after timer stop.");
@@ -89,10 +83,6 @@ const FreelancerTimeTrackingPage: React.FC = () => {
 
   // Helper functions for rendering
   const getProjectTitle = (projectId: string): string => {
-    // This is a placeholder. Ideally, project data would be more readily available.
-    // For now, we don't have a list of all projects on this page.
-    // We could enhance JobCard type or fetch projects if this becomes critical.
-    // Consider if jobCards fetched could include projectTitle directly from backend.
     return `Project ID: ${projectId}`;
   };
 
@@ -133,8 +123,8 @@ const FreelancerTimeTrackingPage: React.FC = () => {
     try {
       await stopGlobalTimerAndLog(notes || undefined); // stopGlobalTimerAndLog handles API call and clearing activeTimerInfo
       // Refresh time logs after stopping
-      const fetchedTimeLogs = await fetchMyTimeLogsAPI(freelancerId);
-      setTimeLogs(fetchedTimeLogs);
+      const fetchedTimeLogs = await apiService.fetchMyTimeLogsAPI(String(freelancerId));
+      setTimeLogs(fetchedTimeLogs.map((tl: any) => ({ ...tl, id: String(tl.id), jobCardId: String(tl.job_card_id) })));
       // alert("Timer stopped and time logged successfully!"); // Already handled by global timer logic potentially
     } catch (err) {
       console.error("Error stopping timer from page:", err);
@@ -194,7 +184,7 @@ const FreelancerTimeTrackingPage: React.FC = () => {
 
     const newLogData: Omit<TimeLog, 'id' | 'createdAt'> = {
       jobCardId: manualLogJobCardId,
-      architectId: freelancerId,
+      architectId: String(freelancerId),
       startTime: startTimeISO,
       endTime: endTimeISO,
       durationMinutes,
@@ -202,19 +192,19 @@ const FreelancerTimeTrackingPage: React.FC = () => {
       manualEntry: true,
     };
 
-    setIsLoading(true);
+    setIsProcessingLog(true);
     try {
-      await addTimeLogAPI(projectId, manualLogJobCardId, newLogData);
+      await apiService.addTimeLogAPI(projectId, manualLogJobCardId, newLogData);
       handleCloseManualLog();
-      const fetchedTimeLogs = await fetchMyTimeLogsAPI(freelancerId);
-      setTimeLogs(fetchedTimeLogs);
+      const fetchedTimeLogs = await apiService.fetchMyTimeLogsAPI(String(freelancerId));
+      setTimeLogs(fetchedTimeLogs.map((tl: any) => ({ ...tl, id: String(tl.id), jobCardId: String(tl.job_card_id) })));
       alert("Manual time log added successfully!");
     } catch (err) {
       console.error("Error adding manual time log:", err);
       setError(err instanceof Error ? err.message : "Failed to add manual log.");
       alert(`Error: ${err instanceof Error ? err.message : "Failed to add manual log."}`);
     } finally {
-      setIsLoading(false);
+      setIsProcessingLog(false);
     }
   };
 

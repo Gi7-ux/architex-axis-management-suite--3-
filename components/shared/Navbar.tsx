@@ -3,7 +3,8 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../AuthContext';
 import GlobalTimerDisplay from './GlobalTimerDisplay'; // Import the GlobalTimerDisplay
 import Button from './Button';
-import { SHORT_APP_NAME, NAV_LINKS, UserRole } from '../../constants'; // Assuming UserRole is here
+import { SHORT_APP_NAME, NAV_LINKS } from '../../constants';
+import { UserRole } from '../../types';
 import { HomeIcon, UserCircleIcon, ChatBubbleLeftRightIcon, LogoutIcon, BriefcaseIcon, IconProps, BellIcon } from './IconComponents'; // Added BellIcon
 import { fetchAdminNotificationsAPI, FetchAdminNotificationsParams } from '../../apiService'; // Import for notifications
 

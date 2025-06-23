@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useContext } from 'react';
-import { User, Project, TimeLog, JobCard, UserRole } from '../../types'; // Assuming JobCard might be needed for titles
+import { User, Project, TimeLog, UserRole } from '../../types';
 import {
   fetchProjectsAPI,
   fetchClientProjectTimeLogsAPI,
@@ -9,9 +9,9 @@ import { AuthContext } from '../AuthContext';
 // import { SomeSpinnerComponent } from '../shared/LoadingSpinner'; // Placeholder for a spinner
 
 const ClientProjectTimeLogPage: React.FC = () => {
-  const [projects, setProjects] = useState<Project[]>([]);
+  const [projects, setProjects] = useState<Project[] | undefined>(undefined);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
-  const [timeLogs, setTimeLogs] = useState<TimeLog[]>([]);
+  const [timeLogs, setTimeLogs] = useState<TimeLog[] | undefined>(undefined);
   const [users, setUsers] = useState<User[]>([]); // To map architectId to freelancer name
 
   const [isLoadingProjects, setIsLoadingProjects] = useState<boolean>(true);
@@ -30,19 +30,44 @@ const ClientProjectTimeLogPage: React.FC = () => {
       return;
     }
     if (clientRole !== UserRole.CLIENT) {
-        setError("Access Denied. This page is for clients only.");
-        setIsLoadingProjects(false);
-        return;
+      setError("Access Denied. This page is for clients only.");
+      setIsLoadingProjects(false);
+      return;
     }
 
     const loadInitialData = async () => {
       setIsLoadingProjects(true);
       setError(null);
       try {
-        const [fetchedProjects, fetchedUsers] = await Promise.all([
-          fetchProjectsAPI({ clientId }),
-          fetchUsersAPI(UserRole.FREELANCER) // Fetch only freelancers
+        const [fetchedProjectsRaw, fetchedUsers] = await Promise.all([
+          fetchProjectsAPI(),
+          fetchUsersAPI(UserRole.FREELANCER)
         ]);
+        // Map ProjectPHPResponse[] to Project[]
+        const fetchedProjects = (fetchedProjectsRaw as any[]).map((p) => ({
+          id: String(p.id),
+          title: p.title,
+          description: p.description,
+          budget: p.budget ?? 0,
+          currency: p.currency ?? 'ZAR',
+          deadline: p.deadline ?? '',
+          clientId: String(p.client_id ?? ''),
+          clientName: p.client_username ?? '',
+          status: p.status,
+          skillsRequired: p.skills_required ?? [],
+          createdAt: p.created_at ?? '',
+          adminCreatorId: p.adminCreatorId ?? undefined,
+          freelancerId: p.freelancer_id ? String(p.freelancer_id) : undefined,
+          assignedFreelancerId: p.assignedFreelancerId ?? undefined,
+          assignedFreelancerName: p.freelancer_username ?? undefined,
+          jobCards: p.jobCards ?? [],
+          isArchived: p.isArchived ?? false,
+          updatedAt: p.updated_at ?? '',
+          paymentType: p.paymentType ?? 'fixed',
+          experienceLevel: p.experienceLevel ?? 'beginner',
+          duration: p.duration ?? '',
+          isFeatured: p.isFeatured ?? false,
+        }));
         setProjects(fetchedProjects);
         setUsers(fetchedUsers);
       } catch (err) {
@@ -66,7 +91,7 @@ const ClientProjectTimeLogPage: React.FC = () => {
       setIsLoadingTimeLogs(true);
       setError(null); // Clear previous errors specific to time log fetching
       try {
-        const fetchedTimeLogs = await fetchClientProjectTimeLogsAPI(clientId, selectedProjectId);
+        const fetchedTimeLogs = await fetchClientProjectTimeLogsAPI(String(clientId), selectedProjectId);
         setTimeLogs(fetchedTimeLogs);
       } catch (err) {
         console.error(`Error fetching time logs for project ${selectedProjectId}:`, err);
@@ -94,7 +119,7 @@ const ClientProjectTimeLogPage: React.FC = () => {
 
 
   // Render early if role is incorrect (already handled by ProtectedView, but good for direct component use sense)
-   if (clientRole !== UserRole.CLIENT && !auth?.isLoading) { // isLoading check to prevent flash of this message
+  if (clientRole !== UserRole.CLIENT && !auth?.isLoading) { // isLoading check to prevent flash of this message
     return <p>Access Denied. This page is for clients only.</p>;
   }
 
@@ -105,6 +130,10 @@ const ClientProjectTimeLogPage: React.FC = () => {
   if (error && !selectedProjectId) { // Show general errors if no project is selected yet, or project loading failed
     return <p>Error: {error}</p>;
   }
+
+  // Defensive: treat undefined as loading/empty
+  const safeProjects = projects ?? [];
+  const safeTimeLogs = timeLogs ?? [];
 
   return (
     <div style={{ padding: '20px' }}>
@@ -117,25 +146,25 @@ const ClientProjectTimeLogPage: React.FC = () => {
           value={selectedProjectId || ''}
           onChange={e => setSelectedProjectId(e.target.value || null)}
           style={{ padding: '8px', minWidth: '200px', border: '1px solid #ccc', borderRadius: '4px' }}
-          disabled={projects.length === 0}
+          disabled={safeProjects.length === 0}
         >
           <option value="">-- Select a Project --</option>
-          {projects.map(project => (
+          {safeProjects.map(project => (
             <option key={project.id} value={project.id}>{project.title}</option>
           ))}
         </select>
-        {projects.length === 0 && !isLoadingProjects && <p>You have no projects.</p>}
+        {safeProjects.length === 0 && !isLoadingProjects && <p>You have no projects.</p>}
       </div>
 
       {selectedProjectId && (
         <section>
-          <h2>Time Logs for: {projects.find(p => p.id === selectedProjectId)?.title || ''}</h2>
+          <h2>Time Logs for: {safeProjects.find(p => p.id === selectedProjectId)?.title || ''}</h2>
           {isLoadingTimeLogs && <p>Loading time logs...</p> /* Replace with spinner */}
           {!isLoadingTimeLogs && error && <p>Error loading time logs: {error}</p>}
-          {!isLoadingTimeLogs && !error && timeLogs.length === 0 && (
+          {!isLoadingTimeLogs && !error && safeTimeLogs.length === 0 && (
             <p>No time logs have been recorded for this project yet.</p>
           )}
-          {!isLoadingTimeLogs && !error && timeLogs.length > 0 && (
+          {!isLoadingTimeLogs && !error && safeTimeLogs.length > 0 && (
             <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '20px' }}>
               <thead>
                 <tr>
@@ -147,7 +176,7 @@ const ClientProjectTimeLogPage: React.FC = () => {
                 </tr>
               </thead>
               <tbody>
-                {timeLogs.map(log => (
+                {safeTimeLogs.map(log => (
                   <tr key={log.id}>
                     <td style={tableCellStyle}>{new Date(log.startTime).toLocaleDateString()}</td>
                     <td style={tableCellStyle}>{getFreelancerName(log.architectId)}</td>
@@ -161,7 +190,7 @@ const ClientProjectTimeLogPage: React.FC = () => {
           )}
         </section>
       )}
-      {!selectedProjectId && !isLoadingProjects && projects.length > 0 && (
+      {!selectedProjectId && !isLoadingProjects && safeProjects.length > 0 && (
         <p style={{ marginTop: '20px' }}>Please select a project to view its time logs.</p>
       )}
     </div>

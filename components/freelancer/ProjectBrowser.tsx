@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
-import { Project, ProjectStatus, UserRole } from '../../types'; // Removed Application as it's not directly used for type here
+import { Project, ProjectStatus, UserRole } from '../../types';
 import {
-    fetchProjectsAPI,
-    submitApplicationAPI,
-    fetchAllSkillsAPI,
-    fetchFreelancerApplicationsAPI, // Use this instead of fetchUserApplicationsAPI
-    FreelancerApplicationResponseItem, // Type for the response
-    SubmitApplicationPayload, // Type for submitting application
-    ApiError // Ensure ApiError is imported if used in catch blocks
+  fetchProjectsAPI,
+  submitApplicationAPI,
+  fetchAllSkillsAPI,
+  fetchFreelancerApplicationsAPI,
+  FreelancerApplicationResponseItem,
+  SubmitApplicationPayload,
+  ApiError
 } from '../../apiService';
 import ProjectCard from '../shared/ProjectCard';
 import Modal from '../shared/Modal';
@@ -30,101 +30,75 @@ const ProjectBrowser: React.FC = () => {
   const [filterSkills, setFilterSkills] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
+  const loadInitialData = async () => {
+    setIsLoading(true);
+    setError(null);
+    let errorMessages: string[] = [];
+
+    try {
+      const rawProjects = await fetchProjectsAPI();
+      const mappedProjects: Project[] = rawProjects.map((rawProject): Project => ({
+        id: String(rawProject.id),
+        title: rawProject.title,
+        description: rawProject.description,
+        clientId: String(rawProject.client_id),
+        freelancerId: rawProject.freelancer_id ? String(rawProject.freelancer_id) : undefined,
+        status: rawProject.status as ProjectStatus,
+        createdAt: rawProject.created_at,
+        updatedAt: rawProject.updated_at,
+        clientName: `Client ${rawProject.client_id}`,
+        budget: 0,
+        deadline: '',
+        currency: 'USD',
+        skillsRequired: [],
+        paymentType: 'fixed',
+        experienceLevel: 'intermediate',
+        duration: 'unknown',
+        isFeatured: false,
+        jobCards: [],
+        adminCreatorId: undefined,
+        isArchived: false,
+        assignedFreelancerName: rawProject.freelancer_id ? `Freelancer ${rawProject.freelancer_id}` : undefined,
+      }));
+      setProjects(mappedProjects);
+    } catch (projError: any) {
+      console.error("Failed to load projects:", projError);
+      errorMessages.push(projError.message || "Could not load projects.");
+      setProjects([]);
+    }
+
+    try {
+      const fetchedSkills = await fetchAllSkillsAPI();
+      setAllSkills(fetchedSkills.map(skill => skill.name).sort());
+    } catch (skillError: any) {
+      console.warn("fetchAllSkillsAPI failed, using empty skills list:", skillError);
+      setAllSkills([]);
+    }
+
+    if (user && user.role === UserRole.FREELANCER) {
+      try {
+        const freelancerApps: FreelancerApplicationResponseItem[] = await fetchFreelancerApplicationsAPI();
+        setAppliedProjectIds(new Set(freelancerApps.map(app => String(app.project_id))));
+      } catch (appError: any) {
+        console.warn("fetchFreelancerApplicationsAPI failed:", appError);
+        setAppliedProjectIds(new Set());
+      }
+    }
+
+    if (errorMessages.length > 0) {
+      setError(errorMessages.join(' '));
+    }
+
+    setIsLoading(false);
+  };
+
   useEffect(() => {
-    // Define the raw project data type from PHP
-    interface RawPhpProject {
-      id: number;
-      title: string;
-      description: string;
-      client_id: number;
-      freelancer_id: number | null;
-      status: string;
-      created_at: string;
-      updated_at: string;
-      // budget, skillsRequired etc. are not in the basic PHP response yet
-    }
-
-    const loadInitialData = async () => {
-      setIsLoading(true);
-      setError(null);
-      let errorMessages: string[] = [];
-
-      try {
-        // Fetch projects - no status filter for now, new API doesn't support it yet
-        const rawProjects: RawPhpProject[] = await fetchProjectsAPI();
-
-        // Map rawProjects to the frontend Project type
-        const mappedProjects: Project[] = rawProjects.map((rawProject): Project => ({
-          id: String(rawProject.id), // Convert number to string
-          title: rawProject.title,
-          description: rawProject.description,
-          clientId: String(rawProject.client_id), // Convert number to string and camelCase
-          freelancerId: rawProject.freelancer_id ? String(rawProject.freelancer_id) : undefined,
-          status: rawProject.status as ProjectStatus, // Assume status string matches ProjectStatus enum values
-          createdAt: rawProject.created_at,
-          updatedAt: rawProject.updated_at,
-          // Provide default/placeholder values for other fields expected by Project type
-          clientName: `Client ${rawProject.client_id}`, // Placeholder
-          budget: 0, // Placeholder - not in PHP response
-          currency: 'USD', // Placeholder
-          skillsRequired: [], // Placeholder - not in PHP response
-          paymentType: 'fixed', // Placeholder
-          experienceLevel: 'intermediate', // Placeholder
-          duration: 'unknown', // Placeholder
-          isFeatured: false, // Placeholder
-          jobCards: [], // Placeholder
-          adminCreatorId: undefined, // Placeholder
-          isArchived: false, // Placeholder
-          assignedFreelancerName: rawProject.freelancer_id ? `Freelancer ${rawProject.freelancer_id}` : undefined, // Placeholder
-        }));
-        setProjects(mappedProjects);
-
-      } catch (projError: any) {
-        console.error("Failed to load projects:", projError);
-        errorMessages.push(projError.message || "Could not load projects.");
-        setProjects([]); // Clear projects on error
-      }
-
-      // Fetch all skills
-      try {
-        const fetchedSkills = await fetchAllSkillsAPI();
-        setAllSkills(fetchedSkills.sort());
-      } catch (skillError: any) {
-        console.warn("fetchAllSkillsAPI failed, using empty skills list:", skillError);
-        // errorMessages.push("Could not load skills filter."); // Optionally inform user
-        setAllSkills([]); // Default to empty list
-      }
-
-      // Fetch user applications if freelancer
-      if (user && user.role === UserRole.FREELANCER) {
-        try {
-          // Use new API for freelancer's applications
-          const freelancerApps: FreelancerApplicationResponseItem[] = await fetchFreelancerApplicationsAPI();
-          setAppliedProjectIds(new Set(freelancerApps.map(app => String(app.project_id)))); // Ensure project_id is string if Project.id is string
-        } catch (appError: any) {
-          console.warn("fetchFreelancerApplicationsAPI failed:", appError);
-          // errorMessages.push("Could not load your application statuses."); // Optionally inform user
-          setAppliedProjectIds(new Set()); // Default to empty set
-        }
-      }
-
-      if (errorMessages.length > 0) {
-        setError(errorMessages.join(' '));
-      }
-
-    } catch (err: any) { // Catch any unexpected errors from the overall process
-        console.error("Unexpected error in loadInitialData:", err);
-        setError(err.message || "An unexpected error occurred.");
-    } finally {
-      setIsLoading(false);
-    }
-    };
     loadInitialData();
   }, [user]);
 
   const handleApplyClick = (project: Project) => {
     setSelectedProjectForApplication(project);
-    setBidAmount(project.budget * 0.9); 
+    setBidAmount(project.budget * 0.9);
     setProposal('');
     setIsApplyModalOpen(true);
   };
@@ -138,16 +112,16 @@ const ProjectBrowser: React.FC = () => {
 
   const handleSubmitApplication = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProjectForApplication || !user || !proposal || bidAmount === '') return; // Check bidAmount for empty string too
+    if (!selectedProjectForApplication || !user || !proposal || bidAmount === '') return;
     setApplying(true);
-    setError(null); // Clear previous modal errors
+    setError(null);
     try {
       const payload: SubmitApplicationPayload = {
-        project_id: parseInt(selectedProjectForApplication.id, 10), // Ensure project_id is number
+        project_id: parseInt(selectedProjectForApplication.id, 10),
         proposal_text: proposal,
-        bid_amount: Number(bidAmount) // Ensure bid_amount is number
+        bid_amount: Number(bidAmount)
       };
-      await submitApplicationAPI(payload); // Use new API
+      await submitApplicationAPI(payload);
       setAppliedProjectIds(prev => new Set(prev).add(selectedProjectForApplication.id));
       alert(`Application submitted for ${selectedProjectForApplication.title}`);
       handleCloseApplyModal();
@@ -158,25 +132,23 @@ const ProjectBrowser: React.FC = () => {
       } else {
         setError("An unexpected error occurred. Please try again.");
       }
-      // Do not alert error here if it's already displayed in the modal via setError
     } finally {
       setApplying(false);
     }
   };
 
   const handleSkillToggle = (skill: string) => {
-    setFilterSkills(prev => 
+    setFilterSkills(prev =>
       prev.includes(skill) ? prev.filter(s => s !== skill) : [...prev, skill]
     );
   };
 
   const filteredProjects = projects.filter(project => {
     const matchesSearchTerm = project.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                              project.description.toLowerCase().includes(searchTerm.toLowerCase());
+      project.description.toLowerCase().includes(searchTerm.toLowerCase());
     const matchesSkills = filterSkills.length === 0 || filterSkills.every(skill => project.skillsRequired.includes(skill));
     return matchesSearchTerm && matchesSkills;
   });
-
 
   if (isLoading && projects.length === 0) {
     return <LoadingSpinner text="Loading available projects..." className="p-6" />;
@@ -185,48 +157,48 @@ const ProjectBrowser: React.FC = () => {
   return (
     <div className="p-4 md:p-6">
       <h2 className="text-3xl font-bold text-gray-800 mb-6">Browse Projects</h2>
-      
+
       {error && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{error}</p>}
 
       <div className="mb-6 p-4 bg-white shadow rounded-lg">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <input 
-              type="text"
-              placeholder="Search by title or description..."
-              className="p-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-            <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Filter by skills:</label>
-                {allSkills.length > 0 ? (
-                    <div className="flex flex-wrap gap-2">
-                        {allSkills.map(skill => (
-                            <Button 
-                                key={skill}
-                                size="sm"
-                                variant={filterSkills.includes(skill) ? 'primary' : 'secondary'}
-                                onClick={() => handleSkillToggle(skill)}
-                                className="text-xs"
-                            >
-                                {skill}
-                            </Button>
-                        ))}
-                    </div>
-                ) : <p className="text-xs text-gray-500">No skills available for filtering.</p>}
-            </div>
+          <input
+            type="text"
+            placeholder="Search by title or description..."
+            className="p-3 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Filter by skills:</label>
+            {allSkills.length > 0 ? (
+              <div className="flex flex-wrap gap-2">
+                {allSkills.map(skill => (
+                  <Button
+                    key={skill}
+                    size="sm"
+                    variant={filterSkills.includes(skill) ? 'primary' : 'secondary'}
+                    onClick={() => handleSkillToggle(skill)}
+                    className="text-xs"
+                  >
+                    {skill}
+                  </Button>
+                ))}
+              </div>
+            ) : <p className="text-xs text-gray-500">No skills available for filtering.</p>}
+          </div>
         </div>
       </div>
 
-      {!isLoading && filteredProjects.length === 0 && !error &&(
+      {!isLoading && filteredProjects.length === 0 && !error && (
         <p className="text-center text-gray-500 py-10">No projects match your criteria or no open projects available at the moment.</p>
       )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {filteredProjects.map((project) => (
-          <ProjectCard 
-            key={project.id} 
-            project={project} 
+          <ProjectCard
+            key={project.id}
+            project={project}
             showApplyButton={user?.role === UserRole.FREELANCER && !appliedProjectIds.has(project.id)}
             onApply={user?.role === UserRole.FREELANCER ? handleApplyClick : undefined}
           />
@@ -269,6 +241,7 @@ const ProjectBrowser: React.FC = () => {
           </form>
         </Modal>
       )}
+
     </div>
   );
 };

@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Project, ProjectStatus, Application, UserRole, JobCard, JobCardStatus, TimeLog, User, MessageStatus, ManagedFile, Conversation, Message } from '../../types';
-import { 
+import { useParams, useNavigate } from 'react-router-dom';
+import { Project, ProjectStatus, UserRole, JobCard, JobCardStatus, TimeLog, ManagedFile } from '../types';
+import {
     fetchProjectDetailsAPI, fetchApplicationsForProjectAPI, fetchProjectFilesAPI, submitApplicationAPI,
     createJobCardAPI,
     updateJobCardAPI,
@@ -11,22 +11,18 @@ import {
     logTimeAPI,
     fetchTimeLogsForJobCardAPI,
     fetchTimeLogsForProjectAPI, // For admin/client project-wide view
-    updateTimeLogAPI, // Optional for edit
-    deleteTimeLogAPI, // Optional for delete
     uploadFileAPI, deleteFileAPI, findOrCreateConversationAPI, sendMessageAPI,
     CreateJobCardPayload, UpdateJobCardPayload, JobCardPHPResponse,
     // New Time Log Types:
     LogTimePayload,
-    UpdateTimeLogPayload,
     TimeLogPHPResponse,
-    ProjectApplicationPHPResponse // Ensure this is imported if used by fetchApplicationsForProjectAPI
-} from '../../apiService';
-import { NAV_LINKS, getMockFileIconPath, formatDurationToHHMMSS } from '../../constants';
+} from '../apiService';
+import { NAV_LINKS, getMockFileIconPath, formatDurationToHHMMSS } from '../constants';
 import LoadingSpinner from './shared/LoadingSpinner';
 import Button from './shared/Button';
-import { useAuth } from '../AuthContext';
+import { useAuth } from './AuthContext';
 import Modal from './shared/Modal';
-import { ClockIcon, CheckCircleIcon, PencilIcon as EditIcon, PlayIcon, StopIcon, PlusIcon, TrashIcon, ChatBubbleLeftRightIcon, FolderOpenIcon, PaperClipIcon, DownloadIcon, UploadIcon, EyeIcon, ArrowLeftIcon } from './shared/IconComponents'; 
+import { PencilIcon as EditIcon, PlayIcon, StopIcon, PlusIcon, TrashIcon, ChatBubbleLeftRightIcon, DownloadIcon, UploadIcon, ArrowLeftIcon } from './shared/IconComponents';
 
 // Helper to format minutes to HH:MM string (Could be moved to a utils file)
 const formatMinutesToHM = (minutes: number): string => {
@@ -373,12 +369,12 @@ const ProjectDetailsPage: React.FC = () => {
                     id: String(tlPHP.id),
                     jobCardId: String(tlPHP.job_card_id),
                     architectId: String(tlPHP.user_id),
-                    startTime: tlPHP.start_time,
-                    endTime: tlPHP.end_time,
-                    durationMinutes: tlPHP.duration_minutes,
+                    startTime: tlPHP.startTime,
+                    endTime: tlPHP.endTime,
+                    durationMinutes: tlPHP.durationMinutes,
                     notes: tlPHP.notes || undefined,
                     manualEntry: false,
-                    createdAt: tlPHP.created_at,
+                    createdAt: tlPHP.createdAt,
                     // logger_username can be stored on a temporary/display version of TimeLog if needed
                 }));
             } catch (logError) {
@@ -407,8 +403,8 @@ const ProjectDetailsPage: React.FC = () => {
                 assignedArchitectId: jcPHP.assigned_freelancer_id ? String(jcPHP.assigned_freelancer_id) : undefined,
                 assignedArchitectName: jcPHP.assigned_freelancer_username || undefined,
                 estimatedTime: jcPHP.estimated_hours !== null ? Number(jcPHP.estimated_hours) : undefined,
-                createdAt: jcPHP.created_at,
-                updatedAt: jcPHP.updated_at,
+                createdAt: jcPHP.createdAt,
+                updatedAt: jcPHP.updatedAt,
                 timeLogs: timeLogsForThisCard,
                 actualTimeLogged: totalLoggedMinutesForCard / 60,
             };
@@ -417,9 +413,10 @@ const ProjectDetailsPage: React.FC = () => {
         const fullProjectData: Project = {
             ...fetchedProjectCore,
             id: String(fetchedProjectCore.id),
-            clientId: String(fetchedProjectCore.clientId),
-            assignedFreelancerId: fetchedProjectCore.assignedFreelancerId ? String(fetchedProjectCore.assignedFreelancerId) : undefined,
+            clientId: String(fetchedProjectCore.client_id),
+            assignedFreelancerId: fetchedProjectCore.freelancer_id ? String(fetchedProjectCore.freelancer_id) : undefined,
             jobCards: mappedJobCards,
+            skillsRequired: fetchedProjectCore.skills_required?.map(s => s.name) || [],
         };
         setProject(fullProjectData);
 
@@ -432,12 +429,12 @@ const ProjectDetailsPage: React.FC = () => {
                     architectId: String(tlPHP.user_id),
                     architectName: tlPHP.logger_username,
                     jobCardTitle: tlPHP.job_card_title,
-                    startTime: tlPHP.start_time,
-                    endTime: tlPHP.end_time,
-                    durationMinutes: tlPHP.duration_minutes,
+                    startTime: tlPHP.startTime,
+                    endTime: tlPHP.endTime,
+                    durationMinutes: tlPHP.durationMinutes,
                     notes: tlPHP.notes || undefined,
                     manualEntry: false,
-                    createdAt: tlPHP.created_at,
+                    createdAt: tlPHP.createdAt,
                 }));
                 mappedProjectTimeLogs.sort((a,b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
                 setAllProjectTimeLogs(mappedProjectTimeLogs);
@@ -448,7 +445,7 @@ const ProjectDetailsPage: React.FC = () => {
 
         if (user && user.role === UserRole.FREELANCER) {
             const fetchedApplications = await fetchApplicationsForProjectAPI(projectId);
-            const existingApplication = fetchedApplications.find(app => String(app.freelancer_id) === user.id);
+            const existingApplication = fetchedApplications.find(app => String(app.freelancerId) === String(user.id));
             setHasApplied(!!existingApplication);
         }
         const fetchedFiles = await fetchProjectFilesAPI(projectId);
@@ -599,8 +596,11 @@ const ProjectDetailsPage: React.FC = () => {
     ].filter(Boolean) as string[]));
     
     try {
-        const conversation = await findOrCreateConversationAPI(participantIds, project.id);
-        navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.id }});
+        // The API now only takes one argument for the recipient, not a list of participants or project ID.
+        // This logic needs to be re-evaluated. For now, let's assume we are creating a chat with the project's client.
+        const recipientId = project.clientId;
+        const conversation = await findOrCreateConversationAPI(recipientId);
+        navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.conversation_id }});
     } catch (err: any) {
         alert(err.message || "Could not open or create chat for this project.");
         console.error("Chat creation/navigation error:", err);
@@ -612,16 +612,22 @@ const ProjectDetailsPage: React.FC = () => {
     const participantIds = [
         String(user.id),
         project.assignedFreelancerId ? String(project.assignedFreelancerId) : undefined,
-        project.adminCreatorId ? String(project.adminCreatorId) : undefined
+        project.adminCreatorId ? String(project.adminCreatorId) : undefined,
     ].filter(Boolean) as string[];
     try {
-        const conversation = await findOrCreateConversationAPI(participantIds, project.id);
-        await sendMessageAPI(conversation.id, {
-            senderId: String(user.id), // Ensure senderId is string if API expects that
+        // This logic needs re-evaluation based on the new API.
+        // Assuming the client wants to message the assigned freelancer.
+        if (!project.assignedFreelancerId) {
+            alert("No freelancer assigned to message.");
+            return;
+        }
+        const conversation = await findOrCreateConversationAPI(project.assignedFreelancerId);
+        await sendMessageAPI({
+            conversation_id: conversation.conversation_id,
             content: `Client ${user.username} requests a status update for project '${project.title}'.`,
-        });
+        },);
         alert("Status update request sent via messages.");
-        navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.id } });
+        navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.conversation_id } });
     } catch (err: any) {
         alert(err.message || "Failed to send status update request.");
         console.error("Status update request error:", err);

@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from './AuthContext';
-import { UserRole, ProjectStatus, MessageStatus, JobCardStatus, Project, User, Application, ManagedFile } from '../../types';
-import { 
+import { UserRole, ManagedFile } from '../types';
+import {
     fetchAdminDashboardStatsAPI,
     AdminDashboardStatsResponse, // Import new type
     fetchFreelancerDashboardStatsAPI,
     fetchClientDashboardStatsAPI,
     fetchRecentActivityAPI, fetchAdminRecentFilesAPI
-} from '../../apiService';
-import { NAV_LINKS, getMockFileIconPath } from '../../constants';
+} from '../apiService';
+import { NAV_LINKS, getMockFileIconPath } from '../constants';
 import { Link } from 'react-router-dom';
-import { UsersIcon, BriefcaseIcon, ClockIcon, CheckCircleIcon, DocumentTextIcon, ListBulletIcon, CurrencyDollarIcon, IconProps, PencilIcon, ChatBubbleLeftRightIcon, FolderIcon } from './shared/IconComponents';
-import LoadingSpinner from '../shared/LoadingSpinner';
+import { UsersIcon, BriefcaseIcon, ClockIcon, CheckCircleIcon, DocumentTextIcon, ListBulletIcon, IconProps, PencilIcon } from './shared/IconComponents';
+import LoadingSpinner from './shared/LoadingSpinner';
 
 interface StatCardProps {
   title: string;
@@ -93,13 +93,13 @@ const DashboardOverview: React.FC = () => {
           const files = await fetchAdminRecentFilesAPI();
           setRecentFiles(files);
         } else if (user.role === UserRole.FREELANCER) {
-          fetchedStats = await fetchFreelancerDashboardStatsAPI(user.id);
+          fetchedStats = await fetchFreelancerDashboardStatsAPI(String(user.id));
         } else if (user.role === UserRole.CLIENT) {
-          fetchedStats = await fetchClientDashboardStatsAPI(user.id);
+          fetchedStats = await fetchClientDashboardStatsAPI(String(user.id));
         }
         setStats(fetchedStats);
 
-        const activity = await fetchRecentActivityAPI(user.id);
+        const activity = await fetchRecentActivityAPI(String(user.id));
         setRecentActivity(activity);
 
       } catch (err: any) {
@@ -187,7 +187,7 @@ const DashboardOverview: React.FC = () => {
   return (
     <div className="space-y-8">
       <h1 className="text-3xl font-bold text-gray-800">Dashboard Overview</h1>
-      <p className="text-gray-600">Welcome back, {user.name}! Here's a quick look at your platform activity.</p>
+      <p className="text-gray-600">Welcome back, {user.username}! Here's a quick look at your platform activity.</p>
       
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-5 md:gap-6">
         {user.role === UserRole.ADMIN && renderAdminStats()}

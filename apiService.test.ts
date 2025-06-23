@@ -22,11 +22,11 @@ import {
   UpdateProjectPHPData,
   UpdateProjectPHPResponse,
   DeleteProjectPHPResponse,
-  ProjectStatus,
 } from './apiService'; // Adjust path as necessary
+import { UserRole, ProjectStatus } from './types';
 import fetchMock from 'jest-fetch-mock';
 
-const API_BASE_URL = '/backend'; // As defined in apiService.ts
+const API_BASE_URL = 'http://localhost/backend'; // As defined in apiService.ts
 
 describe('apiService - Authentication', () => {
   beforeEach(() => {
@@ -43,7 +43,7 @@ describe('apiService - Authentication', () => {
 
     const mockLoginSuccessResponse: LoginResponse = {
       message: 'Login successful.',
-      user: { id: 1, username: 'testuser', email: 'test@example.com', role: 'client' },
+      user: { id: 1, username: 'testuser', email: 'test@example.com', role: UserRole.CLIENT, name: 'Test User' },
       token: 'fake-auth-token',
     };
 
@@ -87,7 +87,7 @@ describe('apiService - Authentication', () => {
       username: 'newuser',
       email: 'new@example.com',
       password: 'password123',
-      role: 'freelancer',
+      role: UserRole.FREELANCER,
     };
     const mockRegisterSuccessResponse: RegistrationResponse = {
       message: 'User registered successfully.',
@@ -130,8 +130,9 @@ describe('apiService - Authentication', () => {
     const mockUserProfile: UserProfileResponse = {
       id: 1,
       username: 'testuser',
+      name: 'Test User',
       email: 'test@example.com',
-      role: 'client',
+      role: UserRole.CLIENT,
     };
 
     it('should fetch user profile successfully with a token', async () => {
@@ -205,8 +206,8 @@ describe('apiService - Project CRUD', () => {
   });
 
   const mockProjectList: ProjectPHPResponse[] = [
-    { id: 1, client_id: 10, title: 'Project Alpha', description: 'Desc Alpha', status: 'open', freelancer_id: null, client_username: 'clientUser', freelancer_username: null, created_at: '2023-01-01T00:00:00Z', updated_at: '2023-01-01T00:00:00Z', deadline: '2023-03-01T00:00:00Z', budget: 1000, skills_required: [], project_files: [] },
-    { id: 2, client_id: 11, title: 'Project Beta', description: 'Desc Beta', status: 'in_progress', freelancer_id: 20, client_username: 'anotherClient', freelancer_username: 'freelancerX', created_at: '2023-01-02T00:00:00Z', updated_at: '2023-01-02T00:00:00Z', deadline: '2023-04-01T00:00:00Z', budget: 2000, skills_required: [], project_files: [] },
+    { id: 1, client_id: 10, title: 'Project Alpha', description: 'Desc Alpha', status: ProjectStatus.OPEN, freelancer_id: null, client_username: 'clientUser', freelancer_username: null, created_at: '2023-01-01T00:00:00Z', updated_at: '2023-01-01T00:00:00Z', deadline: '2023-03-01T00:00:00Z', budget: 1000, currency: 'USD', paymentType: 'fixed', experienceLevel: 'beginner', duration: '1 month', skills_required: [], isFeatured: false },
+    { id: 2, client_id: 11, title: 'Project Beta', description: 'Desc Beta', status: ProjectStatus.IN_PROGRESS, freelancer_id: 20, client_username: 'anotherClient', freelancer_username: 'freelancerX', created_at: '2023-01-02T00:00:00Z', updated_at: '2023-01-02T00:00:00Z', deadline: '2023-04-01T00:00:00Z', budget: 2000, currency: 'USD', paymentType: 'hourly', experienceLevel: 'expert', duration: '3 months', skills_required: [], isFeatured: false },
   ];
 
   const mockSingleProject: ProjectPHPResponse = mockProjectList[0];
@@ -348,7 +349,7 @@ describe('apiService - apiFetch and ApiError', () => {
     it('should correctly construct an ApiError object', () => {
       const errorMessage = 'Test error';
       const errorStatus = 400;
-      const errorData = { detail: 'Something went wrong' };
+      const errorData = { message: 'Something went wrong' };
       const apiError = new ApiError(errorMessage, errorStatus, errorData);
 
       expect(apiError).toBeInstanceOf(ApiError);

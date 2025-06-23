@@ -1,0 +1,1 @@
+{"version":"pest_2.36.0","defects":[],"times":{"DatabaseConnectivityTest::testDatabaseConnection":0.017,"SchemaIntegrityTest::testSchemaMatchesDefinition":0.019,"DataSeedingTest::testDataSeeding":1.267}}

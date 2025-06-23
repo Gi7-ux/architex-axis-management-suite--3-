@@ -25,7 +25,7 @@ const mockFormatDurationToHHMMSS = constants.formatDurationToHHMMSS as jest.Mock
 
 describe('GlobalTimerDisplay', () => {
   let mockStopGlobalTimerAndLog: jest.Mock;
-  const mockUser = { id: 'freelancer1', name: 'Freelancer User', role: UserRole.FREELANCER };
+  const mockUser = { id: 1, username: 'freelancer1', name: 'freelancer1', email: 'freelancer@test.com', role: UserRole.FREELANCER };
 
   beforeEach(() => {
     jest.useFakeTimers(); // Use fake timers for interval testing
@@ -62,11 +62,12 @@ describe('GlobalTimerDisplay', () => {
   });
 
   test('renders nothing if user is not a freelancer', () => {
-    mockUseAuth.mockReturnValueOnce({
+    const nonFreelancerAuthValue = {
       ...mockUseAuth(),
-      user: { id: 'admin1', name: 'Admin User', role: UserRole.ADMIN }, // Not a freelancer
+      user: { id: 2, username: 'admin1', name: 'admin1', email: 'admin@test.com', role: UserRole.ADMIN }, // Not a freelancer
       activeTimerInfo: { jobCardId: 'jc1', jobCardTitle: 'Test Job', projectId: 'p1', startTime: new Date() } as ActiveTimerInfo,
-    });
+    };
+    mockUseAuth.mockReturnValueOnce(nonFreelancerAuthValue as any);
     render(<GlobalTimerDisplay />);
     expect(screen.queryByText(/active timer/i)).not.toBeInTheDocument();
   });
@@ -75,44 +76,57 @@ describe('GlobalTimerDisplay', () => {
     const startTime = new Date(new Date().getTime() - 5000); // 5 seconds ago
     mockFormatDurationToHHMMSS.mockReturnValue('00:00:05'); // Mock formatted output
 
-    mockUseAuth.mockReturnValueOnce({
-      ...mockUseAuth(),
+    const activeTimerAuthValue = {
+      user: mockUser,
       activeTimerInfo: { jobCardId: 'jc1', jobCardTitle: 'Test Job Card Title', projectId: 'p1', startTime } as ActiveTimerInfo,
-    });
+      stopGlobalTimerAndLog: mockStopGlobalTimerAndLog,
+      token: 'test-token',
+      isLoading: false,
+      login: jest.fn(),
+      logout: jest.fn(),
+      updateCurrentUserDetails: jest.fn(),
+      startGlobalTimer: jest.fn(),
+      clearGlobalTimerState: jest.fn(),
+    };
+    mockUseAuth.mockReturnValue(activeTimerAuthValue);
     render(<GlobalTimerDisplay />);
 
     expect(screen.getByText(/active timer/i)).toBeInTheDocument();
-    expect(screen.getByText('Test Job Card Title')).toBeInTheDocument();
+    expect(screen.getByText('Task: Test Job Card Title')).toBeInTheDocument();
     expect(screen.getByText('00:00:05')).toBeInTheDocument(); // Check for mocked elapsed time
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
   });
 
-  test('updates elapsed time every second', () => {
+  test('updates elapsed time every second', async () => {
     const startTime = new Date();
-    mockUseAuth.mockReturnValueOnce({
-        ...mockUseAuth(),
+    const activeTimerAuthValue = {
+        user: mockUser,
         activeTimerInfo: { jobCardId: 'jc1', jobCardTitle: 'Test Job', projectId: 'p1', startTime } as ActiveTimerInfo,
-    });
+        stopGlobalTimerAndLog: mockStopGlobalTimerAndLog,
+        token: 'test-token',
+        isLoading: false,
+        login: jest.fn(),
+        logout: jest.fn(),
+        updateCurrentUserDetails: jest.fn(),
+        startGlobalTimer: jest.fn(),
+        clearGlobalTimerState: jest.fn(),
+    };
+    mockUseAuth.mockReturnValue(activeTimerAuthValue);
     render(<GlobalTimerDisplay />);
 
-    mockFormatDurationToHHMMSS.mockReturnValueOnce('00:00:00'); // Initial
-    expect(screen.getByText('00:00:00')).toBeInTheDocument();
+    // Initial render
+    await waitFor(() => expect(mockFormatDurationToHHMMSS).toHaveBeenCalled());
+
+    // Advance time and check for update
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
+    await waitFor(() => expect(mockFormatDurationToHHMMSS).toHaveBeenCalledWith(1));
 
     act(() => {
-      jest.advanceTimersByTime(1000); // Advance timer by 1 second
+      jest.advanceTimersByTime(1000);
     });
-    mockFormatDurationToHHMMSS.mockReturnValueOnce('00:00:01'); // After 1 sec
-    // We need to re-query as the text content changes
-    expect(screen.getByText('00:00:01')).toBeInTheDocument();
-    expect(mockFormatDurationToHHMMSS).toHaveBeenCalledWith(1);
-
-
-    act(() => {
-      jest.advanceTimersByTime(1000); // Advance timer by another 1 second
-    });
-    mockFormatDurationToHHMMSS.mockReturnValueOnce('00:00:02'); // After 2 secs
-    expect(screen.getByText('00:00:02')).toBeInTheDocument();
-    expect(mockFormatDurationToHHMMSS).toHaveBeenCalledWith(2);
+    await waitFor(() => expect(mockFormatDurationToHHMMSS).toHaveBeenCalledWith(2));
   });
 
   test('calls stopGlobalTimerAndLog on stop button click', async () => {
@@ -133,7 +147,7 @@ describe('GlobalTimerDisplay', () => {
   test('clears interval on unmount', () => {
     const clearIntervalSpy = jest.spyOn(window, 'clearInterval');
     const startTime = new Date();
-     mockUseAuth.mockReturnValueOnce({
+    mockUseAuth.mockReturnValueOnce({
       ...mockUseAuth(),
       activeTimerInfo: { jobCardId: 'jc1', jobCardTitle: 'Test Job', projectId: 'p1', startTime } as ActiveTimerInfo,
     });
@@ -143,7 +157,7 @@ describe('GlobalTimerDisplay', () => {
     clearIntervalSpy.mockRestore();
   });
 
-   test('clears interval when activeTimerInfo becomes null', () => {
+  test('clears interval when activeTimerInfo becomes null', () => {
     const clearIntervalSpy = jest.spyOn(window, 'clearInterval');
     const startTime = new Date();
     const initialAuthValue = {

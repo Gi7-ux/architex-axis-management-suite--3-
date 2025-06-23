@@ -1,7 +1,4 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { useLocation, useNavigate }from 'react-router-dom';
-// Removed old Conversation, Message, MessageStatus types
-import { User } from '../../types'; // UserRole removed as it's not used directly here, User for auth context
 import { useAuth } from './AuthContext';
 import {
     // New Messaging APIs
@@ -14,17 +11,16 @@ import {
     ConversationPreviewPHP,
     MessagePHP,
     SendMessagePayload,
-    FindOrCreateConversationResponse,
     // Other APIs needed
-    adminFetchAllUsersAPI, AdminUserView, ApiError // ApiError might be useful for typed catch blocks
-} from '../../apiService';
+    adminFetchAllUsersAPI, AdminUserView
+} from '../apiService';
 // NAV_LINKS might not be needed anymore if navigation is simplified
 // import { NAV_LINKS } from '../../constants';
 import Button from './shared/Button';
 // Adjusted icons
-import { PaperAirplaneIcon, PaperClipIcon, ArrowLeftIcon, ChatBubbleLeftRightIcon, UserPlusIcon } from './shared/IconComponents';
+import { PaperAirplaneIcon, ArrowLeftIcon, ChatBubbleLeftRightIcon, UsersIcon as UserPlusIcon } from './shared/IconComponents';
 import Modal from './shared/Modal';
-import LoadingSpinner from '../shared/LoadingSpinner'; // Corrected path
+import LoadingSpinner from './shared/LoadingSpinner'; // Corrected path
 
 
 const formatMessageTimestamp = (isoString: string | null): string => {

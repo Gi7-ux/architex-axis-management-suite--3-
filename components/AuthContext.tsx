@@ -1,7 +1,6 @@
 import React, { createContext, useState, useContext, useEffect, ReactNode } from 'react';
-import { User, UserRole, TimeLog } from '../types'; // User might still be used for other contexts or can be replaced by AuthUser if sufficient
-import { loginAPI, fetchUserProfileAPI, ApiError, AuthUser, UserLoginData } from '../apiService';
-import { addTimeLogAPI, updateUserAPI } from '../apiService'; // Keep other necessary imports
+import { TimeLog } from '../types';
+import { loginAPI, fetchUserProfileAPI, ApiError, AuthUser, UserLoginData, addTimeLogAPI } from '../apiService';
 
 
 export interface ActiveTimerInfo {

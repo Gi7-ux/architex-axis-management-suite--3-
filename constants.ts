@@ -1,4 +1,3 @@
-import { UserRole, User, Project, ProjectStatus, Application, JobCard, JobCardStatus, TimeLog, Message, Conversation, MessageStatus, ManagedFile } from './types';
 
 export const APP_NAME = "Architex Axis Management Suite";
 export const SHORT_APP_NAME = "Architex Axis"; 
@@ -31,6 +30,7 @@ export const NAV_LINKS = {
   ADMIN_CREATE_PROJECT: 'create-project', // This path might be deprecated if creation is modal-only
   ADMIN_BILLING: 'billing', 
   ADMIN_TIME_REPORTS: 'time-reports',
+  ADMIN_NOTIFICATIONS: '/dashboard/notifications',
   
   FREELANCER_BROWSE: 'browse-projects',
   PUBLIC_PROJECT_BROWSE: '/browse-projects',

@@ -6,8 +6,10 @@ import { formatDurationToHHMMSS } from '../../constants';
 
 const TIMER_REMINDER_THRESHOLD_MINUTES = 1; // For testing, set to 60 for 1 hour in production
 
+import { UserRole } from '../../types';
+
 const GlobalTimerDisplay: React.FC = () => {
-  const { activeTimerInfo, stopGlobalTimerAndLog } = useAuth();
+  const { user, activeTimerInfo, stopGlobalTimerAndLog } = useAuth();
   const [elapsedTime, setElapsedTime] = useState(0); // in seconds
   const intervalRef = useRef<number | null>(null);
   const reminderShownRef = useRef<Record<number, boolean>>({}); // To track which reminders were shown
@@ -57,7 +59,7 @@ const GlobalTimerDisplay: React.FC = () => {
     }
   }, [elapsedTime, activeTimerInfo, stopGlobalTimerAndLog]);
 
-  if (!activeTimerInfo) {
+  if (!activeTimerInfo || user?.role !== UserRole.FREELANCER) {
     return null;
   }
 
