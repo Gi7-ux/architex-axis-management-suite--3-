@@ -1009,8 +1009,6 @@ export const fetchUserRecentFilesAPI = (): Promise<ManagedFile[]> => {
     // e.g., 'Pending Approval', 'Open', 'In Progress', 'Completed', 'Cancelled'
     // The exact keys should match what the PHP backend's $project_statuses_to_count produces as keys.// AdminDashboardStatsResponse is now defined in types.ts
 
-<<<<<<< Updated upstream
-=======
 // Stats for Client Dashboard - This local definition will be removed to use the one from types.ts
 // export interface ClientDashboardStats {
 //   myProjectsCount: number;
@@ -1019,19 +1017,12 @@ export const fetchUserRecentFilesAPI = (): Promise<ManagedFile[]> => {
 //   myCompletedProjectsCount: number;
 // }
 
->>>>>>> Stashed changes
 export const fetchAdminDashboardStatsAPI = (): Promise<AdminDashboardStatsResponse> => {
   return apiFetch<AdminDashboardStatsResponse>(`/api.php?action=get_admin_dashboard_stats`, {
     method: 'GET',
   }, true); // Requires Admin Auth
 };
 
-<<<<<<< Updated upstream
-export const fetchFreelancerDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
-export const fetchClientDashboardStatsAPI = (userId: string): Promise<any> => apiFetch<any>(`/users/${userId}/dashboard/stats`);
-export const fetchRecentActivityAPI = (userId: string): Promise<any[]> => apiFetch<any[]>(`/users/${userId}/recent-activity`);
-export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`);
-=======
 export const fetchFreelancerDashboardStatsAPI = (userId: number | string): Promise<FreelancerDashboardStats> => apiFetch<FreelancerDashboardStats>(`/users/${userId}/dashboard/stats`);
 export const fetchClientDashboardStatsAPI = (): Promise<ClientDashboardStats> => {
   return apiFetch<ClientDashboardStats>(`/api.php?action=get_client_dashboard_stats`, {
@@ -1042,7 +1033,6 @@ export const fetchClientDashboardStatsAPI = (): Promise<ClientDashboardStats> =>
 export const fetchRecentActivityAPI = (userId: string): Promise<RecentActivity[]> => 
   apiFetch<RecentActivity[]>(`/users/${userId}/recent-activity`); // Placeholder
 export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`); // Placeholder
->>>>>>> Stashed changes
 
 // Reports
 export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetch<Project[]>('/reports/projects-with-timelogs');
