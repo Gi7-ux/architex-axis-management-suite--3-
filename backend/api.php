@@ -788,7 +788,8 @@ elseif ($action === 'get_admin_project_financials_report' && $method === 'GET') 
             FROM projects p
             LEFT JOIN users uc ON p.client_id = uc.id
             LEFT JOIN users uf ON p.freelancer_id = uf.id
-            LEFT JOIN Project_Budgets pb ON p.id = pb.project_id";
+-            LEFT JOIN Project_Budgets pb ON p.id = pb.project_id";
++            LEFT JOIN project_budgets pb ON p.id = pb.project_id";
 
     $where_conditions = [];
     $bind_params_list = [];
