@@ -35,11 +35,11 @@
       "types/*": [
         "./types/*"
       ],
-      "apiService": [
-        "./apiService"
+      "apiService/*": [
+        "./apiService/*"
       ],
-      "constants": [
-        "./constants"
+      "constants/*": [
+        "./constants/*"
       ]
     },
     "baseUrl": "."
