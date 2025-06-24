@@ -1065,21 +1065,13 @@ export const fetchUserRecentFilesAPI = (): Promise<ManagedFile[]> => {
     // e.g., 'Pending Approval', 'Open', 'In Progress', 'Completed', 'Cancelled'
     // The exact keys should match what the PHP backend's $project_statuses_to_count produces as keys.// AdminDashboardStatsResponse is now defined in types.ts
 
-// Stats for Client Dashboard - This local definition will be removed to use the one from types.ts
-// export interface ClientDashboardStats {
-//   myProjectsCount: number;
-//   openProjectsCount: number; // Platform-wide
-//   myInProgressProjectsCount: number;
-//   myCompletedProjectsCount: number;
-// }
-
 export const fetchAdminDashboardStatsAPI = (): Promise<AdminDashboardStatsResponse> => {
   return apiFetch<AdminDashboardStatsResponse>(`/api.php?action=get_admin_dashboard_stats`, {
     method: 'GET',
   }, true); // Requires Admin Auth
 };
 
-export const fetchFreelancerDashboardStatsAPI = (userId: number | string): Promise<FreelancerDashboardStats> => apiFetch<FreelancerDashboardStats>(`/users/${userId}/dashboard/stats`);
+export const fetchFreelancerDashboardStatsAPI = (userId: number | string): Promise<FreelancerDashboardStats> => apiFetch<FreelancerDashboardStats>(`/api.php?action=get_freelancer_dashboard_stats&user_id=${userId}`, { method: 'GET' }, true);
 export const fetchClientDashboardStatsAPI = (): Promise<ClientDashboardStats> => {
   return apiFetch<ClientDashboardStats>(`/api.php?action=get_client_dashboard_stats`, {
     method: 'GET',
@@ -1087,8 +1079,8 @@ export const fetchClientDashboardStatsAPI = (): Promise<ClientDashboardStats> =>
 };
 
 export const fetchRecentActivityAPI = (userId: string): Promise<RecentActivity[]> => 
-  apiFetch<RecentActivity[]>(`/users/${userId}/recent-activity`); // Placeholder
-export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/admin/recent-files`); // Placeholder
+  apiFetch<RecentActivity[]>(`/api.php?action=get_recent_activity&user_id=${userId}`, { method: 'GET' }, true);
+export const fetchAdminRecentFilesAPI = (): Promise<ManagedFile[]> => apiFetch<ManagedFile[]>(`/api.php?action=get_admin_recent_files`, { method: 'GET' }, true);
 
 // Reports
 export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetch<Project[]>('/reports/projects-with-timelogs');

@@ -1,11 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from "react";
 import { useAuth } from "../contexts/AuthContext";
 import {
-  ConversationResponse,
-  MessageResponse,
+  ConversationPreviewPHP,
+  MessagePHP,
   SendMessagePayload,
   findOrCreateConversationAPI,
-  sendMessageAPI
+  sendMessageAPI,
+  fetchUserConversationsAPI,
+  fetchConversationMessagesAPI,
+  markConversationAsReadAPI,
+  adminFetchAllUsersAPI
 } from "../apiService";
 import { useNavigate, useLocation } from "react-router-dom";
 import Button from "./shared/Button";
@@ -16,26 +20,13 @@ import {
   UsersIcon
 } from "./shared/IconComponents";
 import LoadingSpinner from "./shared/LoadingSpinner";
+import Modal from "./shared/Modal";
 
 interface AdminUserView {
-  id: string;
+  id: number;
   username: string;
   email: string;
   role: string;
-}
-
-interface Conversation extends ConversationResponse {
-  participants: {
-    id: string;
-    username: string;
-    avatarUrl?: string;
-  }[];
-  last_message?: {
-    content: string;
-    timestamp: string;
-    sender_id: string;
-  };
-  unread_count: number;
 }
 
 const formatMessageTimestamp = (isoString: string | null): string => {
@@ -49,14 +40,13 @@ const MessagingPage: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null);
-  const [messages, setMessages] = useState<MessageResponse[]>([]);
+  const [conversations, setConversations] = useState<ConversationPreviewPHP[]>([]);
+  const [selectedConversation, setSelectedConversation] = useState<ConversationPreviewPHP | null>(null);
+  const [messages, setMessages] = useState<MessagePHP[]>([]);
   const [newMessageContent, setNewMessageContent] = useState('');
   const [isLoadingConversations, setIsLoadingConversations] = useState(true);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSendingMessage, setIsSendingMessage] = useState(false);
-  // const [isAttachFileModalOpen, setIsAttachFileModalOpen] = useState(false); // File uploads deferred
   const [error, setError] = useState<string | null>(null);
 
   const [isCreateConversationModalOpen, setIsCreateConversationModalOpen] = useState(false);
@@ -98,25 +88,22 @@ const MessagingPage: React.FC = () => {
     } finally {
       setIsLoadingConversations(false);
     }
-  }, [user, selectedConversation]); // Added selectedConversation to deps to potentially auto-select first if current is null
+  }, [user, selectedConversation]);
 
   useEffect(() => {
     loadConversations();
-  }, [loadConversations]); // Initial load
-
-  // Removed useEffect for location.state handling (project-based chat initiation)
+  }, [loadConversations]);
 
   useEffect(() => {
     const loadMessages = async () => {
       if (selectedConversation && user) {
         setIsLoadingMessages(true); setError(null);
         try {
-          const convMessages = await fetchConversationMessagesAPI(selectedConversation.conversation_id, { limit: 100 }); // Increased limit
+          const convMessages = await fetchConversationMessagesAPI(selectedConversation.conversation_id, { limit: 100 });
           setMessages(convMessages);
 
           if (selectedConversation.unread_message_count > 0) {
             await markConversationAsReadAPI(selectedConversation.conversation_id);
-            // Update unread count locally for immediate UI feedback
             const convIdx = conversations.findIndex(c => c.conversation_id === selectedConversation.conversation_id);
             if (convIdx !== -1) {
                 const newConversations = [...conversations];
@@ -135,8 +122,7 @@ const MessagingPage: React.FC = () => {
       }
     };
     loadMessages();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedConversation, user]); // Removed 'conversations' from dep array to avoid loop with unread update
+  }, [selectedConversation, user, conversations]);
 
 
   const handleSendMessage = async () => {
@@ -150,7 +136,6 @@ const MessagingPage: React.FC = () => {
       const sentMessage = await sendMessageAPI(payload);
       setMessages(prev => [...prev, sentMessage]);
       setNewMessageContent('');
-      // Reload conversations to update last message preview and sorting
       await loadConversations(selectedConversation.conversation_id);
     } catch (err:any) {
       console.error("Failed to send message:", err);
@@ -160,41 +145,37 @@ const MessagingPage: React.FC = () => {
     }
   };
 
-  // Removed handleAdminMessageAction as admin moderation is simplified/removed for now
-
   const getConversationDisplayName = (conv: ConversationPreviewPHP): string => {
     if (!user) return "Conversation";
     
-    // For 1-on-1 chats, display the other participant's name
-    const otherParticipants = conv.participants.filter(p => p.id !== user.id);
+    const otherParticipants = conv.participants.filter(p => p.id !== String(user.id));
     if (otherParticipants.length === 1) {
       return otherParticipants[0].username;
     }
-    // Fallback for group chats or unexpected scenarios (though backend primarily creates 1-on-1)
     if (conv.participants.length > 1) {
       return conv.participants.map(p => p.username).join(', ');
     }
-    return "Conversation"; // Should ideally not happen with valid data
+    return "Conversation";
   };
 
   const getOtherParticipantAvatarName = (conv: ConversationPreviewPHP): string => {
-    if (!user) return "C"; // Fallback for Conversation
-    const otherParticipants = conv.participants.filter(p => p.id !== user.id);
+    if (!user) return "C";
+    const otherParticipants = conv.participants.filter(p => p.id !== String(user.id));
     if (otherParticipants.length === 1) {
       return otherParticipants[0].username;
     }
-    return "Group"; // Fallback for group or self-chat
+    return "Group";
   };
 
 
   const handleOpenCreateConversationModal = async () => {
       setIsCreateConversationModalOpen(true);
       setSearchTermForNewConversation('');
-      setIsLoadingConversations(true); // Use conversation loader for user list loading
+      setIsLoadingConversations(true);
       try {
           const allUsers = await adminFetchAllUsersAPI();
           if(user) {
-            setUsersForNewConversation(allUsers.filter(u => u.id !== user.id));
+            setUsersForNewConversation(allUsers.filter(u => u.id !== Number(user.id)));
           } else {
             setUsersForNewConversation(allUsers);
           }
@@ -211,11 +192,7 @@ const MessagingPage: React.FC = () => {
       setIsCreatingConversation(true); setError(null);
       try {
           const response = await findOrCreateConversationAPI(recipient.id);
-          // Refresh conversation list and select the new/found one
-          // setSelectedConversation(null); // Deselect current to ensure useEffect for messages re-triggers correctly if same ID
-          await loadConversations(response.conversation_id); // This will also set selectedConversation if found
-          // The loadConversations should ideally handle setting the selectedConversation
-          // If not, manual find and set might be needed, but it's better if loadConversations does it.
+          await loadConversations(response.conversation_id);
       } catch (err:any) {
           setError(err.message || "Could not start or find conversation.");
       } finally {
@@ -234,7 +211,6 @@ const MessagingPage: React.FC = () => {
       {error && <div className="p-2 text-center text-red-600 bg-red-100 border-b">{error} <Button variant="ghost" size="sm" onClick={() => setError(null)} className="ml-2 !text-red-600">Dismiss</Button></div>}
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Conversations List Pane */}
         <div className={`w-full md:w-1/3 lg:w-1/4 border-r border-gray-200 bg-white flex flex-col ${selectedConversation && 'hidden md:flex'}`}>
           <div className="p-3 border-b flex justify-between items-center">
             <h2 className="text-xl font-semibold text-primary">Chats</h2>
@@ -282,10 +258,9 @@ const MessagingPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Message Display Pane */}
-        <div className={`flex-1 flex flex-col bg-gray-100 ${!selectedConversation ? 'hidden md:flex md:items-center md:justify-center' : 'flex'}`}>
+        <div className="flex-1 flex flex-col bg-gray-100">
           {selectedConversation && (
-            <div className="p-2 border-b md:hidden bg-white sticky top-0 z-10"> {/* Mobile: Back button bar */}
+            <div className="p-2 border-b md:hidden bg-white sticky top-0 z-10">
               <Button variant="ghost" onClick={() => setSelectedConversation(null)} leftIcon={<ArrowLeftIcon />}>
                 Back to Chats
               </Button>
@@ -298,7 +273,7 @@ const MessagingPage: React.FC = () => {
             </div>
           ) : (
             <>
-              <div className="p-3 bg-white border-b border-gray-200 flex items-center space-x-3 sticky top-0 z-10 md:static"> {/* Header for selected chat */}
+              <div className="p-3 bg-white border-b border-gray-200 flex items-center space-x-3 sticky top-0 z-10 md:static">
                  <img
                     src={`https://ui-avatars.com/api/?name=${getOtherParticipantAvatarName(selectedConversation).replace(/\s+/g, '+')}&background=A6C4BD&color=2A5B53&rounded=true&font-size=0.5`}
                     alt="avatar"
@@ -310,27 +285,21 @@ const MessagingPage: React.FC = () => {
                 {isLoadingMessages && <LoadingSpinner text="Loading messages..." className="p-4"/>}
                 {!isLoadingMessages && messages.length === 0 && <div className="text-center text-gray-400 p-4">No messages yet. Send one to start the conversation!</div>}
                 {messages.map(msg => {
-                  const isSender = msg.sender_id === user?.id;
+                  const isSender = msg.sender_id === String(user?.id);
                   return (
                     <div key={msg.id} className={`flex ${isSender ? 'justify-end' : 'justify-start'}`}>
                       <div className={`max-w-xs lg:max-w-md p-2.5 rounded-lg shadow ${isSender ? 'bg-primary text-white rounded-br-none' : 'bg-white text-gray-700 rounded-bl-none'}`}>
                         {!isSender && <p className="text-xs font-semibold mb-0.5 text-secondary">{msg.sender_username}</p>}
                         <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
                         <p className={`text-xs mt-1 ${isSender ? 'text-gray-200 text-right' : 'text-gray-400 text-left'}`}>{formatMessageTimestamp(msg.created_at)}</p>
-                        {/* Admin moderation UI removed */}
                       </div>
                     </div>
                   );
                 })}
                 <div ref={messagesEndRef} />
               </div>
-              <div className="p-3 bg-white border-t border-gray-200 sticky bottom-0 z-10"> {/* Message Input Area */}
+              <div className="p-3 bg-white border-t border-gray-200 sticky bottom-0 z-10">
                 <div className="flex items-center space-x-2">
-                  {/* File attach button (placeholder for now)
-                  <Button variant="ghost" onClick={() => alert("File attachment not implemented yet.")} className="p-2">
-                    <PaperClipIcon className="w-5 h-5 text-gray-500 hover:text-primary"/>
-                  </Button>
-                  */}
                   <input
                     type="text"
                     value={newMessageContent}
@@ -349,7 +318,6 @@ const MessagingPage: React.FC = () => {
           )}
         </div>
 
-        {/* Create New Conversation Modal */}
         <Modal isOpen={isCreateConversationModalOpen} onClose={() => setIsCreateConversationModalOpen(false)} title="Start a New Chat">
             <input
                 type="text"
@@ -381,15 +349,6 @@ const MessagingPage: React.FC = () => {
                 <Button variant="secondary" onClick={() => setIsCreateConversationModalOpen(false)}>Cancel</Button>
             </div>
         </Modal>
-
-        {/* Attach file modal (placeholder) - can be removed if not part of this phase
-        <Modal isOpen={isAttachFileModalOpen} onClose={() => setIsAttachFileModalOpen(false)} title="Attach File">
-            <p className="text-gray-600">File upload in chat is not yet implemented. This is a placeholder.</p>
-            <div className="text-right mt-4">
-                <Button onClick={() => setIsAttachFileModalOpen(false)}>Close</Button>
-            </div>
-        </Modal>
-        */}
       </div>
     </div>
   );

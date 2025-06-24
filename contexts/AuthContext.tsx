@@ -1,5 +1,5 @@
 import React, { createContext, useState, useContext, useEffect, ReactNode } from 'react';
-import { User, UserRole, TimeLog } from '../types';
+import { TimeLog } from '../types';
 import { loginAPI, fetchUserProfileAPI, ApiError, AuthUser, UserLoginData, LoginResponse } from '../apiService';
 export type { AuthUser };
 import { addTimeLogAPI, updateUserAPI } from '../apiService';
@@ -112,7 +112,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     };
 
     try {
-      await addTimeLogAPI(activeTimerInfo.projectId, timeLogData);
+      await addTimeLogAPI(activeTimerInfo.projectId, activeTimerInfo.jobCardId, timeLogData);
       console.log("Time log saved successfully via API.");
     } catch (error) {
       console.error("API call to log time failed:", error);

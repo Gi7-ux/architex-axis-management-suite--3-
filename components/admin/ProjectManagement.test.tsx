@@ -1,12 +1,12 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { HashRouter } from 'react-router-dom';
-import { AuthContext } from '../AuthContext';
+import { AuthContext } from '../../contexts/AuthContext';
 import { AuthUser } from '../../apiService';
 import { ToastProvider } from '../shared/toast/ToastContext';
 import ProjectManagement from './ProjectManagement';
 import * as apiService from '../../apiService';
-import { ProjectStatus, UserRole } from '../../types'; // For ProjectStatus enum
+import { ProjectStatus, UserRole } from '../../types';
 
 // Mock API services
 jest.mock('../../apiService', () => ({
@@ -18,8 +18,8 @@ jest.mock('../../apiService', () => ({
   updateProjectAPI: jest.fn(),
   fetchProjectDetailsAPI: jest.fn(),
   fetchApplicationsForProjectAPI: jest.fn().mockResolvedValue([]),
-  deleteProjectAPI: jest.fn(), // Added for potential delete tests
-  updateApplicationStatusAPI: jest.fn(), // Added for potential app status tests
+  deleteProjectAPI: jest.fn(),
+  updateApplicationStatusAPI: jest.fn(),
 }));
 
 // Mock useToast
@@ -37,24 +37,24 @@ const mockAdminUser: AuthUser = {
   username: 'Test Admin',
   name: 'Test Admin',
   email: 'admin@example.com',
-  role: UserRole.ADMIN, // Use UserRole enum
+  role: UserRole.ADMIN,
 };
-
 
 const renderProjectManagement = () => {
   return render(
     <HashRouter>
       <AuthContext.Provider value={{ 
         user: mockAdminUser, 
-        token: 'mock-token', // Added
+        token: 'mock-token',
         login: jest.fn(), 
         logout: jest.fn(), 
         isLoading: false, 
-        updateCurrentUserDetails: jest.fn().mockResolvedValue(true), // Added
+        isAuthenticated: true,
+        updateCurrentUserDetails: jest.fn().mockResolvedValue(true),
         activeTimerInfo: null, 
         startGlobalTimer: jest.fn(), 
         stopGlobalTimerAndLog: jest.fn(),
-        clearGlobalTimerState: jest.fn() // Added
+        clearGlobalTimerState: jest.fn()
       }}>
         <ToastProvider>
           <ProjectManagement />
@@ -64,21 +64,14 @@ const renderProjectManagement = () => {
   );
 };
 
-// Helper to find modal buttons more reliably
 const getButtonInModal = async (modalTitle: RegExp, buttonName: RegExp) => {
-  // Find the h3 element that serves as the visual title of the modal
   const titleElement = await screen.findByRole('heading', { name: modalTitle, level: 3 });
-  // Traverse to the modal content container.
-  // The structure is: div.fixed -> div.bg-white -> (div.header (with h3), div.content (with form))
-  const modalContentContainer = titleElement.closest('div[class*="bg-white rounded-xl"]');
+  const modalContentContainer = titleElement.closest('div[class*="bg-white rounded-xl"]') as HTMLElement;
   if (!modalContentContainer) {
     throw new Error(`Modal content container not found for title: ${modalTitle}`);
   }
-  // The form and buttons are typically inside the second child of modalContentContainer (the p-6 div)
-  // but searching within modalContentContainer should be sufficient.
   return within(modalContentContainer).getByRole('button', { name: buttonName });
 };
-
 
 describe('ProjectManagement Component - Toast Interactions', () => {
   beforeEach(() => {
@@ -99,26 +92,20 @@ describe('ProjectManagement Component - Toast Interactions', () => {
 
     renderProjectManagement();
 
-    // Wait for initial loading to complete
     await waitFor(() => expect(screen.queryByText(/Loading projects.../i)).not.toBeInTheDocument());
 
     await act(async () => {
-      // Target the main "Create Project" button more specifically if needed,
-      // but often the first one found by this text outside a dialog is the correct one.
       const mainCreateButton = screen.getAllByText(/Create Project/i).find(
-        // Heuristic: the main button is likely a direct child of a div, not nested deep within a form/dialog
-        // This could be improved with a more specific data-testid if available on the button
         (btn) => btn.closest('form') === null && btn.closest('div[role="dialog"]') === null
       );
-      fireEvent.click(mainCreateButton || screen.getByText(/Create Project/i)); // Fallback if heuristic fails
+      fireEvent.click(mainCreateButton || screen.getByText(/Create Project/i));
     });
 
-    await screen.findByLabelText(/Project Title/i); // Wait for modal to open
+    await screen.findByLabelText(/Project Title/i);
 
     await act(async () => {
       fireEvent.change(screen.getByLabelText(/Project Title/i), { target: { value: 'New Test Project' } });
       fireEvent.change(screen.getByLabelText(/Project Description/i), { target: { value: 'A description' } });
-      // More specific modal and button targeting
       const createButtonInModal = await getButtonInModal(/Create New Project \(Admin\)/i, /Create Project/i);
       fireEvent.click(createButtonInModal);
     });
@@ -127,13 +114,11 @@ describe('ProjectManagement Component - Toast Interactions', () => {
     await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith('Project created successfully.', 'success'));
   });
 
-test('handleCreateProject should call addToast with error on failed API call', async () => {
-  const errorMessage = 'Network Error';
-  (apiService.createProjectAPI as jest.Mock).mockRejectedValueOnce(new Error(errorMessage));
-
+  test('handleCreateProject should call addToast with error on failed API call', async () => {
+    const errorMessage = 'Network Error';
+    (apiService.createProjectAPI as jest.Mock).mockRejectedValueOnce(new Error(errorMessage));
 
     renderProjectManagement();
-    // Wait for initial loading to complete
     await waitFor(() => expect(screen.queryByText(/Loading projects.../i)).not.toBeInTheDocument());
 
     await act(async () => {
@@ -147,7 +132,6 @@ test('handleCreateProject should call addToast with error on failed API call', a
     await act(async () => {
       fireEvent.change(screen.getByLabelText(/Project Title/i), { target: { value: 'Error Project' } });
       fireEvent.change(screen.getByLabelText(/Project Description/i), { target: { value: 'Desc' } });
-      // More specific modal and button targeting
       const createButtonInModal = await getButtonInModal(/Create New Project \(Admin\)/i, /Create Project/i);
       fireEvent.click(createButtonInModal);
     });
@@ -157,33 +141,25 @@ test('handleCreateProject should call addToast with error on failed API call', a
   });
 
   test('handleUpdateProjectDetails should call addToast with success on successful API call', async () => {
-    const projectToEdit = { id: 1, title: 'Test Project to Edit', description: 'Initial Description', status: ProjectStatus.OPEN, client_id: 1, client_username: 'Client A', freelancer_id: null, freelancer_username: null, created_at: new Date().toISOString(), skills_required: [] };
+    const projectToEdit = { id: 1, title: 'Test Project to Edit', description: 'Initial Description', status: ProjectStatus.OPEN, client_id: 1, client_username: 'Client A', freelancer_id: null, freelancer_username: null, created_at: new Date().toISOString(), skills_required: [], budget: 0, currency: 'ZAR', deadline: '', paymentType: 'fixed', experienceLevel: 'beginner', duration: 'short', updatedAt: '' };
     (apiService.fetchProjectsAPI as jest.Mock).mockResolvedValueOnce([projectToEdit]);
-    // Ensure fetchProjectDetailsAPI returns the specific project being edited for this test
     (apiService.fetchProjectDetailsAPI as jest.Mock).mockResolvedValueOnce(projectToEdit);
     (apiService.updateProjectAPI as jest.Mock).mockResolvedValueOnce({ message: 'Project updated' });
-test('handleUpdateProjectDetails should call addToast with success on successful API call', async () => {
-  (apiService.fetchProjectsAPI as jest.Mock).mockResolvedValueOnce([
-    { id: 1, title: 'Test Project to Edit', description: 'Initial Description', status: ProjectStatus.OPEN, client_id: 1, client_username: 'Client A', freelancer_id: null, freelancer_username: null, created_at: new Date().toISOString(), skills_required: [] }
-  ]);
-  (apiService.updateProjectAPI as jest.Mock).mockResolvedValueOnce({ message: 'Project updated' });
 
-  renderProjectManagement();
-  await screen.findByText('Test Project to Edit');
+    renderProjectManagement();
+    await screen.findByText('Test Project to Edit');
 
-  await act(async () => {
-    fireEvent.click(screen.getAllByLabelText(/View Details/i)[0]);
-  });
+    await act(async () => {
+      fireEvent.click(screen.getAllByLabelText(/View Details/i)[0]);
+    });
 
     await screen.findByLabelText('Title*');
     await act(async () => {
-      // Target description within the edit modal specifically
-      // First, ensure the modal is found by its title (h3)
       const titleElement = await screen.findByRole('heading', { name: /Edit Project: Test Project to Edit/i, level: 3 });
-      const modalContentContainer = titleElement.closest('div[class*="bg-white rounded-xl"]');
+      const modalContentContainer = titleElement.closest('div[class*="bg-white rounded-xl"]') as HTMLElement;
       expect(modalContentContainer).toBeInTheDocument();
 
-      fireEvent.change(within(modalContentContainer!).getByLabelText(/Description/i), { target: { value: 'Updated Description' } });
+      fireEvent.change(within(modalContentContainer).getByLabelText(/Description/i), { target: { value: 'Updated Description' } });
       const saveButtonInModal = await getButtonInModal(/Edit Project: Test Project to Edit/i, /Save Changes/i);
       fireEvent.click(saveButtonInModal);
     });
@@ -194,17 +170,10 @@ test('handleUpdateProjectDetails should call addToast with success on successful
 
   test('handleUpdateProjectDetails should call addToast with error on failed API call', async () => {
     const errorMessage = 'Update Failed';
-    const projectToEditFail = { id: 1, title: 'Test Project Update Fail', description: 'Desc', status: ProjectStatus.OPEN, client_id: 1, skills_required: [] };
+    const projectToEditFail = { id: 1, title: 'Test Project Update Fail', description: 'Desc', status: ProjectStatus.OPEN, client_id: 1, skills_required: [], budget: 0, currency: 'ZAR', deadline: '', paymentType: 'fixed', experienceLevel: 'beginner', duration: 'short', createdAt: '', updatedAt: '' };
     (apiService.fetchProjectsAPI as jest.Mock).mockResolvedValueOnce([projectToEditFail]);
-    // Ensure fetchProjectDetailsAPI returns the specific project for this test
     (apiService.fetchProjectDetailsAPI as jest.Mock).mockResolvedValueOnce(projectToEditFail);
     (apiService.updateProjectAPI as jest.Mock).mockRejectedValueOnce(new Error(errorMessage));
-test('handleUpdateProjectDetails should call addToast with error on failed API call', async () => {
-  const errorMessage = 'Update Failed';
-  (apiService.fetchProjectsAPI as jest.Mock).mockResolvedValueOnce([
-    { id: 1, title: 'Test Project Update Fail', description: 'Desc', status: ProjectStatus.OPEN, client_id: 1, skills_required: [] }
-  ]);
-  (apiService.updateProjectAPI as jest.Mock).mockRejectedValueOnce(new Error(errorMessage));
 
     renderProjectManagement();
     await screen.findByText('Test Project Update Fail');
@@ -214,12 +183,11 @@ test('handleUpdateProjectDetails should call addToast with error on failed API c
 
     await screen.findByLabelText('Title*');
     await act(async () => {
-      // Target description within the edit modal specifically
       const titleElement = await screen.findByRole('heading', { name: /Edit Project: Test Project Update Fail/i, level: 3 });
-      const modalContentContainer = titleElement.closest('div[class*="bg-white rounded-xl"]');
+      const modalContentContainer = titleElement.closest('div[class*="bg-white rounded-xl"]') as HTMLElement;
       expect(modalContentContainer).toBeInTheDocument();
 
-      fireEvent.change(within(modalContentContainer!).getByLabelText(/Description/i), { target: { value: 'Attempted Update' } });
+      fireEvent.change(within(modalContentContainer).getByLabelText(/Description/i), { target: { value: 'Attempted Update' } });
       const saveButtonInModal = await getButtonInModal(/Edit Project: Test Project Update Fail/i, /Save Changes/i);
       fireEvent.click(saveButtonInModal);
     });
@@ -227,5 +195,4 @@ test('handleUpdateProjectDetails should call addToast with error on failed API c
     await waitFor(() => expect(apiService.updateProjectAPI).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(mockAddToast).toHaveBeenCalledWith(errorMessage, 'error'));
   });
-});
 });

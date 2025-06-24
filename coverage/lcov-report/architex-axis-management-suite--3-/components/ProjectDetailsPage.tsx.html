@@ -25,14 +25,14 @@
             <div class='fl pad1y space-right2'>
                 <span class="strong">0% </span>
                 <span class="quiet">Statements</span>
-                <span class='fraction'>0/336</span>
+                <span class='fraction'>0/332</span>
             </div>
         
             
             <div class='fl pad1y space-right2'>
                 <span class="strong">0% </span>
                 <span class="quiet">Branches</span>
-                <span class='fraction'>0/295</span>
+                <span class='fraction'>0/285</span>
             </div>
         
             
@@ -46,7 +46,7 @@
             <div class='fl pad1y space-right2'>
                 <span class="strong">0% </span>
                 <span class="quiet">Lines</span>
-                <span class='fraction'>0/296</span>
+                <span class='fraction'>0/292</span>
             </div>
         
             
@@ -989,11 +989,7 @@
 <a name='L924'></a><a href='#L924'>924</a>
 <a name='L925'></a><a href='#L925'>925</a>
 <a name='L926'></a><a href='#L926'>926</a>
-<a name='L927'></a><a href='#L927'>927</a>
-<a name='L928'></a><a href='#L928'>928</a>
-<a name='L929'></a><a href='#L929'>929</a>
-<a name='L930'></a><a href='#L930'>930</a>
-<a name='L931'></a><a href='#L931'>931</a></td><td class="line-coverage quiet"><span class="cline-any cline-no">&nbsp;</span>
+<a name='L927'></a><a href='#L927'>927</a></td><td class="line-coverage quiet"><span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -1012,6 +1008,7 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -1533,7 +1530,9 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
+<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -1588,9 +1587,6 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
@@ -1604,18 +1600,14 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
+<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-no">&nbsp;</span>
-<span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span>
@@ -1924,28 +1916,29 @@
 <span class="cline-any cline-neutral">&nbsp;</span>
 <span class="cline-any cline-no">&nbsp;</span>
 <span class="cline-any cline-neutral">&nbsp;</span></td><td class="text"><pre class="prettyprint lang-js"><span class="cstat-no" title="statement not covered" >import React, { useEffect, useState, useCallback } from 'react';</span>
-<span class="cstat-no" title="statement not covered" >import { useParams, useNavigate } from 'react-router-dom';</span>
-<span class="cstat-no" title="statement not covered" >import { Project, ProjectStatus, UserRole, JobCard, JobCardStatus, TimeLog, ManagedFile } from '../types';</span>
-<span class="cstat-no" title="statement not covered" >import {</span>
+<span class="cstat-no" title="statement not covered" >import { useParams, useNavigate, useLocation } from 'react-router-dom';</span>
+<span class="cstat-no" title="statement not covered" >import { Project, ProjectStatus, Application, UserRole, JobCard, JobCardStatus, TimeLog, User, MessageStatus, ManagedFile, Conversation, Message } from '../types';</span>
+<span class="cstat-no" title="statement not covered" >import { </span>
     fetchProjectDetailsAPI, fetchApplicationsForProjectAPI, fetchProjectFilesAPI, submitApplicationAPI,
     createJobCardAPI,
     updateJobCardAPI,
     deleteJobCardAPI,
     fetchJobCardsForProjectAPI,
-    // NEW Time Log APIs:
     logTimeAPI,
     fetchTimeLogsForJobCardAPI,
-    fetchTimeLogsForProjectAPI, // For admin/client project-wide view
+    fetchTimeLogsForProjectAPI,
+    updateTimeLogAPI,
+    deleteTimeLogAPI,
     uploadFileAPI, deleteFileAPI, findOrCreateConversationAPI, sendMessageAPI,
     CreateJobCardPayload, UpdateJobCardPayload, JobCardPHPResponse,
-    // New Time Log Types:
     LogTimePayload,
     TimeLogPHPResponse,
+    ProjectApplicationPHPResponse
 } from '../apiService';
 <span class="cstat-no" title="statement not covered" >import { NAV_LINKS, getMockFileIconPath, formatDurationToHHMMSS } from '../constants';</span>
 <span class="cstat-no" title="statement not covered" >import LoadingSpinner from './shared/LoadingSpinner';</span>
 <span class="cstat-no" title="statement not covered" >import Button from './shared/Button';</span>
-<span class="cstat-no" title="statement not covered" >import { useAuth } from './AuthContext';</span>
+<span class="cstat-no" title="statement not covered" >import { useAuth } from '../contexts/AuthContext';</span>
 <span class="cstat-no" title="statement not covered" >import Modal from './shared/Modal';</span>
 <span class="cstat-no" title="statement not covered" >import { PencilIcon as EditIcon, PlayIcon, StopIcon, PlusIcon, TrashIcon, ChatBubbleLeftRightIcon, DownloadIcon, UploadIcon, ArrowLeftIcon } from './shared/IconComponents';</span>
 &nbsp;
@@ -2450,7 +2443,7 @@ const ProjectDetailsPage: React.FC = <span class="cstat-no" title="statement not
         status: newStatus.toLowerCase().replace('_', '-')
       };
 <span class="cstat-no" title="statement not covered" >      await updateJobCardAPI(jobCardId, payload);</span>
-<span class="cstat-no" title="statement not covered" >      loadProjectDetails();</span>
+<span class="cstat-no" title="statement not covered" >      loadProjectDetails(); </span>// Reload to reflect changes
     } catch (err: any) { 
 <span class="cstat-no" title="statement not covered" >        console.error("Failed to update job card status:", err); </span>
 <span class="cstat-no" title="statement not covered" >        alert(err.message || "Failed to update status.");</span>
@@ -2463,15 +2456,17 @@ const ProjectDetailsPage: React.FC = <span class="cstat-no" title="statement not
   ) =&gt; {
 <span class="cstat-no" title="statement not covered" >    if (!user) <span class="cstat-no" title="statement not covered" >return;</span></span>
 &nbsp;
+    // Corrected payload to match LogTimePayload in apiService.ts
     const payload: LogTimePayload = <span class="cstat-no" title="statement not covered" >{</span>
-      job_card_id: parseInt(jobCardIdToLog, 10),
-      start_time: logDataFromModal.startTime,
-      end_time: logDataFromModal.endTime,
-      notes: logDataFromModal.notes || null,
+      jobCardId: jobCardIdToLog, // Ensure this is a string
+      startTime: logDataFromModal.startTime,
+      endTime: logDataFromModal.endTime,
+      notes: logDataFromModal.notes || undefined, // Use undefined for optional fields
+      manualEntry: true // Assuming manual log modal implies manual entry
     };
 <span class="cstat-no" title="statement not covered" >    try {</span>
 <span class="cstat-no" title="statement not covered" >      await logTimeAPI(payload);</span>
-<span class="cstat-no" title="statement not covered" >      loadProjectDetails();</span>
+<span class="cstat-no" title="statement not covered" >      loadProjectDetails(); </span>// Reload to reflect changes
     } catch (err: any) { 
 <span class="cstat-no" title="statement not covered" >        alert(err.message || "Failed to log time."); </span>
 <span class="cstat-no" title="statement not covered" >        console.error("Failed to log time:", err);</span>
@@ -2512,20 +2507,17 @@ const ProjectDetailsPage: React.FC = <span class="cstat-no" title="statement not
 &nbsp;
   const handleOpenProjectChat = <span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >async </span>() =&gt; {</span>
 <span class="cstat-no" title="statement not covered" >    if (!project || !user) <span class="cstat-no" title="statement not covered" >return;</span></span>
-    // Ensure all IDs are strings for findOrCreateConversationAPI if it expects string[]
+    
     const participantIds = <span class="cstat-no" title="statement not covered" >Array.from(new Set([</span>
-        String(user.id),
-        String(project.clientId),
-        project.assignedFreelancerId ? String(project.assignedFreelancerId) : undefined,
-        project.adminCreatorId ? String(project.adminCreatorId) : undefined
-    ].filter(Boolean) as string[]));
+        user.id,
+        project.clientId,
+        project.assignedFreelancerId,
+        project.adminCreatorId
+    ].filter(Boolean)));
     
 <span class="cstat-no" title="statement not covered" >    try {</span>
-        // The API now only takes one argument for the recipient, not a list of participants or project ID.
-        // This logic needs to be re-evaluated. For now, let's assume we are creating a chat with the project's client.
-        const recipientId = <span class="cstat-no" title="statement not covered" >project.clientId;</span>
-        const conversation = <span class="cstat-no" title="statement not covered" >await findOrCreateConversationAPI(recipientId);</span>
-<span class="cstat-no" title="statement not covered" >        navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.conversation_id }});</span>
+        const conversation = <span class="cstat-no" title="statement not covered" >await findOrCreateConversationAPI(participantIds, project.id);</span>
+<span class="cstat-no" title="statement not covered" >        navigate('/messages', { state: { conversationId: conversation.id }});</span>
     } catch (err: any) {
 <span class="cstat-no" title="statement not covered" >        alert(err.message || "Could not open or create chat for this project.");</span>
 <span class="cstat-no" title="statement not covered" >        console.error("Chat creation/navigation error:", err);</span>
@@ -2534,25 +2526,21 @@ const ProjectDetailsPage: React.FC = <span class="cstat-no" title="statement not
   
   const handleRequestStatusUpdate = <span class="cstat-no" title="statement not covered" ><span class="fstat-no" title="function not covered" >async </span>() =&gt; {</span>
 <span class="cstat-no" title="statement not covered" >    if (!project || !user || user.role !== UserRole.CLIENT) <span class="cstat-no" title="statement not covered" >return;</span></span>
+    
     const participantIds = <span class="cstat-no" title="statement not covered" >[</span>
-        String(user.id),
-        project.assignedFreelancerId ? String(project.assignedFreelancerId) : undefined,
-        project.adminCreatorId ? String(project.adminCreatorId) : undefined,
-    ].filter(Boolean) as string[];
+        user.id,
+        project.assignedFreelancerId,
+        project.adminCreatorId
+    ].filter(Boolean);
+&nbsp;
 <span class="cstat-no" title="statement not covered" >    try {</span>
-        // This logic needs re-evaluation based on the new API.
-        // Assuming the client wants to message the assigned freelancer.
-<span class="cstat-no" title="statement not covered" >        if (!project.assignedFreelancerId) {</span>
-<span class="cstat-no" title="statement not covered" >            alert("No freelancer assigned to message.");</span>
-<span class="cstat-no" title="statement not covered" >            return;</span>
-        }
-        const conversation = <span class="cstat-no" title="statement not covered" >await findOrCreateConversationAPI(project.assignedFreelancerId);</span>
+        const conversation = <span class="cstat-no" title="statement not covered" >await findOrCreateConversationAPI(participantIds, project.id);</span>
 <span class="cstat-no" title="statement not covered" >        await sendMessageAPI({</span>
-            conversation_id: conversation.conversation_id,
-            content: `Client ${user.username} requests a status update for project '${project.title}'.`,
-        },);
+            conversation_id: conversation.id,
+            content: `Client ${user.name} requests a status update for project '${project.title}'`,
+        });
 <span class="cstat-no" title="statement not covered" >        alert("Status update request sent via messages.");</span>
-<span class="cstat-no" title="statement not covered" >        navigate(NAV_LINKS.MESSAGES, { state: { conversationId: conversation.conversation_id } });</span>
+<span class="cstat-no" title="statement not covered" >        navigate('/messages', { state: { conversationId: conversation.id } });</span>
     } catch (err: any) {
 <span class="cstat-no" title="statement not covered" >        alert(err.message || "Failed to send status update request.");</span>
 <span class="cstat-no" title="statement not covered" >        console.error("Status update request error:", err);</span>
@@ -2860,7 +2848,7 @@ export { ProjectDetailsPage as <span class="cstat-no" title="statement not cover
             <div class='footer quiet pad2 space-top1 center small'>
                 Code coverage generated by
                 <a href="https://istanbul.js.org/" target="_blank" rel="noopener noreferrer">istanbul</a>
-                at 2025-06-23T00:09:33.175Z
+                at 2025-06-24T17:40:42.666Z
             </div>
         <script src="../../prettify.js"></script>
         <script>

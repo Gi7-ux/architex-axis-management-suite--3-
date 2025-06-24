@@ -3,7 +3,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import '@testing-library/jest-dom';
 import MyProjects from './MyProjects';
-import { useAuth } from '../AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import * as apiService from '../../apiService';
 import { UserRole } from '../../types';
 
@@ -16,7 +16,7 @@ const mockFetchApplicationsForProjectAPI = apiService.fetchApplicationsForProjec
 const mockUpdateApplicationStatusAPI = apiService.updateApplicationStatusAPI as jest.Mock;
 
 // Mock AuthContext
-jest.mock('../AuthContext');
+jest.mock('../../contexts/AuthContext');
 const mockUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 
 describe('MyProjects', () => {

@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import LoginPage from './LoginPage';
 import * as apiService from '../apiService';
-import { AuthContext, AuthState } from './AuthContext'; // AuthState might not be needed if contextValue is complete
+import { AuthContext, AuthState } from '../contexts/AuthContext'; // Corrected path
 import { MemoryRouter } from 'react-router-dom';
 
 // Mock apiService, but keep actual ApiError

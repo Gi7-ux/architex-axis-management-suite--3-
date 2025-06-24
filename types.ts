@@ -68,14 +68,14 @@ export interface Project {
   currency: string;
   deadline: string; // ISO date string
   clientId: string; // Client assigned by Admin
-  clientName?: string; // Denormalized for display
+  clientName?: string | null; // Denormalized for display
   status: ProjectStatus;
   skillsRequired: string[];
   createdAt: string; // ISO date string
   adminCreatorId?: string; // Admin who created the project
   freelancerId?: string;
   assignedFreelancerId?: string;
-  assignedFreelancerName?: string; // Denormalized
+  assignedFreelancerName?: string | null; // Denormalized
   jobCards?: JobCard[];
   isArchived?: boolean;
   updatedAt: string;

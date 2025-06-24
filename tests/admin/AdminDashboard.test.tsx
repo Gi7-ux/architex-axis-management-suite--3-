@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import AdminDashboard from '../../components/admin/AdminDashboard';
-import { AuthContext } from '../../components/AuthContext';
+import { AuthContext } from '../../contexts/AuthContext'; // Corrected path
 import { MemoryRouter } from 'react-router-dom';
 import { UserRole } from '../../types';
 

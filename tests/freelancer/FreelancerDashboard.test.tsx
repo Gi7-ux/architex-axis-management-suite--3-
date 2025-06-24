@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen } from '@testing-library/react';
 import FreelancerDashboard from '../../components/freelancer/FreelancerDashboard';
-import { AuthContext } from '../../components/AuthContext';
+import { AuthContext } from '../../contexts/AuthContext';
 import { MemoryRouter } from 'react-router-dom';
 import { UserRole } from '../../types';
 

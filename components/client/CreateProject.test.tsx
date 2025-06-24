@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
 import CreateClientProject from './CreateProject';
-import { useAuth } from '../AuthContext';
+import { useAuth } from '../../contexts/AuthContext'; // Corrected path
 import * as apiService from '../../apiService';
 import { UserRole, ProjectStatus } from '../../types';
 import { MemoryRouter } from 'react-router-dom';
@@ -10,7 +10,7 @@ import { MemoryRouter } from 'react-router-dom';
 jest.mock('../../apiService');
 const mockCreateProjectAPI = apiService.createProjectAPI as jest.Mock;
 
-jest.mock('../AuthContext');
+jest.mock('../../contexts/AuthContext'); // Corrected path
 const mockUseAuth = useAuth as jest.MockedFunction<typeof useAuth>;
 
 describe('CreateClientProject', () => {

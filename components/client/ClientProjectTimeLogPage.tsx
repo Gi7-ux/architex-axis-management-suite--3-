@@ -2,10 +2,11 @@ import React, { useState, useEffect, useContext } from 'react';
 import { User, Project, TimeLog, UserRole } from '../../types';
 import {
   fetchProjectsAPI,
+  fetchClientProjectsAPI,
   fetchClientProjectTimeLogsAPI,
   fetchUsersAPI // For fetching users to map architectId to name
 } from '../../apiService';
-import { AuthContext } from '../AuthContext';
+import { AuthContext } from '../../contexts/AuthContext'; // Corrected path
 // import { SomeSpinnerComponent } from '../shared/LoadingSpinner'; // Placeholder for a spinner
 
 const ClientProjectTimeLogPage: React.FC = () => {
@@ -40,7 +41,7 @@ const ClientProjectTimeLogPage: React.FC = () => {
       setError(null);
       try {
         const [fetchedProjects, fetchedUsers] = await Promise.all([
-          fetchProjectsAPI({ clientId: String(clientId) }),
+          fetchClientProjectsAPI(),
           fetchUsersAPI(UserRole.FREELANCER) // Fetch only freelancers
         ]);
         setProjects(fetchedProjects);
