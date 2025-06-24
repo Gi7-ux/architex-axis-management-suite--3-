@@ -874,106 +874,124 @@ export const deleteFileAPI = (fileId: string): Promise<void> => {
 };
 
 
-// --- Messaging Service Types ---
+// --- ADVANCED MESSAGING SERVICE TYPES ---
 
-export interface ConversationParticipant {
+export interface ThreadParticipant {
   id: number; // User ID
   username: string;
+  avatar_url?: string | null;
 }
 
-// For the list of conversations a user has
-export interface ConversationPreviewPHP {
-  conversation_id: number;
-  created_at: string;    // ISO8601
-  updated_at: string;    // ISO8601
-  last_message_at: string | null; // ISO8601
-  participants: ConversationParticipant[]; // Parsed from backend's GROUP_CONCAT
-  last_message_snippet: string | null;
-  last_message_sender_id: number | null;
-  last_message_sender_username: string | null;
-  unread_message_count: number;
+export interface MessageThread {
+  thread_id: number;
+  project_id?: number | null;
+  project_title?: string | null;
+  title?: string | null; // Custom title for thread or participant names for DMs
+  type: 'direct' | 'project_admin_freelancer' | 'project_admin_client' | 'project_freelancer_client';
+  last_message_at?: string | null; // ISO8601
+  created_at: string; // ISO8601
+  participants: ThreadParticipant[];
+  last_message_snippet?: string | null;
+  last_message_sender_id?: number | null;
+  last_message_sender_username?: string | null;
+  unread_count: number;
 }
 
-// For individual messages within a conversation
-export interface MessagePHP {
-  id: number; // message_id from backend
-  conversation_id: number;
+export interface ThreadMessage {
+  id: number;
+  thread_id: number;
   sender_id: number;
   sender_username: string;
+  sender_avatar_url?: string | null;
   content: string;
-  created_at: string; // ISO8601
-  read_at: string | null; // ISO8601 or null
+  sent_at: string; // ISO8601
+  attachment_url?: string | null;
+  attachment_type?: string | null;
+  requires_approval: boolean;
+  approval_status?: 'pending' | 'approved' | 'rejected' | null;
 }
 
-// Payload for sending a message
-export interface SendMessagePayload {
-  conversation_id: number; // Or string if frontend uses string IDs and converts
+// Payload for sending a message in a thread (project or direct)
+export interface SendThreadMessagePayload {
+  thread_id?: number | null; // Null if creating a new thread with the message
+  project_id?: number | null; // Required if creating a new project-based thread
   content: string;
+  target_user_ids?: number[]; // For creating new 'direct' threads
+  thread_type_hint?: 'direct' | 'project_admin_freelancer' | 'project_admin_client' | 'project_freelancer_client'; // Required if creating new thread
+  admin_client_message_freelancer_visibility?: 'all' | 'non_sensitive_only' | 'none'; // Admin's choice
 }
-// Response for sending a message (is the new message itself)
-export type SendMessageResponse = MessagePHP;
-
-
-// Response for finding/creating a conversation
-export interface FindOrCreateConversationResponse {
-  conversation_id: number;
-  existed: boolean;
-}
-
-// Response for marking conversation as read
-export interface MarkConversationAsReadResponse {
-    message: string;
-    marked_read_count: number;
+export interface SendThreadMessageResponse {
+  message: string;
+  message_id: number;
+  thread_id: number;
+  requires_approval?: boolean;
+  approval_status?: 'pending' | 'approved' | 'rejected' | null;
 }
 
-// --- Messaging Service ---
-// (This will replace/update the existing placeholder messaging functions)
+// Payload for moderating a message
+export interface ModerateMessagePayload {
+  message_id: number;
+  approval_status: 'approved' | 'rejected';
+}
+export interface ModerateMessageResponse {
+  message: string;
+}
 
-export const findOrCreateConversationAPI = (recipientUserId: number | string): Promise<FindOrCreateConversationResponse> => {
-  return apiFetch<FindOrCreateConversationResponse>(`/api.php?action=find_or_create_conversation`, {
-    method: 'POST',
-    body: JSON.stringify({ recipient_user_id: recipientUserId }),
-  }, true); // Requires Auth
-};
 
-export const fetchUserConversationsAPI = (): Promise<ConversationPreviewPHP[]> => {
-  return apiFetch<ConversationPreviewPHP[]>(`/api.php?action=get_user_conversations`, {
+// --- ADVANCED MESSAGING SERVICE ---
+
+export const fetchUserMessageThreadsAPI = (): Promise<MessageThread[]> => {
+  return apiFetch<MessageThread[]>(`/api.php?action=get_user_message_threads`, {
     method: 'GET',
   }, true); // Requires Auth
 };
 
-export interface FetchMessagesParams {
+export interface FetchThreadMessagesParams {
     limit?: number;
-    before_message_id?: number | string; // string if frontend uses string IDs
-    // offset?: number; // If using offset pagination
+    offset?: number; // Or use before_message_id for cursor pagination
 }
-export const fetchConversationMessagesAPI = (conversationId: number | string, params?: FetchMessagesParams): Promise<MessagePHP[]> => {
+export const fetchThreadMessagesAPI = (threadId: number, params?: FetchThreadMessagesParams): Promise<ThreadMessage[]> => {
   const queryParams = new URLSearchParams();
   if (params?.limit) queryParams.append('limit', String(params.limit));
-  if (params?.before_message_id) queryParams.append('before_message_id', String(params.before_message_id));
-  // if (params?.offset) queryParams.append('offset', String(params.offset));
+  if (params?.offset) queryParams.append('offset', String(params.offset));
 
   const queryString = queryParams.toString();
-  const endpoint = `/api.php?action=get_conversation_messages&conversation_id=${conversationId}${queryString ? '&' + queryString : ''}`;
+  const endpoint = `/api.php?action=get_thread_messages&thread_id=${threadId}${queryString ? '&' + queryString : ''}`;
 
-  return apiFetch<MessagePHP[]>(endpoint, {
+  return apiFetch<ThreadMessage[]>(endpoint, {
     method: 'GET',
   }, true); // Requires Auth
 };
 
-export const sendMessageAPI = (payload: SendMessagePayload): Promise<SendMessageResponse> => {
-  return apiFetch<SendMessageResponse>(`/api.php?action=send_message`, {
+// This wraps the versatile 'send_project_message' backend endpoint
+export const sendThreadMessageAPI = (payload: SendThreadMessagePayload): Promise<SendThreadMessageResponse> => {
+  return apiFetch<SendThreadMessageResponse>(`/api.php?action=send_project_message`, {
     method: 'POST',
     body: JSON.stringify(payload),
   }, true); // Requires Auth
 };
 
-export const markConversationAsReadAPI = (conversationId: number | string): Promise<MarkConversationAsReadResponse> => {
-  return apiFetch<MarkConversationAsReadResponse>(`/api.php?action=mark_conversation_as_read`, {
-    method: 'POST', // Or 'PUT' as per backend
-    body: JSON.stringify({ conversation_id: conversationId }),
-  }, true); // Requires Auth
+export const moderateMessageAPI = (payload: ModerateMessagePayload): Promise<ModerateMessageResponse> => {
+  return apiFetch<ModerateMessageResponse>(`/api.php?action=moderate_project_message`, {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }, true); // Requires Admin Auth
 };
+
+// The old findOrCreateConversationAPI, fetchUserConversationsAPI, fetchConversationMessagesAPI, sendMessageAPI, markConversationAsReadAPI
+// should be considered deprecated or for a simpler DM-only system if that's still needed separately.
+// For the new project-based and advanced messaging, use the APIs above.
+
+// New API to get users that the current user can message (for DM restrictions)
+// Response type can reuse AdminUserView or a simpler UserContact type
+export interface MessageableUser extends Pick<AdminUserView, 'id' | 'username' | 'email' | 'role' | 'avatar_url'> {}
+
+export const getMessageableUsersAPI = (): Promise<MessageableUser[]> => {
+  return apiFetch<MessageableUser[]>(`/api.php?action=get_messageable_users`, {
+    method: 'GET',
+  }, true); // Requires Auth, backend will filter based on user's role
+};
+
 
 // Comment out or remove old messaging APIs from types.ts if they are fully superseded
 /*

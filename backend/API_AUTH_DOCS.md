@@ -1198,7 +1198,175 @@ Endpoints for 1-on-1 user communication.
   {
     "error": "Error message (e.g., Conversation ID required, Forbidden)."
   }
+  ```json
+  {
+    "error": "Error message (e.g., Conversation ID required, Forbidden)."
+  }
   ```
+
+## Advanced Messaging Endpoints (Thread-Based)
+
+These endpoints support more complex, project-related, and permissioned messaging.
+
+### 1. Get Messageable Users (for initiating DMs)
+- **Action**: `get_messageable_users`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_messageable_users`
+- **Authentication**: **Required**.
+- **Response (Success - 200 OK)**: Array of user objects that the authenticated user is allowed to DM.
+  - If authenticated user is Admin: Returns all (or a relevant subset of) active users.
+  - If authenticated user is Freelancer/Client: Returns only Admin users.
+  ```json
+  [
+    {
+      "id": 1,
+      "username": "admin_user",
+      "email": "admin@example.com",
+      "role": "admin",
+      "avatar_url": "/avatars/admin.png" // Optional
+    }
+    // ... other users if admin is requesting, or only other admins if freelancer/client is requesting
+  ]
+  ```
+
+### 2. Get User's Message Threads
+- **Action**: `get_user_message_threads`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_user_message_threads`
+- **Authentication**: **Required**.
+- **Response (Success - 200 OK)**: Array of message thread objects.
+  ```json
+  [
+    {
+      "thread_id": 15,
+      "project_id": 123, // Nullable
+      "project_title": "Project Alpha", // Nullable
+      "title": "Project Alpha - Admin/Client Discussion", // Custom or generated title
+      "type": "project_admin_client", // e.g., 'direct', 'project_admin_freelancer', etc.
+      "last_message_at": "YYYY-MM-DD HH:MM:SS",
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "participants": [
+        { "id": 1, "username": "admin_user", "avatar_url": null },
+        { "id": 5, "username": "client_user", "avatar_url": "/avatars/client.png" }
+      ],
+      "last_message_snippet": "Yes, that sounds good.",
+      "last_message_sender_id": 5,
+      "last_message_sender_username": "client_user",
+      "unread_count": 0 // Specific to the authenticated user for this thread
+    }
+    // ... more threads. For Type A and Type C project threads, the 'participants' array
+    // will include all freelancers assigned to that project.
+  ]
+  ```
+
+### 3. Get Thread Messages
+- **Action**: `get_thread_messages`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_thread_messages&thread_id=<id>&limit=50&offset=0`
+  - `thread_id`: Required.
+  - `limit`: Optional, number of messages to fetch (default 50).
+  - `offset`: Optional, for pagination.
+- **Authentication**: **Required** (User must be a participant with appropriate visibility).
+- **Response (Success - 200 OK)**: Array of message objects, respecting user's visibility and message approval status.
+  ```json
+  [
+    {
+      "id": 201,
+      "thread_id": 15,
+      "sender_id": 1,
+      "sender_username": "admin_user",
+      "sender_avatar_url": null,
+      "content": "Please review the attached document.",
+      "sent_at": "YYYY-MM-DD HH:MM:SS",
+      "attachment_url": "/files/doc.pdf", // Nullable
+      "attachment_type": "application/pdf", // Nullable
+      "requires_approval": false,
+      "approval_status": null
+    },
+    {
+      "id": 202,
+      "thread_id": 15,
+      "sender_id": 10, // A freelancer in a project_freelancer_client thread
+      "sender_username": "freelancer_user",
+      "sender_avatar_url": "/avatars/freelancer.png",
+      "content": "Here is the update for the client.",
+      "sent_at": "YYYY-MM-DD HH:MM:SS",
+      "requires_approval": true,
+      "approval_status": "approved" // or "pending", "rejected"
+    }
+  ]
+  ```
+  *(Backend implicitly marks messages as read for the user up to the last fetched message in this thread)*
+
+### 3. Send Project/Thread Message
+- **Action**: `send_project_message`
+- **Method**: `POST`
+- **URL**: `/backend/api.php?action=send_project_message`
+- **Authentication**: **Required**.
+- **Request Body (JSON)**:
+  ```json
+  // To send to an existing thread:
+  {
+    "thread_id": 15,
+    "content": "This is a reply in an existing thread."
+  }
+  // To create a new project-specific thread and send a message:
+  {
+    "project_id": 123,
+    "thread_type_hint": "project_admin_client", // or "project_admin_freelancer", "project_freelancer_client"
+    "content": "Initial message for new project thread.",
+    // Optional for 'project_admin_client' type by admin sender:
+    "admin_client_message_freelancer_visibility": "non_sensitive_only" // "all", "non_sensitive_only", "none"
+  }
+  // To create a new direct message thread and send a message:
+  {
+    "target_user_ids": [456], // Array of recipient user IDs. For F/C senders, backend validates these are Admins.
+    "thread_type_hint": "direct", // Must be 'direct' for this structure
+    "content": "Hello, Admin!" // Optional: Can create an empty thread by omitting content if backend supports. Backend will use project_id from URL for project specific threads.
+  }
+  ```
+- **Response (Success - 201 Created)**:
+  ```json
+  {
+    "message": "Message sent successfully.", // Or "Thread created successfully" if content was empty and only thread was made.
+    "message_id": 205, // Nullable if only thread was created without an initial message.
+    "thread_id": 15, // ID of the thread (either existing or newly created)
+    "requires_approval": false, // True if the message sent requires approval (e.g. freelancer in Type A project_client_admin_freelancer thread)
+    "approval_status": null // 'pending' if requires_approval is true, else null
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Thread ID/Project ID/Target IDs required, Content required for message, Forbidden, Invalid thread type, Target users not admins for Freelancer/Client DMs, Project not found for project-specific threads)."
+  }
+  ```
+
+### 4. Moderate Project Message (Admin Action)
+- **Action**: `moderate_project_message`
+- **Method**: `POST`
+- **URL**: `/backend/api.php?action=moderate_project_message`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON)**:
+  ```json
+  {
+    "message_id": 202,
+    "approval_status": "approved" // or "rejected"
+  }
+  ```
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "Message approved successfully." // or "Message rejected successfully."
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Message ID and status required, Message not found, Message does not require approval, Forbidden)."
+  }
+  ```
+
 
 ### 4. Send Message
 - **Action**: `send_message`
