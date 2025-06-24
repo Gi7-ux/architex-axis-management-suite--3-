@@ -33,12 +33,14 @@ const ErrorMessage: React.FC<ErrorMessageProps> = ({ error, className = '' }) =>
     if (error.message) {
       displayMessage = error.message;
     }
-    if (error.data) {
-      if (error.data.message && !displayMessage) { // Prefer top-level message if already set
-        displayMessage = error.data.message;
+    // Support both plain object errors and AxiosError-like shapes
+    const payload = (error as any).data ?? (error as any).response?.data;
+    if (payload) {
+      if (payload.message && !displayMessage) { // Prefer top-level message if already set
+        displayMessage = payload.message;
       }
-      if (error.data.errors && Array.isArray(error.data.errors)) {
-        fieldErrors = error.data.errors.map(err => ({ param: err.param, msg: err.msg }));
+      if (payload.errors && Array.isArray(payload.errors)) {
+        fieldErrors = payload.errors.map((err: any) => ({ param: err.param, msg: err.msg }));
       }
     }
   }
