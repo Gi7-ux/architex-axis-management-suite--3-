@@ -1,4 +1,6 @@
-# Project Brief: Architex Axis Management Suite
+# Project Brief
+
+**Project Name**: Architex Axis Management Suite
 
 ## 1. Project Goal
 
