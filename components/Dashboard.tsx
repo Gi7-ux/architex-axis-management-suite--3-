@@ -10,6 +10,7 @@ import Sidebar, { SidebarNavItem } from './shared/Sidebar';
 import DashboardOverview from './DashboardOverview'; 
 import UserManagement from './admin/UserManagement';
 import ProjectManagement from './admin/ProjectManagement';
+import AdminProjectMessagingPage from './admin/AdminProjectMessagingPage'; // Import the new Admin Messaging Page
 import AdminBillingPlaceholder from './admin/AdminBillingPlaceholder'; 
 import AdminTimeLogReportPage from './admin/AdminTimeLogReportPage'; 
 import ProjectBrowser from './freelancer/ProjectBrowser';
@@ -32,6 +33,7 @@ const getSidebarNavItems = (role: UserRole): SidebarNavItem[] => {
         { label: 'Overview', to: NAV_LINKS.DASHBOARD_OVERVIEW, icon: <HomeIcon /> },
         { label: 'User Management', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_USERS}`, icon: <UsersIcon /> },
         { label: 'Projects', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_PROJECTS}`, icon: <BriefcaseIcon /> },
+        { label: 'Project Messaging', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_PROJECT_MESSAGING}`, icon: <ChatBubbleLeftRightIcon /> }, // New Link for Admin
         // Create Project link removed as it's handled via modal in ProjectManagement
         // { label: 'New Project', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`, icon: <PlusCircleIcon /> },
         { label: 'Billing', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_BILLING}`, icon: <CurrencyDollarIcon /> },
@@ -97,6 +99,7 @@ const Dashboard: React.FC = () => {
             <>
               <Route path={NAV_LINKS.ADMIN_USERS} element={<UserManagement />} />
               <Route path={NAV_LINKS.ADMIN_PROJECTS} element={<ProjectManagement />} />
+              <Route path={NAV_LINKS.ADMIN_PROJECT_MESSAGING} element={<AdminProjectMessagingPage />} /> {/* New Route for Admin */}
               {/* ADMIN_CREATE_PROJECT route logic is now handled within ProjectManagement via modal */}
               {/* <Route path={NAV_LINKS.ADMIN_CREATE_PROJECT} element={<ProjectManagement />} />  */}
               <Route path={NAV_LINKS.ADMIN_BILLING} element={<AdminBillingPlaceholder />} />

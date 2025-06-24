@@ -31,6 +31,7 @@ export const NAV_LINKS = {
   
   ADMIN_USERS: 'users',
   ADMIN_PROJECTS: 'projects',
+  ADMIN_PROJECT_MESSAGING: 'project-messaging', // New constant for Admin Project Messaging
   ADMIN_CREATE_PROJECT: 'create-project', // This path might be deprecated if creation is modal-only
   ADMIN_BILLING: 'billing', 
   ADMIN_TIME_REPORTS: 'time-reports',
