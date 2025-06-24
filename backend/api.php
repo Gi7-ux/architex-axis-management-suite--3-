@@ -1105,15 +1105,16 @@ elseif ($action === 'admin_add_skill' && $method === 'POST') {
         send_json_response(400, ['error' => 'Skill name is required.']);
     }
 
-    // Check if skill already exists
-    $stmt_check = $conn->prepare("SELECT id FROM skills WHERE name = ?");
+    // Check if skill already exists (case-insensitive)
+    $stmt_check = $conn->prepare("SELECT id FROM skills WHERE LOWER(name) = LOWER(?)");
     $stmt_check->bind_param("s", $skill_name);
     $stmt_check->execute();
     if ($stmt_check->get_result()->num_rows > 0) {
-        send_json_response(409, ['error' => "Skill '{$skill_name}' already exists."]);
+        send_json_response(409, ['error' => "Skill '{$skill_name}' already exists (case-insensitive)."]);
     }
     $stmt_check->close();
 
+    // Insert with the original casing provided by the user
     $stmt_insert = $conn->prepare("INSERT INTO skills (name) VALUES (?)");
     $stmt_insert->bind_param("s", $skill_name);
     if ($stmt_insert->execute()) {
@@ -1156,17 +1157,18 @@ elseif ($action === 'admin_update_skill' && ($method === 'POST' || $method === '
     $current_skill = $result_exist->fetch_assoc();
     $stmt_check_exist->close();
 
-    // Check if new name conflicts with another skill
+    // Check if new name conflicts with another skill (case-insensitive)
     if (strtolower($new_skill_name) !== strtolower($current_skill['name'])) {
-        $stmt_check_conflict = $conn->prepare("SELECT id FROM skills WHERE name = ? AND id != ?");
+        $stmt_check_conflict = $conn->prepare("SELECT id FROM skills WHERE LOWER(name) = LOWER(?) AND id != ?");
         $stmt_check_conflict->bind_param("si", $new_skill_name, $skill_id);
         $stmt_check_conflict->execute();
         if ($stmt_check_conflict->get_result()->num_rows > 0) {
-            send_json_response(409, ['error' => "Another skill with the name '{$new_skill_name}' already exists."]);
+            send_json_response(409, ['error' => "Another skill with the name '{$new_skill_name}' already exists (case-insensitive)."]);
         }
         $stmt_check_conflict->close();
     }
 
+    // Update with the original casing provided by the user
     $stmt_update = $conn->prepare("UPDATE skills SET name = ?, updated_at = NOW() WHERE id = ?");
     $stmt_update->bind_param("si", $new_skill_name, $skill_id);
     if ($stmt_update->execute()) {
@@ -1479,6 +1481,233 @@ elseif ($action === 'get_project_files' && $method === 'GET') {
     send_json_response(200, $files_list);
 
 } // END NEW: Get Project Files
+
+// NEW: Project File Management - Upload Project File
+elseif ($action === 'upload_project_file' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $uploader_id = (int)$authenticated_user['id'];
+
+    $project_id = isset($_POST['project_id']) ? (int)$_POST['project_id'] : (isset($_GET['project_id']) ? (int)$_GET['project_id'] : null);
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for file upload.']);
+    }
+
+    // Authorization: Check if user can upload to this project
+    $stmt_proj_check_upload = $conn->prepare("SELECT client_id, freelancer_id FROM projects WHERE id = ?");
+    if (!$stmt_proj_check_upload) { send_json_response(500, ['error' => 'Server error preparing project check for upload.']); }
+    $stmt_proj_check_upload->bind_param("i", $project_id);
+    if (!$stmt_proj_check_upload->execute()) { send_json_response(500, ['error' => 'Server error executing project check for upload.']); }
+    $result_proj_check_upload = $stmt_proj_check_upload->get_result();
+    if ($result_proj_check_upload->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found.']);
+    }
+    $project_data_upload_auth = $result_proj_check_upload->fetch_assoc();
+    $stmt_proj_check_upload->close();
+
+    $can_upload = false;
+    if ($authenticated_user['role'] === 'admin' ||
+        (int)$project_data_upload_auth['client_id'] === $uploader_id ||
+        ($project_data_upload_auth['freelancer_id'] !== null && (int)$project_data_upload_auth['freelancer_id'] === $uploader_id)) {
+        $can_upload = true;
+    }
+
+    if (!$can_upload) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to upload files to this project.']);
+    }
+
+    if (!isset($_FILES['file'])) {
+        send_json_response(400, ['error' => 'No file uploaded. Please use a form input with name "file".']);
+    }
+
+    $file = $_FILES['file'];
+
+    if ($file['error'] !== UPLOAD_ERR_OK) {
+        $upload_errors = [
+            UPLOAD_ERR_INI_SIZE   => "The uploaded file exceeds the upload_max_filesize directive in php.ini.",
+            UPLOAD_ERR_FORM_SIZE  => "The uploaded file exceeds the MAX_FILE_SIZE directive that was specified in the HTML form.",
+            UPLOAD_ERR_PARTIAL    => "The uploaded file was only partially uploaded.",
+            UPLOAD_ERR_NO_FILE    => "No file was uploaded.",
+            UPLOAD_ERR_NO_TMP_DIR => "Missing a temporary folder.",
+            UPLOAD_ERR_CANT_WRITE => "Failed to write file to disk.",
+            UPLOAD_ERR_EXTENSION  => "A PHP extension stopped the file upload.",
+        ];
+        $error_message = $upload_errors[$file['error']] ?? "Unknown upload error.";
+        send_json_response(500, ['error' => $error_message]);
+    }
+
+    // Basic security checks
+    $original_file_name = basename($file["name"]); // Sanitize original name
+    $file_type = $file["type"];
+    $file_size = $file["size"];
+    $tmp_name = $file["tmp_name"];
+
+    // Define upload directory and ensure it exists
+    // IMPORTANT: For security, this path should ideally be outside the web root or have restricted access.
+    // The path is relative to the location of api.php (backend/api.php)
+    $upload_base_dir = __DIR__ . '/../uploads/project_files/'; // Go up one level from 'backend' to repo root, then to 'uploads'
+    $project_upload_dir = $upload_base_dir . $project_id . '/';
+
+    if (!is_dir($project_upload_dir)) {
+        if (!mkdir($project_upload_dir, 0775, true)) { // 0775 for permissions, true for recursive
+            send_json_response(500, ['error' => 'Failed to create project upload directory. Check permissions. Path: ' . $project_upload_dir]);
+        }
+    }
+
+    // Generate a unique name for the stored file
+    $file_extension = strtolower(pathinfo($original_file_name, PATHINFO_EXTENSION));
+    $unique_file_name = uniqid('file_', true) . '.' . $file_extension;
+    $target_file_path = $project_upload_dir . $unique_file_name;
+
+    // Relative path for DB storage (relative to the 'uploads' directory in the repo root)
+    $db_file_path = 'project_files/' . $project_id . '/' . $unique_file_name;
+
+
+    // Max file size (e.g., 10MB)
+    $max_file_size = 10 * 1024 * 1024;
+    if ($file_size > $max_file_size) {
+        send_json_response(400, ['error' => "File is too large. Maximum size is " . ($max_file_size / 1024 / 1024) . "MB."]);
+    }
+
+    // Allowed file types (example, can be more restrictive or use MIME types more reliably)
+    // $allowed_extensions = ['jpg', 'jpeg', 'png', 'gif', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt', 'zip'];
+    // if (!in_array($file_extension, $allowed_extensions)) {
+    //     send_json_response(400, ['error' => "Invalid file type. Allowed types: " . implode(', ', $allowed_extensions)]);
+    // }
+    // For now, we'll rely on MIME type from browser, but this isn't foolproof.
+    // More robust validation would involve checking file signatures server-side.
+
+    if (move_uploaded_file($tmp_name, $target_file_path)) {
+        // File uploaded successfully, now add to database
+        $stmt_insert_file = $conn->prepare("INSERT INTO project_files (project_id, uploader_id, file_name, file_path, file_type, file_size) VALUES (?, ?, ?, ?, ?, ?)");
+        if ($stmt_insert_file === false) {
+            unlink($target_file_path); // Delete uploaded file if DB insert fails preparation
+            send_json_response(500, ['error' => 'Failed to prepare file DB record statement: ' . $conn->error]);
+        }
+
+        $stmt_insert_file->bind_param("iisssi", $project_id, $uploader_id, $original_file_name, $db_file_path, $file_type, $file_size);
+
+        if ($stmt_insert_file->execute()) {
+            $new_file_id = $stmt_insert_file->insert_id;
+            // Fetch the newly inserted record to return full details
+            $stmt_get_file = $conn->prepare("SELECT pf.id, pf.project_id, pf.uploader_id, pf.file_name, pf.file_path, pf.file_type, pf.file_size, pf.uploaded_at, u.username as uploader_username FROM project_files pf JOIN users u ON pf.uploader_id = u.id WHERE pf.id = ?");
+            $stmt_get_file->bind_param("i", $new_file_id);
+            $stmt_get_file->execute();
+            $file_data = $stmt_get_file->get_result()->fetch_assoc();
+            $stmt_get_file->close();
+
+            // Cast types for JSON response
+            $file_data['id'] = (int)$file_data['id'];
+            $file_data['project_id'] = (int)$file_data['project_id'];
+            $file_data['uploader_id'] = (int)$file_data['uploader_id'];
+            $file_data['file_size'] = (int)$file_data['file_size'];
+            // Potentially add a public URL field if applicable
+            // $file_data['url'] = '/uploads/' . $db_file_path; // Example public URL
+
+            send_json_response(201, ['message' => 'File uploaded successfully.', 'file' => $file_data]);
+        } else {
+            unlink($target_file_path); // Delete uploaded file if DB insert fails
+            send_json_response(500, ['error' => 'Failed to save file record to database: ' . $stmt_insert_file->error]);
+        }
+        $stmt_insert_file->close();
+    } else {
+        send_json_response(500, ['error' => 'Failed to move uploaded file. Check server permissions and path. Target: ' . $target_file_path]);
+    }
+
+} // END NEW: Upload Project File
+
+// NEW: Project File Management - Delete Project File
+elseif ($action === 'delete_project_file' && ($method === 'POST' || $method === 'DELETE')) {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $file_id = null;
+    if ($method === 'DELETE') {
+        $file_id = isset($_GET['file_id']) ? (int)$_GET['file_id'] : null;
+    } elseif ($method === 'POST') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $file_id = isset($data['file_id']) ? (int)$data['file_id'] : (isset($_GET['file_id']) ? (int)$_GET['file_id'] : null);
+    }
+
+    if (!$file_id) {
+        send_json_response(400, ['error' => 'File ID is required.']);
+    }
+
+    // Fetch file details to get path and authorize
+    $stmt_get_file_info = $conn->prepare(
+        "SELECT pf.project_id, pf.uploader_id, pf.file_path, p.client_id AS project_client_id
+         FROM project_files pf
+         JOIN projects p ON pf.project_id = p.id
+         WHERE pf.id = ?"
+    );
+    if (!$stmt_get_file_info) { send_json_response(500, ['error' => 'Server error preparing file info fetch.']);}
+    $stmt_get_file_info->bind_param("i", $file_id);
+    if (!$stmt_get_file_info->execute()) { send_json_response(500, ['error' => 'Server error executing file info fetch.']);}
+    $result_file_info = $stmt_get_file_info->get_result();
+    if ($result_file_info->num_rows === 0) {
+        send_json_response(404, ['error' => 'File not found in database.']);
+    }
+    $file_info = $result_file_info->fetch_assoc();
+    $stmt_get_file_info->close();
+
+    // Authorization check
+    $can_delete = false;
+    if ($authenticated_user['role'] === 'admin' ||
+        (int)$file_info['uploader_id'] === $current_user_id ||
+        (int)$file_info['project_client_id'] === $current_user_id) {
+        $can_delete = true;
+    }
+
+    if (!$can_delete) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this file.']);
+    }
+
+    // Construct full server path. Path in DB is relative to 'uploads/' in repo root.
+    $full_file_path = __DIR__ . '/../uploads/' . $file_info['file_path'];
+
+    $file_deleted_physically = false;
+    if (file_exists($full_file_path)) {
+        if (unlink($full_file_path)) {
+            $file_deleted_physically = true;
+        } else {
+            // Log this error but proceed to try DB deletion if user wants to clean up record.
+            error_log("Failed to delete physical file: {$full_file_path}. Permissions issue or file in use?");
+            // Optionally, you could choose to not delete the DB record if physical delete fails:
+            // send_json_response(500, ['error' => 'Failed to delete the physical file. Database record not removed.']);
+        }
+    } else {
+        // File doesn't exist physically, maybe already deleted. Consider this a success for physical deletion part.
+        $file_deleted_physically = true;
+        error_log("Physical file not found for deletion (may have been already deleted): {$full_file_path}");
+    }
+
+    // Delete from database
+    $stmt_delete_db = $conn->prepare("DELETE FROM project_files WHERE id = ?");
+    if (!$stmt_delete_db) { send_json_response(500, ['error' => 'Server error preparing DB record deletion.']);}
+    $stmt_delete_db->bind_param("i", $file_id);
+
+    if ($stmt_delete_db->execute()) {
+        if ($stmt_delete_db->affected_rows > 0) {
+            if ($file_deleted_physically) {
+                send_json_response(200, ['message' => 'File and its record deleted successfully.']);
+            } else {
+                // This state means DB record deleted, but physical file deletion failed earlier.
+                send_json_response(200, ['message' => 'File record deleted from database, but physical file deletion failed. Please check server logs.']);
+            }
+        } else {
+            // DB record was not found (or already deleted), but physical file might have been handled.
+            if ($file_deleted_physically && !file_exists($full_file_path)) { // Check again if it was deleted now
+                 send_json_response(200, ['message' => 'Physical file was deleted (or did not exist), but no corresponding database record was found to delete (possibly already removed).']);
+            } else {
+                 send_json_response(404, ['message' => 'File record not found in database (possibly already deleted), and physical file status is unchanged or failed to delete.']);
+            }
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete file record from database: ' . $stmt_delete_db->error]);
+    }
+    $stmt_delete_db->close();
+
+} // END NEW: Delete Project File
 
 
 // --- END NEW User Authentication API ---

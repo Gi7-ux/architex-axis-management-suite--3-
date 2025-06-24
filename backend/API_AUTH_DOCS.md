@@ -76,6 +76,64 @@ Requests are typically made by appending a `?action=some_action` query parameter
   }
   ```
 
+### 2. Upload Project File
+- **Action**: `upload_project_file`
+- **Method**: `POST`
+- **URL**: `/backend/api.php?action=upload_project_file`
+- **Authentication**: **Required**. User must be admin, project client, or assigned freelancer.
+- **Request Body**: `multipart/form-data`
+  - `project_id` (form field): ID of the project.
+  - `file` (file field): The file to upload.
+- **Response (Success - 201 Created)**: Metadata of the uploaded file.
+  ```json
+  {
+    "message": "File uploaded successfully.",
+    "file": {
+      "id": 2,
+      "project_id": 123,
+      "uploader_id": 456,
+      "file_name": "design_mockup_v2.png",
+      "file_path": "project_files/123/unique_id_design_mockup_v2.png", // Relative path stored in DB
+      "file_type": "image/png",
+      "file_size": 204800,
+      "uploaded_at": "YYYY-MM-DD HH:MM:SS",
+      "uploader_username": "client_user"
+      // "url": "/uploads/project_files/123/unique_id_design_mockup_v2.png" // Example public URL if constructed
+    }
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Project ID required, No file uploaded, File too large, Failed to move file, DB error)."
+  }
+  ```
+
+### 3. Delete Project File
+- **Action**: `delete_project_file`
+- **Method**: `POST` or `DELETE`
+- **URL**: `/backend/api.php?action=delete_project_file` (if POST with payload) or `/backend/api.php?action=delete_project_file&file_id=<file_id>` (if DELETE)
+- **Authentication**: **Required**. User must be admin, project client (for files in their project), or original uploader.
+- **Request Body (JSON, if POST)**:
+  ```json
+  {
+    "file_id": 1
+  }
+  ```
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "File and its record deleted successfully."
+    // Or other messages indicating partial success/failure if physical delete and DB delete have different outcomes.
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., File ID required, File not found, Forbidden)."
+  }
+  ```
+
 ## Project File Management Endpoints
 
 These endpoints manage files associated with projects. A new table `project_files` is assumed.
