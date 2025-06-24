@@ -96,10 +96,13 @@ const FreelancerMyJobCards: React.FC = () => {
             </div>
             <div className="mt-4">
                {/* Example button, could also link to a specific job card detail page if that exists */}
-              <Link to={NAV_LINKS.PROJECT_DETAILS.replace(':id', String(jobCard.project_id)) + `?jobCardId=${jobCard.id}`}>
-                <Button variant="secondary" size="sm" className="w-full">
+              <Link
+                to={NAV_LINKS.PROJECT_DETAILS.replace(':id', String(jobCard.project_id)) + `?jobCardId=${jobCard.id}`}
+                className="inline-block w-full"
+              >
+                <span className="block w-full px-4 py-2 text-sm font-medium text-center text-primary-dark bg-white border border-primary-dark rounded-md hover:bg-primary-extralight focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary">
                   View Details on Project Page
-                </Button>
+                </span>
               </Link>
             </div>
           </div>
