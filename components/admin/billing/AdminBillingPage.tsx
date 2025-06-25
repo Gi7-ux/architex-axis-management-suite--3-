@@ -277,13 +277,7 @@ const AdminBillingPage: React.FC = () => {
           throw new Error('Unknown action');
       }
 
-      if (successMessage) { // Only alert and reload if an action was successfully processed.
-        ...
-      }
-    } catch (err) {
-      ...
-    }
-  };
+      if (successMessage) {
         alert(successMessage);
         loadInvoices(); // Refresh list
       }
