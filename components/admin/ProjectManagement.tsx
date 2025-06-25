@@ -395,12 +395,27 @@ const ProjectManagement: React.FC = () => {
                 const projectSpend = calculateProjectSpend(project, allUsers);
                 const isOverdue = new Date(project.deadline) < new Date() && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED;
 
-                const relatedInvoices = allInvoices.filter(inv => inv.projectId === project.id);
-                const totalInvoiced = relatedInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
-                const totalPaid = relatedInvoices
-                  .filter(inv => inv.status === InvoiceStatus.PAID)
-                  .reduce((sum, inv) => sum + inv.totalAmount, 0);
-
+                // Replace the per‐row filter+reduce with a memoized map of totals
+-               const relatedInvoices = allInvoices.filter(inv => inv.projectId === project.id);
+-               const totalInvoiced = relatedInvoices.reduce((sum, inv) => sum + inv.totalAmount, 0);
+-               const totalPaid = relatedInvoices
+-                 .filter(inv => inv.status === InvoiceStatus.PAID)
+-                 .reduce((sum, inv) => sum + inv.totalAmount, 0);
++               const invoiceTotals = React.useMemo(() => {
++                 const map = new Map<string, { invoiced: number; paid: number }>();
++                 allInvoices.forEach(inv => {
++                   const entry = map.get(inv.projectId) ?? { invoiced: 0, paid: 0 };
++                   entry.invoiced += inv.totalAmount;
++                   if (inv.status === InvoiceStatus.PAID) {
++                     entry.paid += inv.totalAmount;
++                   }
++                   map.set(inv.projectId, entry);
++                 });
++                 return map;
++               }, [allInvoices]);
++
++               const { invoiced: totalInvoiced = 0, paid: totalPaid = 0 } =
++                 invoiceTotals.get(project.id) || {};
                 return (
                 <tr key={project.id} className={`hover:bg-primary-extralight transition-colors duration-150 ${project.isArchived ? 'opacity-60 bg-gray-100' : ''}`}>
                   <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{project.title}</td>
