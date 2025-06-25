@@ -51,7 +51,9 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise
     }
 
     const errorMessage = errorData.message || `API Error: ${response.status} ${response.statusText}`;
-    throw new ApiError(errorMessage, response.status, errorData);
+    {
+        throw new ApiError(errorMessage, response.status, errorData);
+    }
   }
 
   if (response.status === 204) {
