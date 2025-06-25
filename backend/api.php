@@ -1,48 +1,54 @@
 <?php
-header("Access-Control-Allow-Origin: *"); // Allow requests from any origin (for development)
+header("Access-Control-Allow-Origin: http://localhost:5173"); // Allow frontend dev server
 header("Content-Type: application/json; charset=UTF-8");
-header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS"); // Allow common methods
-header("Access-Control-Max-Age: 3600"); // Cache preflight request for 1 hour
+header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS");
+header("Access-Control-Max-Age: 3600");
 header("Access-Control-Allow-Headers: Content-Type, Access-Control-Allow-Headers, Authorization, X-Requested-With");
+header("Access-Control-Allow-Credentials: true");
 
-// Include database connection
-require_once 'db_connect.php'; // $conn will be available from this file
-
-// --- NEW: Authentication Helper Functions ---
-function get_user_from_session_token($conn, $token) {
-    if (empty($token)) {
-        return null;
-    }
-    // Prepare statement to prevent SQL injection
-    $stmt = $conn->prepare("SELECT id, username, email, role, created_at FROM users WHERE session_token = ? AND session_token_expires_at > NOW()");
-    if ($stmt === false) {
-        // error_log("Prepare failed (get_user_from_session_token): " . $conn->error);
-        return null;
-    }
-    $stmt->bind_param("s", $token);
-    if (!$stmt->execute()) {
-        // error_log("Execute failed (get_user_from_session_token): " . $stmt->error);
-        return null;
-    }
-    $result = $stmt->get_result();
-    $user = $result->fetch_assoc();
-    $stmt->close();
-    return $user ? $user : null;
+// Handle preflight requests
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(200);
+    exit();
 }
 
-function require_authentication($conn) {
-    $auth_header = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
-    if (!$auth_header || !preg_match('/^Bearer\s+(.+)$/', $auth_header, $matches)) {
-        send_json_response(401, ['error' => 'Authorization header missing or malformed. Usage: Bearer <token>']);
-        // exit; // exit is handled by send_json_response if it includes one
+// Include configuration and library files
+require_once __DIR__ . '/config.php';
+require_once __DIR__ . '/lib/Database.php';
+require_once __DIR__ . '/lib/RequestHandler.php';
+require_once __DIR__ . '/lib/JWTHandler.php';
+require_once __DIR__ . '/lib/AuthService.php';
+require_once __DIR__ . '/lib/ProjectService.php';
+
+// Include Composer's autoloader if needed
+if (file_exists(__DIR__ . '/vendor/autoload.php')) {
+    require_once __DIR__ . '/vendor/autoload.php';
+}
+
+use Firebase\JWT\JWT;
+use Firebase\JWT\Key;
+
+// --- JWT Authentication Functions ---
+function getDecodedJwt() {
+    $authHeader = $_SERVER['HTTP_AUTHORIZATION'] ?? null;
+    if (!$authHeader || !preg_match('/^Bearer\s+(.+)$/', $authHeader, $matches)) {
+        return null;
     }
-    $token = $matches[1];
-    $user = get_user_from_session_token($conn, $token);
-    if (!$user) {
-        send_json_response(403, ['error' => 'Invalid or expired session token. Please log in again.']);
-        // exit; // exit is handled by send_json_response
+    $jwt = $matches[1];
+    try {
+        $decoded = JWT::decode($jwt, new Key(JWT_SECRET_KEY, 'HS256'));
+        return (array) $decoded->data;
+    } catch (Exception $e) {
+        return null;
     }
-    return $user; // Return authenticated user data
+}
+
+function require_authentication() {
+    $decoded_jwt = getDecodedJwt();
+    if (!$decoded_jwt) {
+        send_json_response(401, ['error' => 'Authentication failed. Invalid or missing token.']);
+    }
+    return $decoded_jwt;
 }
 // --- END NEW Authentication Helper Functions ---
 
@@ -151,7 +157,7 @@ if ($action === 'register_user' && $method === 'POST') {
     $stmt_check->close();
 
     $hashed_password = password_hash($password, PASSWORD_BCRYPT);
-    $stmt = $conn->prepare("INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)");
+    $stmt = $conn->prepare("INSERT INTO users (username, email, password_hash, role) VALUES (?, ?, ?, ?)");
     if ($stmt === false) {
         send_json_response(500, ['error' => 'Server error: Could not prepare statement for user registration.']);
     }
@@ -175,7 +181,7 @@ if ($action === 'register_user' && $method === 'POST') {
         send_json_response(400, ['error' => 'Email and password are required.']);
     }
 
-    $stmt = $conn->prepare("SELECT id, username, email, role, password FROM users WHERE email = ?");
+    $stmt = $conn->prepare("SELECT id, username, email, role, password_hash FROM users WHERE email = ?");
     if ($stmt === false) {
         send_json_response(500, ['error' => 'Server error: Could not prepare statement for login.']);
     }
@@ -185,7 +191,7 @@ if ($action === 'register_user' && $method === 'POST') {
     $user = $result->fetch_assoc();
     $stmt->close();
 
-    if ($user && password_verify($password, $user['password'])) {
+    if ($user && password_verify($password, $user['password_hash'])) {
         $session_token = bin2hex(random_bytes(32));
         $expires_at = date('Y-m-d H:i:s', strtotime('+1 day'));
 
@@ -220,6 +226,151 @@ if ($action === 'register_user' && $method === 'POST') {
     send_json_response(200, $authenticated_user);
 
 }
+
+// NEW: User - Update Own Profile
+elseif ($action === 'update_own_profile' && ($method === 'POST' || $method === 'PUT')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_to_update = (int)$authenticated_user['id'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (empty($data) && !isset($data['skill_ids'])) { // Check if $data is empty OR only skill_ids is set
+        send_json_response(400, ['error' => 'No data provided for update. If only updating skills, ensure skill_ids is provided.']);
+    }
+
+    $conn->begin_transaction();
+    try {
+        $fields_to_update_sql = [];
+        $params_for_bind = [];
+        $param_types = "";
+
+        // Fetch current user data for validation if necessary (e.g. if username/email were changeable here)
+        // For this endpoint, we assume username and email are not changed by the user themselves here.
+        // If they were, uniqueness checks like in admin_update_user_details would be needed.
+
+        // Optional String Fields (name, phone_number, company, avatar_url)
+        foreach (['name', 'phone_number', 'company', 'avatar_url'] as $field) {
+            if (array_key_exists($field, $data)) { // Use array_key_exists to allow setting to null or empty string
+                $fields_to_update_sql[] = "$field = ?"; $params_for_bind[] = $data[$field]; $param_types .= "s";
+            }
+        }
+        // Optional TEXT Field (experience)
+        if (array_key_exists('experience', $data)) {
+            $fields_to_update_sql[] = "experience = ?"; $params_for_bind[] = $data['experience']; $param_types .= "s";
+        }
+        // Optional DECIMAL Field (hourly_rate) - Only if user is a freelancer
+        if ($authenticated_user['role'] === 'freelancer' && array_key_exists('hourly_rate', $data)) {
+            $hourlyRate = $data['hourly_rate'] === null || $data['hourly_rate'] === '' ? null : (float)$data['hourly_rate'];
+            if ($hourlyRate !== null && $hourlyRate < 0) {throw new Exception('Hourly rate cannot be negative.');}
+            $fields_to_update_sql[] = "hourly_rate = ?"; $params_for_bind[] = $hourlyRate; $param_types .= "d";
+        }
+
+        $user_table_updated = false;
+        if (!empty($fields_to_update_sql)) {
+            $fields_to_update_sql[] = "updated_at = NOW()"; // Always update this
+
+            $sql_update = "UPDATE users SET " . implode(", ", $fields_to_update_sql) . " WHERE id = ?";
+            $current_params_for_user = $params_for_bind; // Use a new array for user table params
+            $current_params_for_user[] = $user_id_to_update;
+            $current_types_for_user = $param_types . "i";
+
+            $stmt_update = $conn->prepare($sql_update);
+            if ($stmt_update === false) {
+                throw new Exception('Failed to prepare user profile update statement: ' . $conn->error);
+            }
+            if (strlen($current_types_for_user) !== count($current_params_for_user)){
+                 throw new Exception('Param count mismatch for user profile update. Types: '.$current_types_for_user.' Params: '.count($current_params_for_user));
+            }
+            if (!empty($current_types_for_user)) {
+                $stmt_update->bind_param($current_types_for_user, ...$current_params_for_user);
+            }
+
+            if (!$stmt_update->execute()) {
+                throw new Exception('Failed to update user profile: ' . $stmt_update->error);
+            }
+            if($stmt_update->affected_rows > 0) $user_table_updated = true;
+            $stmt_update->close();
+        }
+
+        // Handle skills update (similar to admin_update_user_details)
+        $skills_table_updated = false;
+        if (isset($data['skill_ids']) && is_array($data['skill_ids'])) {
+            $skill_ids = array_map('intval', $data['skill_ids']); // Sanitize to integers
+
+            // Delete existing skills for the user
+            $stmt_delete_skills = $conn->prepare("DELETE FROM user_skills WHERE user_id = ?");
+            if (!$stmt_delete_skills) { throw new Exception('Failed to prepare deleting user skills. ' . $conn->error); }
+            $stmt_delete_skills->bind_param("i", $user_id_to_update);
+            if (!$stmt_delete_skills->execute()) { throw new Exception('Failed to delete user skills. ' . $stmt_delete_skills->error); }
+            // We consider skills updated if the key 'skill_ids' is present, even if it's empty (means remove all)
+            // or if rows were deleted or inserted.
+            if ($stmt_delete_skills->affected_rows > 0 || !empty($skill_ids)) {
+                $skills_table_updated = true;
+            }
+            $stmt_delete_skills->close();
+
+            // Add new skills if any
+            if (!empty($skill_ids)) {
+                // Optional: Validate if skill IDs exist in the `skills` table
+                $placeholders = implode(',', array_fill(0, count($skill_ids), '?'));
+                $stmt_check_skills = $conn->prepare("SELECT id FROM skills WHERE id IN ($placeholders)");
+                if (!$stmt_check_skills) { throw new Exception('Failed to prepare skill ID validation. ' . $conn->error); }
+                $types_skills_check = str_repeat('i', count($skill_ids));
+                $stmt_check_skills->bind_param($types_skills_check, ...$skill_ids);
+                if (!$stmt_check_skills->execute()) { throw new Exception('Failed to execute skill ID validation. ' . $stmt_check_skills->error); }
+                $valid_skill_result = $stmt_check_skills->get_result();
+                if ($valid_skill_result->num_rows !== count($skill_ids)) {
+                    throw new Exception('One or more provided skill IDs are invalid.');
+                }
+                $stmt_check_skills->close();
+
+
+                $sql_insert_skill = "INSERT INTO user_skills (user_id, skill_id) VALUES (?, ?)";
+                $stmt_insert_skill = $conn->prepare($sql_insert_skill);
+                if (!$stmt_insert_skill) { throw new Exception('Failed to prepare adding user skill. ' . $conn->error); }
+
+                $inserted_skill_rows = 0;
+                foreach ($skill_ids as $skill_id) {
+                    $stmt_insert_skill->bind_param("ii", $user_id_to_update, $skill_id);
+                    if (!$stmt_insert_skill->execute()) {
+                        // Check for duplicate entry error (MySQL error code 1062)
+                        if ($conn->errno === 1062) {
+                            // Ignore duplicate skill entry, or log it as a warning
+                            error_log("Attempted to insert duplicate skill_id {$skill_id} for user_id {$user_id_to_update}. Skipped.");
+                        } else {
+                            throw new Exception('Failed to add skill ID ' . $skill_id . '. ' . $stmt_insert_skill->error);
+                        }
+                    }
+                    if ($stmt_insert_skill->affected_rows > 0) $inserted_skill_rows++;
+                }
+                $stmt_insert_skill->close();
+                if ($inserted_skill_rows > 0) $skills_table_updated = true;
+            }
+        }
+
+        if (!$user_table_updated && !$skills_table_updated && !(isset($data['skill_ids']) && empty($data['skill_ids']))) {
+            // This condition means no user table fields were in $data to update (so $fields_to_update_sql was empty)
+            // AND skill_ids was not provided at all (so no attempt to clear/update skills)
+            // OR skill_ids was provided but was identical to existing skills (not easily checkable here without fetching old skills)
+            if (empty($fields_to_update_sql) && !isset($data['skill_ids'])) {
+                 $conn->rollback(); // Nothing to commit
+                 send_json_response(200, ['message' => 'No update data provided for profile or skills.']);
+            }
+        }
+
+        $conn->commit();
+        send_json_response(200, ['message' => 'Profile updated successfully.']);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        if (strpos($e->getMessage(), 'Duplicate entry') !== false || strpos($e->getMessage(), 'already exists') !== false) {
+            send_json_response(409, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response(500, ['error' => 'Failed to update profile: ' . $e->getMessage()]);
+        }
+    }
+}
+// END NEW: User - Update Own Profile
+
 
 // NEW: Admin - Get All Users
 elseif ($action === 'get_all_users' && $method === 'GET') {
@@ -369,24 +520,20 @@ elseif ($action === 'admin_create_user' && $method === 'POST') {
     // Let's add them to the INSERT statement if they were added to `users` table schema.
     // If not, this part needs adjustment based on actual table structure.
     // For this subtask, let's assume users table has: name, phoneNumber, company, experience, hourly_rate, avatar_url
-    // (and these fields were added to user table schema comment in db_connect.php previously).
-    // If not, the INSERT query should only include username, email, password, role.
-
-    // For simplicity, this example assumes users table was expanded with:
-    // name VARCHAR(255) NULL, phone_number VARCHAR(50) NULL, company VARCHAR(255) NULL,
-    // experience TEXT NULL, hourly_rate DECIMAL(10,2) NULL, avatar_url VARCHAR(2048) NULL
     // And these need to be added to db_connect.php comments for users table.
     // (This schema update is outside this subtask's direct instructions but implied by wanting full user edits)
 
-    $sql_insert_user = "INSERT INTO users (username, email, password, role, name, phone_number, company, experience, hourly_rate, avatar_url, created_at, updated_at)
+    $sql_insert_user = "INSERT INTO users (username, email, password_hash, role, name, phone_number, company, experience, hourly_rate, avatar_url, created_at, updated_at)
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())";
     $stmt_insert = $conn->prepare($sql_insert_user);
     if ($stmt_insert === false) {
         send_json_response(500, ['error' => 'Server error: Could not prepare statement for user creation. ' . $conn->error]);
     }
-    // Types: s (username), s (email), s (password), s (role), s (name), s (phoneNumber), s (company), s (experience), d (hourlyRate), s (avatarUrl)
+    // Types: s (username), s (email), s (password_hash), s (role), s (name), s (phoneNumber), s (company), s (experience), d (hourlyRate), s (avatarUrl)
+    // Note: The actual column name for password hash is `password_hash` as per schema.
+    // The variable $hashed_password contains the hash.
     $stmt_insert->bind_param("ssssssssds",
-        $username, $email, $hashed_password, $role,
+        $username, $email, $hashed_password, $role, // $hashed_password is correct here.
         $name, $phoneNumber, $company, $experience, $hourlyRate, $avatarUrl
     );
 
@@ -1082,6 +1229,397 @@ elseif ($action === 'get_all_skills' && $method === 'GET') {
     send_json_response(200, $skills_list);
 
 } // END NEW: Get All Skills
+
+// NEW: Admin Add Skill
+elseif ($action === 'admin_add_skill' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can add skills.']);
+    }
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $skill_name = trim($data['name'] ?? '');
+
+    if (empty($skill_name)) {
+        send_json_response(400, ['error' => 'Skill name is required.']);
+    }
+
+    // Check if skill already exists
+    $stmt_check = $conn->prepare("SELECT id FROM skills WHERE name = ?");
+    $stmt_check->bind_param("s", $skill_name);
+    $stmt_check->execute();
+    if ($stmt_check->get_result()->num_rows > 0) {
+        send_json_response(409, ['error' => "Skill '{$skill_name}' already exists."]);
+    }
+    $stmt_check->close();
+
+    $stmt_insert = $conn->prepare("INSERT INTO skills (name) VALUES (?)");
+    $stmt_insert->bind_param("s", $skill_name);
+    if ($stmt_insert->execute()) {
+        $new_skill_id = $stmt_insert->insert_id;
+        $stmt_get_new_skill = $conn->prepare("SELECT id, name, created_at FROM skills WHERE id = ?");
+        $stmt_get_new_skill->bind_param("i", $new_skill_id);
+        $stmt_get_new_skill->execute();
+        $new_skill_data = $stmt_get_new_skill->get_result()->fetch_assoc();
+        $stmt_get_new_skill->close();
+        send_json_response(201, ['message' => 'Skill added successfully.', 'skill' => $new_skill_data]);
+    } else {
+        send_json_response(500, ['error' => 'Failed to add skill: ' . $stmt_insert->error]);
+    }
+    $stmt_insert->close();
+} // END NEW: Admin Add Skill
+
+// NEW: Admin Update Skill
+elseif ($action === 'admin_update_skill' && ($method === 'POST' || $method === 'PUT')) {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can update skills.']);
+    }
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $skill_id = isset($data['skill_id']) ? (int)$data['skill_id'] : null;
+    $new_skill_name = trim($data['name'] ?? '');
+
+    if (!$skill_id || empty($new_skill_name)) {
+        send_json_response(400, ['error' => 'Skill ID and new name are required.']);
+    }
+
+    // Check if skill exists
+    $stmt_check_exist = $conn->prepare("SELECT name FROM skills WHERE id = ?");
+    $stmt_check_exist->bind_param("i", $skill_id);
+    $stmt_check_exist->execute();
+    $result_exist = $stmt_check_exist->get_result();
+    if ($result_exist->num_rows === 0) {
+        send_json_response(404, ['error' => "Skill with ID {$skill_id} not found."]);
+    }
+    $current_skill = $result_exist->fetch_assoc();
+    $stmt_check_exist->close();
+
+    // Check if new name conflicts with another skill
+    if (strtolower($new_skill_name) !== strtolower($current_skill['name'])) {
+        $stmt_check_conflict = $conn->prepare("SELECT id FROM skills WHERE name = ? AND id != ?");
+        $stmt_check_conflict->bind_param("si", $new_skill_name, $skill_id);
+        $stmt_check_conflict->execute();
+        if ($stmt_check_conflict->get_result()->num_rows > 0) {
+            send_json_response(409, ['error' => "Another skill with the name '{$new_skill_name}' already exists."]);
+        }
+        $stmt_check_conflict->close();
+    }
+
+    $stmt_update = $conn->prepare("UPDATE skills SET name = ?, updated_at = NOW() WHERE id = ?");
+    $stmt_update->bind_param("si", $new_skill_name, $skill_id);
+    if ($stmt_update->execute()) {
+        if ($stmt_update->affected_rows > 0) {
+            $stmt_get_updated_skill = $conn->prepare("SELECT id, name, created_at, updated_at FROM skills WHERE id = ?");
+            $stmt_get_updated_skill->bind_param("i", $skill_id);
+            $stmt_get_updated_skill->execute();
+            $updated_skill_data = $stmt_get_updated_skill->get_result()->fetch_assoc();
+            $stmt_get_updated_skill->close();
+            send_json_response(200, ['message' => 'Skill updated successfully.', 'skill' => $updated_skill_data]);
+        } else {
+            send_json_response(200, ['message' => 'Skill name was not changed or skill not found.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to update skill: ' . $stmt_update->error]);
+    }
+    $stmt_update->close();
+} // END NEW: Admin Update Skill
+
+// NEW: Admin Delete Skill
+elseif ($action === 'admin_delete_skill' && ($method === 'POST' || $method === 'DELETE')) {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can delete skills.']);
+    }
+
+    $skill_id = null;
+    if ($method === 'DELETE') {
+        $skill_id = isset($_GET['skill_id']) ? (int)$_GET['skill_id'] : null;
+    } elseif ($method === 'POST') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $skill_id = isset($data['skill_id']) ? (int)$data['skill_id'] : (isset($_GET['skill_id']) ? (int)$_GET['skill_id'] : null);
+    }
+
+    if (!$skill_id) {
+        send_json_response(400, ['error' => 'Skill ID is required.']);
+    }
+
+    // Check if skill exists before attempting delete
+    $stmt_check = $conn->prepare("SELECT id FROM skills WHERE id = ?");
+    $stmt_check->bind_param("i", $skill_id);
+    $stmt_check->execute();
+    if ($stmt_check->get_result()->num_rows === 0) {
+        send_json_response(404, ['error' => "Skill with ID {$skill_id} not found."]);
+    }
+    $stmt_check->close();
+
+    // ON DELETE CASCADE in user_skills and project_skills will handle related deletions.
+    $stmt_delete = $conn->prepare("DELETE FROM skills WHERE id = ?");
+    $stmt_delete->bind_param("i", $skill_id);
+    if ($stmt_delete->execute()) {
+        if ($stmt_delete->affected_rows > 0) {
+            send_json_response(200, ['message' => "Skill ID {$skill_id} deleted successfully. Associated user and project skills were also removed."]);
+        } else {
+            // Should be caught by the check above, but as a fallback.
+            send_json_response(404, ['message' => 'Skill not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete skill: ' . $stmt_delete->error]);
+    }
+    $stmt_delete->close();
+} // END NEW: Admin Delete Skill
+
+// NEW: Get Freelancer Dashboard Stats
+elseif ($action === 'get_freelancer_dashboard_stats' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'freelancer') {
+        send_json_response(403, ['error' => 'Forbidden: Only freelancers can access these statistics.']);
+    }
+    $freelancer_id = (int)$authenticated_user['id'];
+    $stats = [];
+
+    // Number of active applications (status = 'pending')
+    $stmt_pending_apps = $conn->prepare("SELECT COUNT(*) AS count FROM applications WHERE freelancer_id = ? AND status = 'pending'");
+    $stmt_pending_apps->bind_param("i", $freelancer_id);
+    $stmt_pending_apps->execute();
+    $stats['pending_applications_count'] = (int)$stmt_pending_apps->get_result()->fetch_assoc()['count'];
+    $stmt_pending_apps->close();
+
+    // Number of assigned/in-progress projects
+    // Define active project statuses for a freelancer
+    $active_project_statuses = ['in_progress', 'assigned']; // Add other relevant statuses if any
+    $status_placeholders = implode(',', array_fill(0, count($active_project_statuses), '?'));
+    $sql_active_projects = "SELECT COUNT(*) AS count FROM projects WHERE freelancer_id = ? AND status IN ({$status_placeholders})";
+    $stmt_active_projects = $conn->prepare($sql_active_projects);
+    $types_active_projects = 'i' . str_repeat('s', count($active_project_statuses));
+    $params_active_projects = array_merge([$freelancer_id], $active_project_statuses);
+    $stmt_active_projects->bind_param($types_active_projects, ...$params_active_projects);
+    $stmt_active_projects->execute();
+    $stats['active_projects_count'] = (int)$stmt_active_projects->get_result()->fetch_assoc()['count'];
+    $stmt_active_projects->close();
+
+    // Total time logged (all time, in minutes)
+    $stmt_total_time = $conn->prepare("SELECT SUM(duration_minutes) AS total_minutes FROM time_logs WHERE user_id = ?");
+    $stmt_total_time->bind_param("i", $freelancer_id);
+    $stmt_total_time->execute();
+    $total_minutes_result = $stmt_total_time->get_result()->fetch_assoc();
+    $stats['total_minutes_logged'] = $total_minutes_result['total_minutes'] ? (int)$total_minutes_result['total_minutes'] : 0;
+    $stmt_total_time->close();
+
+    // Number of completed projects where this freelancer was assigned
+    $stmt_completed_projects = $conn->prepare("SELECT COUNT(*) AS count FROM projects WHERE freelancer_id = ? AND status = 'completed'");
+    $stmt_completed_projects->bind_param("i", $freelancer_id);
+    $stmt_completed_projects->execute();
+    $stats['completed_projects_count'] = (int)$stmt_completed_projects->get_result()->fetch_assoc()['count'];
+    $stmt_completed_projects->close();
+
+    send_json_response(200, $stats);
+} // END NEW: Get Freelancer Dashboard Stats
+
+// NEW: Get Freelancer's Job Cards
+elseif ($action === 'get_freelancer_job_cards' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'freelancer') {
+        send_json_response(403, ['error' => 'Forbidden: Only freelancers can view their job cards.']);
+    }
+    $freelancer_id = (int)$authenticated_user['id'];
+
+    // Fetch job cards directly assigned to the freelancer
+    // Optionally, also consider job cards from projects where the freelancer is the main assignee,
+    // even if the job card itself is unassigned or assigned to them.
+    // For now, focusing on direct assignment or assignment to them on projects they lead.
+    $sql = "SELECT
+                jc.id, jc.project_id, jc.title, jc.description, jc.status,
+                jc.assigned_freelancer_id, jc.estimated_hours,
+                jc.created_at, jc.updated_at,
+                p.title AS project_title
+            FROM job_cards jc
+            JOIN projects p ON jc.project_id = p.id
+            WHERE jc.assigned_freelancer_id = ?
+               OR (p.freelancer_id = ? AND jc.assigned_freelancer_id IS NULL)
+               OR (p.freelancer_id = ? AND jc.assigned_freelancer_id = p.freelancer_id)
+            ORDER BY p.title ASC, jc.created_at ASC";
+
+    $stmt = $conn->prepare($sql);
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for freelancer job cards: ' . $conn->error]);
+    }
+    // Bind freelancer_id three times for the OR conditions
+    $stmt->bind_param("iii", $freelancer_id, $freelancer_id, $freelancer_id);
+
+    if (!$stmt->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for freelancer job cards: ' . $stmt->error]);
+    }
+
+    $result = $stmt->get_result();
+    $job_cards_list = [];
+    while ($row = $result->fetch_assoc()) {
+        if ($row['estimated_hours'] !== null) {
+            $row['estimated_hours'] = (float)$row['estimated_hours'];
+        }
+        if ($row['assigned_freelancer_id'] !== null) {
+            $row['assigned_freelancer_id'] = (int)$row['assigned_freelancer_id'];
+        }
+        // Ensure project_id is int
+        $row['project_id'] = (int)$row['project_id'];
+        $job_cards_list[] = $row;
+    }
+    $stmt->close();
+
+    send_json_response(200, $job_cards_list);
+} // END NEW: Get Freelancer's Job Cards
+
+// NEW: Get Freelancer's Time Logs
+elseif ($action === 'get_freelancer_time_logs' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'freelancer') {
+        send_json_response(403, ['error' => 'Forbidden: Only freelancers can view their time logs.']);
+    }
+    $freelancer_id = (int)$authenticated_user['id'];
+
+    // Filters
+    $project_id_filter = isset($_GET['project_id']) ? (int)$_GET['project_id'] : null;
+    $job_card_id_filter = isset($_GET['job_card_id']) ? (int)$_GET['job_card_id'] : null;
+    $date_from_filter = isset($_GET['date_from']) ? $_GET['date_from'] : null; // Expect YYYY-MM-DD
+    $date_to_filter = isset($_GET['date_to']) ? $_GET['date_to'] : null;       // Expect YYYY-MM-DD
+
+    $sql = "SELECT
+                tl.id, tl.job_card_id, tl.user_id,
+                tl.start_time, tl.end_time, tl.duration_minutes, tl.notes,
+                tl.created_at AS time_log_created_at, tl.updated_at AS time_log_updated_at,
+                jc.title AS job_card_title,
+                p.id AS project_id,
+                p.title AS project_title
+            FROM time_logs tl
+            JOIN job_cards jc ON tl.job_card_id = jc.id
+            JOIN projects p ON jc.project_id = p.id
+            WHERE tl.user_id = ?";
+
+    $params = [$freelancer_id];
+    $types = "i";
+
+    if ($project_id_filter) {
+        $sql .= " AND p.id = ?";
+        $params[] = $project_id_filter;
+        $types .= "i";
+    }
+    if ($job_card_id_filter) {
+        $sql .= " AND jc.id = ?";
+        $params[] = $job_card_id_filter;
+        $types .= "i";
+    }
+    if ($date_from_filter) {
+        // Assuming start_time is a DATETIME or TIMESTAMP field
+        $sql .= " AND DATE(tl.start_time) >= ?";
+        $params[] = $date_from_filter;
+        $types .= "s";
+    }
+    if ($date_to_filter) {
+        $sql .= " AND DATE(tl.start_time) <= ?"; // Could also use end_time, depending on desired logic
+        $params[] = $date_to_filter;
+        $types .= "s";
+    }
+
+    $sql .= " ORDER BY tl.start_time DESC";
+
+    $stmt = $conn->prepare($sql);
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for freelancer time logs: ' . $conn->error]);
+    }
+    if (!empty($types)) {
+        $stmt->bind_param($types, ...$params);
+    }
+
+    if (!$stmt->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for freelancer time logs: ' . $stmt->error]);
+    }
+
+    $result = $stmt->get_result();
+    $time_logs_list = [];
+    while ($row = $result->fetch_assoc()) {
+        $row['duration_minutes'] = (int)$row['duration_minutes'];
+        // Ensure IDs are integers
+        $row['id'] = (int)$row['id'];
+        $row['job_card_id'] = (int)$row['job_card_id'];
+        $row['user_id'] = (int)$row['user_id'];
+        $row['project_id'] = (int)$row['project_id'];
+        $time_logs_list[] = $row;
+    }
+    $stmt->close();
+
+    send_json_response(200, $time_logs_list);
+} // END NEW: Get Freelancer's Time Logs
+
+// NEW: Project File Management - Get Project Files
+elseif ($action === 'get_project_files' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $project_id = isset($_GET['project_id']) ? (int)$_GET['project_id'] : null;
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required.']);
+    }
+
+    // Authorization: Check if user can view this project (client owner, assigned freelancer, or admin)
+    $stmt_proj_check = $conn->prepare("SELECT client_id, freelancer_id FROM projects WHERE id = ?");
+    if (!$stmt_proj_check) { send_json_response(500, ['error' => 'Server error preparing project check.']); }
+    $stmt_proj_check->bind_param("i", $project_id);
+    if (!$stmt_proj_check->execute()) { send_json_response(500, ['error' => 'Server error executing project check.']); }
+    $result_proj_check = $stmt_proj_check->get_result();
+    if ($result_proj_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found.']);
+    }
+    $project_data_auth = $result_proj_check->fetch_assoc();
+    $stmt_proj_check->close();
+
+    $can_view = false;
+    if ($authenticated_user['role'] === 'admin' ||
+        (int)$project_data_auth['client_id'] === (int)$authenticated_user['id'] ||
+        ($project_data_auth['freelancer_id'] !== null && (int)$project_data_auth['freelancer_id'] === (int)$authenticated_user['id'])) {
+        $can_view = true;
+    }
+
+    if (!$can_view) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to view files for this project.']);
+    }
+
+    // Assuming a `project_files` table exists with columns: id, project_id, uploader_id, file_name, file_path, file_type, file_size, uploaded_at
+    // And `users` table for uploader_username
+    $sql = "SELECT
+                pf.id, pf.project_id, pf.uploader_id, pf.file_name, pf.file_path,
+                pf.file_type, pf.file_size, pf.uploaded_at,
+                u.username as uploader_username
+            FROM project_files pf
+            JOIN users u ON pf.uploader_id = u.id
+            WHERE pf.project_id = ?
+            ORDER BY pf.uploaded_at DESC";
+
+    $stmt_files = $conn->prepare($sql);
+    if ($stmt_files === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for project files: ' . $conn->error]);
+    }
+    $stmt_files->bind_param("i", $project_id);
+    if (!$stmt_files->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for project files: ' . $stmt_files->error]);
+    }
+
+    $result_files = $stmt_files->get_result();
+    $files_list = [];
+    while ($row = $result_files->fetch_assoc()) {
+        // Potentially construct a public URL for file_path if it's stored as a relative server path
+        // For now, returning the raw path.
+        $row['id'] = (int)$row['id'];
+        $row['project_id'] = (int)$row['project_id'];
+        $row['uploader_id'] = (int)$row['uploader_id'];
+        $row['file_size'] = (int)$row['file_size'];
+        // Example: $row['url'] = "/download_file.php?file_id=" . $row['id']; // If implementing a download script
+        $files_list[] = $row;
+    }
+    $stmt_files->close();
+    send_json_response(200, $files_list);
+
+} // END NEW: Get Project Files
+
+
 // --- END NEW User Authentication API ---
 
 // NEW: Get Client's Own Projects
@@ -1553,11 +2091,11 @@ elseif ($action === 'withdraw_application' && ($method === 'POST' || $method ===
     if (!$stmt_check_app->execute()) {
         send_json_response(500, ['error' => 'Server error executing application check. ' . $stmt_check_app->error]);
     }
-    $result_app_check = $stmt_check_app->get_result();
-    if ($result_app_check->num_rows === 0) {
+    $result_check_app = $stmt_check_app->get_result();
+    if ($result_check_app->num_rows === 0) {
         send_json_response(404, ['error' => 'Application not found.']);
     }
-    $app_data = $result_app_check->fetch_assoc();
+    $app_data = $result_check_app->fetch_assoc();
     $stmt_check_app->close();
 
     if ((int)$app_data['freelancer_id'] !== $freelancer_id) {
@@ -1796,10 +2334,9 @@ elseif ($action === 'update_job_card' && ($method === 'PUT' || $method === 'POST
     if ($result_jc_check->num_rows === 0) {
         send_json_response(404, ['error' => 'Job Card not found.']);
     }
-    $jc_details = $result_jc_check->fetch_assoc();
-    $project_client_id = (int)$jc_details['project_client_id'];
-    $job_card_assignee_id = $jc_details['job_card_assignee'] ? (int)$jc_details['job_card_assignee'] : null;
-    $project_main_freelancer_id = $jc_details['project_main_freelancer_id'] ? (int)$jc_details['project_main_freelancer_id'] : null;
+    $project_client_id = (int)$jc_check['client_id'];
+    $job_card_assignee_id = $jc_check['job_card_assignee'] ? (int)$jc_check['job_card_assignee'] : null;
+    $project_main_freelancer_id = $jc_check['project_main_freelancer_id'] ? (int)$jc_check['project_main_freelancer_id'] : null;
     $stmt_jc_check->close();
 
     // Authorization
@@ -1853,8 +2390,8 @@ elseif ($action === 'update_job_card' && ($method === 'PUT' || $method === 'POST
                 $stmt_f_check->bind_param("i", $assigned_freelancer_id_update);
                 if (!$stmt_f_check->execute()) { send_json_response(500, ['error' => 'Server error executing freelancer validation.']);}
                 $res_f_check = $stmt_f_check->get_result();
-                if ($res_f_check->num_rows === 0) { send_json_response(404, ['error' => 'New assigned freelancer not found.']); }
-                if ($res_f_check->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'New assigned user is not a freelancer.']);}
+                if ($res_f_check->num_rows === 0) { send_json_response(404, ['error' => 'Assigned freelancer not found.']); }
+                if ($res_f_check->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'Assigned user is not a freelancer.']);}
                 $stmt_f_check->close();
             }
             $fields_to_update[] = "assigned_freelancer_id = ?"; $params[] = $assigned_freelancer_id_update; $types .= "i";
@@ -1869,111 +2406,113 @@ elseif ($action === 'update_job_card' && ($method === 'PUT' || $method === 'POST
     }
 
     if (isset($data['status'])) { // Status can always be updated if $can_edit_status_only or $can_edit_fully
-        $valid_statuses = ['todo', 'in_progress', 'pending_review', 'completed'];
-        if (!in_array($data['status'], $valid_statuses)) {
-            send_json_response(400, ['error' => 'Invalid status value. Valid statuses: ' . implode(", ", $valid_statuses)]);
+        $valid_project_statuses = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled', 'archived'];
+        if (!in_array($data['status'], $valid_project_statuses)) {
+            send_json_response(400, ['error' => 'Invalid project status specified.']);
         }
         $fields_to_update[] = "status = ?"; $params[] = $data['status']; $types .= "s";
     }
 
     if (empty($fields_to_update)) {
-         send_json_response(400, ['error' => 'No valid fields provided for update or no permission to update specified fields.']);
+        send_json_response(400, ['error' => 'No valid fields provided for update or no permission to update specified fields.']);
     }
 
     $fields_to_update[] = "updated_at = NOW()";
 
-    $sql = "UPDATE job_cards SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
-    $params[] = $job_card_id;
+    $sql_update = "UPDATE projects SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+    $params[] = $project_id;
     $types .= "i";
 
-    $stmt_update = $conn->prepare($sql);
+    $stmt_update = $conn->prepare($sql_update);
     if ($stmt_update === false) {
-        send_json_response(500, ['error' => 'Failed to prepare job card update statement: ' . $conn->error]);
+        send_json_response(500, ['error' => 'Failed to prepare project update statement: ' . $conn->error]);
     }
     $stmt_update->bind_param($types, ...$params);
 
     if ($stmt_update->execute()) {
         if ($stmt_update->affected_rows > 0) {
-            send_json_response(200, ['message' => 'Job card updated successfully.']);
+            send_json_response(200, ['message' => 'Project details updated successfully.']);
         } else {
-            $stmt_exists_check = $conn->prepare("SELECT id FROM job_cards WHERE id = ?");
-            $stmt_exists_check->bind_param("i", $job_card_id);
-            $stmt_exists_check->execute();
-            if ($stmt_exists_check->get_result()->num_rows === 0) {
-                send_json_response(404, ['error' => 'Job Card not found (possibly deleted during update attempt).']);
+            // Check if project still exists to differentiate
+            $stmt_exists = $conn->prepare("SELECT id FROM projects WHERE id = ?");
+            $stmt_exists->bind_param("i", $project_id);
+            $stmt_exists->execute();
+            if ($stmt_exists->get_result()->num_rows === 0) {
+                 send_json_response(404, ['error' => 'Project not found (possibly deleted during update attempt).']);
             } else {
-                send_json_response(200, ['message' => 'Job card data was the same; no changes made.']);
+                 send_json_response(200, ['message' => 'Project data was the same; no changes made.']);
             }
-            $stmt_exists_check->close();
+            $stmt_exists->close();
         }
     } else {
-        send_json_response(500, ['error' => 'Failed to update job card: ' . $stmt_update->error]);
+        send_json_response(500, ['error' => 'Failed to update project details: ' . $stmt_update->error]);
     }
     $stmt_update->close();
 
-} // END NEW: Update Job Card
-
-// NEW: Delete Job Card
-elseif ($action === 'delete_job_card' && ($method === 'DELETE' || $method === 'POST')) { // Allow POST for simplicity if DELETE is tricky for some clients
-    $authenticated_user = require_authentication($conn);
+} // END MODIFIED: update_project
+elseif ($action === 'delete_project' && $method === 'DELETE') {
+    $authenticated_user = require_authentication($conn); // 1. Require Authentication
     $user_id = (int)$authenticated_user['id'];
     $user_role = $authenticated_user['role'];
 
-    $job_card_id = null;
-    if ($method === 'DELETE') {
-        $job_card_id = isset($_GET['job_card_id']) ? (int)$_GET['job_card_id'] : null;
-    } elseif ($method === 'POST') { // Allow job_card_id in POST body as well
-        $data = json_decode(file_get_contents('php://input'), true);
-        $job_card_id = isset($data['job_card_id']) ? (int)$data['job_card_id'] : (isset($_GET['job_card_id']) ? (int)$_GET['job_card_id'] : null);
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for deletion.']);
     }
 
-    if (!$job_card_id) {
-        send_json_response(400, ['error' => 'Job Card ID is required for deletion.']);
+    // 2. Authorize User: Fetch project's client_id first
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) {
+        send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check for delete. ' . $conn->error]);
     }
-
-    // Fetch job card's project's client_id for authorization
-    $stmt_jc_owner_check = $conn->prepare(
-        "SELECT p.client_id AS project_client_id
-         FROM job_cards jc
-         JOIN projects p ON jc.project_id = p.id
-         WHERE jc.id = ?"
-    );
-    if (!$stmt_jc_owner_check) { send_json_response(500, ['error' => 'Server error preparing job card ownership check.']); }
-    $stmt_jc_owner_check->bind_param("i", $job_card_id);
-    if (!$stmt_jc_owner_check->execute()) { send_json_response(500, ['error' => 'Server error executing job card ownership check.']); }
-    $result_jc_owner_check = $stmt_jc_owner_check->get_result();
-    if ($result_jc_owner_check->num_rows === 0) {
-        send_json_response(404, ['error' => 'Job Card not found.']);
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) {
+        send_json_response(500, ['error' => 'Server error: Failed to execute ownership check for delete. ' . $stmt_check_owner->error]);
     }
-    $jc_owner_details = $result_jc_owner_check->fetch_assoc();
-    $project_client_id = (int)$jc_owner_details['project_client_id'];
-    $stmt_jc_owner_check->close();
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found, cannot delete.']);
+    }
+    $project_data = $result_owner_check->fetch_assoc();
+    $project_client_id = (int)$project_data['client_id'];
+    $stmt_check_owner->close();
 
     // Authorization check
-    if (!($user_role === 'admin' || ($user_role === 'client' && $project_client_id === $user_id))) {
-        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this job card.']);
+    if ($user_role !== 'admin' && $project_client_id !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this project.']);
     }
 
     // Proceed with delete logic
-    $stmt_delete = $conn->prepare("DELETE FROM job_cards WHERE id = ?");
-    if ($stmt_delete === false) {
-        send_json_response(500, ['error' => 'Failed to prepare delete statement for job card: ' . $conn->error]);
-    }
-    $stmt_delete->bind_param("i", $job_card_id);
+    // TODO: Consider what happens to related data (e.g., applications, job cards) when a project is deleted.
+    // For now, it's a direct delete. Future enhancements might involve soft deletes or cascading deletes/archiving.
 
-    if ($stmt_delete->execute()) {
-        if ($stmt_delete->affected_rows > 0) {
-            send_json_response(200, ['message' => 'Job card deleted successfully.']);
+    $stmt = $conn->prepare("DELETE FROM projects WHERE id = ?");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("i", $project_id);
+
+    if ($stmt->execute()) {
+        if ($stmt->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Project deleted successfully.']);
         } else {
-            // This case implies the job card was not found, though the check above should catch it.
-            send_json_response(404, ['message' => 'Job card not found or already deleted.']);
+            // This case should ideally not be reached if the ownership check found the project.
+            // If it is, it means the project was deleted between the check and this operation.
+            send_json_response(404, ['message' => 'Project not found or already deleted.']);
         }
     } else {
-        send_json_response(500, ['error' => 'Failed to delete job card: ' . $stmt_delete->error]);
+        send_json_response(500, ['error' => 'Failed to delete project: ' . $stmt->error]);
     }
-    $stmt_delete->close();
+    $stmt->close();
+} else {
+    // No action or invalid action/method combination
+    send_json_response(404, ['error' => 'API endpoint not found or invalid request.']);
+}
 
-} // END NEW: Delete Job Card
+// Close the database connection
+$conn->close();
+?>
 
 // NEW: Log Time for a Job Card
 elseif ($action === 'log_time' && $method === 'POST') {
@@ -2247,7 +2786,7 @@ elseif ($action === 'update_time_log' && ($method === 'PUT' || $method === 'POST
     $stmt_fetch_log = $conn->prepare("SELECT user_id, start_time, end_time FROM time_logs WHERE id = ?");
     if (!$stmt_fetch_log) { send_json_response(500, ['error' => 'Server error preparing original log fetch.']); }
     $stmt_fetch_log->bind_param("i", $time_log_id);
-    if (!$stmt_fetch_log->execute()) { send_json_response(500, ['error' => 'Server error executing original log fetch.']); }
+    $stmt_fetch_log->execute();
     $result_fetch_log = $stmt_fetch_log->get_result();
     if ($result_fetch_log->num_rows === 0) {
         send_json_response(404, ['error' => 'Time Log not found.']);
@@ -2305,6 +2844,8 @@ elseif ($action === 'update_time_log' && ($method === 'PUT' || $method === 'POST
         // If $data only had notes, then $new_start_time_str and $new_end_time_str would be original values.
         // If $data was empty, it's caught earlier.
         // If $data had only start_time, end_time would be original, and duration calculated.
+        // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+        // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
     }
 
     $fields_to_update[] = "updated_at = NOW()";
@@ -2426,8 +2967,6 @@ elseif ($action === 'find_or_create_conversation' && $method === 'POST') {
     $stmt_find = $conn->prepare($sql_find_convo);
     if (!$stmt_find) { send_json_response(500, ['error' => 'Server error preparing conversation search. ' . $conn->error]); }
     // Bind params carefully for the two user IDs
-    // The query above does not rely on order, but it's good practice if creating canonical pairs.
-    // For this specific query, the order in WHERE doesn't matter as much as ensuring both users are present.
     $stmt_find->bind_param("ii", $current_user_id, $recipient_user_id);
 
 
@@ -2475,95 +3014,102 @@ elseif ($action === 'find_or_create_conversation' && $method === 'POST') {
     }
 } // END NEW: Find or Create 1-on-1 Conversation
 
-// NEW: Get Messages for a Conversation
-elseif ($action === 'get_conversation_messages' && $method === 'GET') {
+
+// NEW: Send Message to a Conversation
+elseif ($action === 'send_message' && $method === 'POST') {
     $authenticated_user = require_authentication($conn);
-    $current_user_id = (int)$authenticated_user['id'];
+    $sender_id = (int)$authenticated_user['id'];
+    $sender_username = $authenticated_user['username']; // For response
 
-    $conversation_id = isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : null;
-    if (!$conversation_id) {
-        send_json_response(400, ['error' => 'Conversation ID is required.']);
+    $data = json_decode(file_get_contents('php://input'), true);
+    $conversation_id = isset($data['conversation_id']) ? (int)$data['conversation_id'] : null;
+    $content = $data['content'] ?? null;
+
+    if (!$conversation_id || $content === null || trim($content) === '') { // Content can be "0", so check for null or empty string explicitly
+        send_json_response(400, ['error' => 'Conversation ID and message content are required.']);
     }
 
-    // Authorize: Check if current user is part of this conversation
-    $stmt_auth_convo = $conn->prepare(
-        "SELECT COUNT(*) AS is_participant
-         FROM conversation_participants
-         WHERE conversation_id = ? AND user_id = ?"
-    );
-    if (!$stmt_auth_convo) { send_json_response(500, ['error' => 'Server error preparing conversation participation check.']); }
-    $stmt_auth_convo->bind_param("ii", $conversation_id, $current_user_id);
-    if (!$stmt_auth_convo->execute()) { send_json_response(500, ['error' => 'Server error executing conversation participation check.']); }
-    $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
-    $stmt_auth_convo->close();
-
-    if ((int)$result_auth_convo['is_participant'] === 0) {
-        send_json_response(403, ['error' => 'Forbidden: You are not a participant in this conversation.']);
+    $content = trim($content); // Trim content before length check and storage
+    if (mb_strlen($content) > 10000) { // Basic content length validation (e.g. 10k chars)
+        send_json_response(400, ['error' => 'Message content is too long.']);
     }
 
-    // Pagination parameters
-    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
-    $before_message_id = isset($_GET['before_message_id']) ? (int)$_GET['before_message_id'] : null;
-    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0; // Alternative: offset based pagination
+    // Start transaction
+    $conn->begin_transaction();
 
-    $sql_messages = "SELECT
-                        m.id AS message_id, m.conversation_id, m.sender_id, m.content,
-                        m.created_at, m.read_at,
-                        u.username AS sender_username
-                     FROM messages m
-                     JOIN users u ON m.sender_id = u.id
-                     WHERE m.conversation_id = ?";
+    try {
+        // 1. Authorization: Check if current user is part of this conversation AND conversation exists
+        $stmt_auth_convo = $conn->prepare(
+            "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+             FROM conversations c
+             LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+             WHERE c.id = ?"
+        );
+        if (!$stmt_auth_convo) { throw new Exception('Server error preparing conversation participation check. ' . $conn->error); }
+        $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+        if (!$stmt_auth_convo->execute()) { throw new Exception('Server error executing conversation participation check. ' . $stmt_auth_convo->error); }
+        $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+        $stmt_auth_convo->close();
 
-    $params = [$conversation_id];
-    $types = "i";
+        if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+            throw new Exception('Conversation not found.', 404);
+        }
+        if (!$result_auth_convo['participant_exists']) {
+            throw new Exception('Forbidden: You are not a participant in this conversation.', 403);
+        }
 
-    if ($before_message_id) {
-        // Assumes IDs are auto-incrementing and somewhat time-ordered for this simple pagination
-        // A more robust cursor pagination would use created_at + id
-        $sql_messages .= " AND m.id < ?";
-        $params[] = $before_message_id;
-        $types .= "i";
-    }
+        // 2. Insert the new message
+        $current_timestamp_mysql = date('Y-m-d H:i:s'); // For consistent timestamp
+        $stmt_insert_message = $conn->prepare(
+            "INSERT INTO messages (conversation_id, sender_id, content, created_at)
+             VALUES (?, ?, ?, ?)"
+        );
+        if (!$stmt_insert_message) { throw new Exception('Server error preparing message insertion. ' . $conn->error); }
+        $stmt_insert_message->bind_param("iiss", $conversation_id, $sender_id, $content, $current_timestamp_mysql);
+        if (!$stmt_insert_message->execute()) { throw new Exception('Server error executing message insertion. ' . $stmt_insert_message->error); }
+        $new_message_id = $conn->insert_id;
+        $stmt_insert_message->close();
 
-    $sql_messages .= " ORDER BY m.created_at DESC, m.id DESC"; // Get newest first
-    $sql_messages .= " LIMIT ?";
-    $params[] = $limit;
-    $types .= "i";
+        if (!$new_message_id) {
+            throw new Exception('Failed to create message or get new message ID.');
+        }
 
-    // If using offset pagination instead of cursor (before_message_id):
-    // $sql_messages .= " LIMIT ? OFFSET ?";
-    // $params[] = $limit; $params[] = $offset; $types .= "ii";
+        // 3. Update last_message_at in conversations table
+        $stmt_update_convo = $conn->prepare("UPDATE conversations SET last_message_at = ? WHERE id = ?");
+        if (!$stmt_update_convo) { throw new Exception('Server error preparing conversation update. ' . $conn->error); }
+        $stmt_update_convo->bind_param("si", $current_timestamp_mysql, $conversation_id);
+        if (!$stmt_update_convo->execute()) { throw new Exception('Server error executing conversation update. ' . $stmt_update_convo->error); }
+        $stmt_update_convo->close();
 
+        // Commit transaction
+        $conn->commit();
 
-    $stmt_messages = $conn->prepare($sql_messages);
-    if (!$stmt_messages) {
-        send_json_response(500, ['error' => 'Server error preparing message fetch: ' . $conn->error]);
-    }
-    $stmt_messages->bind_param($types, ...$params);
-
-    if (!$stmt_messages->execute()) {
-        send_json_response(500, ['error' => 'Server error executing message fetch: ' . $stmt_messages->error]);
-    }
-    $result_messages = $stmt_messages->get_result();
-
-    $messages_list = [];
-    while ($row = $result_messages->fetch_assoc()) {
-        $messages_list[] = [
-            'id' => (int)$row['message_id'], // message_id aliased as id for frontend typically
-            'conversation_id' => (int)$row['conversation_id'],
-            'sender_id' => (int)$row['sender_id'],
-            'sender_username' => $row['sender_username'],
-            'content' => $row['content'],
-            'created_at' => $row['created_at'], // ISO8601 format from DB
-            'read_at' => $row['read_at'] // ISO8601 format from DB or null
+        // Prepare and send response
+        $new_message_data = [
+            'id' => $new_message_id,
+            'conversation_id' => $conversation_id,
+            'sender_id' => $sender_id,
+            'sender_username' => $sender_username, // Added for immediate use by frontend
+            'content' => $content,
+            'created_at' => $current_timestamp_mysql,
+            'read_at' => null // New messages are unread by default for others
         ];
+        send_json_response(201, $new_message_data);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        $error_code = $e->getCode() >= 400 && $e->getCode() < 500 ? $e->getCode() : 500; // Use specific client error codes if set
+        if ($error_code === 403) {
+            send_json_response(403, ['error' => $e->getMessage()]);
+        } elseif ($error_code === 404) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response($error_code, ['error' => 'Failed to send message: ' . $e->getMessage()]);
+        }
     }
-    $stmt_messages->close();
+} // END NEW: Send Message to a Conversation
 
-    // Messages are fetched newest first, client might want to reverse for display
-    send_json_response(200, array_reverse($messages_list)); // Reverse to get oldest of the batch first for typical chat UI
-
-} // END NEW: Get Messages for a Conversation
+>>>>>>> Stashed changes
 // --- Projects API ---
 // MODIFIED: get_projects to handle single project fetch and join user tables
 elseif ($action === 'get_projects' && $method === 'GET') {
@@ -2919,7 +3465,7 @@ elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST'
             // AND skill_ids was not provided at all (so no attempt to clear/update skills)
             // OR skill_ids was provided but was identical to existing skills (not easily checkable here without fetching old skills)
             // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
-            // If skill_ids was set (even if empty, meaning "remove all skills"), it's an update.
+            // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
             if (empty($fields_to_update) && !isset($data['skill_ids'])) {
                  $conn->rollback(); // Nothing to commit
                  send_json_response(200, ['message' => 'No update data provided for project or skills.']);
@@ -2941,7 +3487,6 @@ elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST'
     }
 }
 // END MODIFIED: update_project
-elseif ($action === 'delete_project' && $method === 'DELETE') {
 elseif ($action === 'delete_project' && $method === 'DELETE') {
     $authenticated_user = require_authentication($conn); // 1. Require Authentication
     $user_id = (int)$authenticated_user['id'];
@@ -3005,3 +3550,5603 @@ elseif ($action === 'delete_project' && $method === 'DELETE') {
 // Close the database connection
 $conn->close();
 ?>
+
+// NEW: Log Time for a Job Card
+elseif ($action === 'log_time' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_logging_time = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $job_card_id = isset($data['job_card_id']) ? (int)$data['job_card_id'] : null;
+    $start_time_str = $data['start_time'] ?? null;
+    $end_time_str = $data['end_time'] ?? null;
+    $notes = $data['notes'] ?? null;
+
+    if (!$job_card_id || empty($start_time_str) || empty($end_time_str)) {
+        send_json_response(400, ['error' => 'Job Card ID, start time, and end time are required.']);
+    }
+
+    // Validate and parse timestamps
+    try {
+        $start_time_ts = new DateTime($start_time_str);
+        $end_time_ts = new DateTime($end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid start or end time format. Please use ISO8601 format (e.g., YYYY-MM-DDTHH:MM:SSZ).']);
+    }
+
+    if ($start_time_ts >= $end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+
+    // Calculate duration in minutes
+    $duration_minutes = ($end_time_ts->getTimestamp() - $start_time_ts->getTimestamp()) / 60;
+    if ($duration_minutes <= 0) { // Should be caught by above, but as safety
+        send_json_response(400, ['error' => 'Duration must be positive. Ensure end time is after start time.']);
+    }
+
+
+    // Authorization: Check if user is allowed to log time for this job card
+    $stmt_auth_jc = $conn->prepare(
+        "SELECT jc.assigned_freelancer_id AS job_card_assignee,
+                p.client_id AS project_client_id,
+                p.freelancer_id AS project_main_freelancer_id,
+                jc_proj.status AS project_status
+         FROM job_cards jc
+         JOIN projects p ON jc.project_id = p.id
+         JOIN projects jc_proj ON jc.project_id = jc_proj.id
+         WHERE jc.id = ?"
+    );
+    if (!$stmt_auth_jc) { send_json_response(500, ['error' => 'Server error preparing time log authorization check. ' . $conn->error]); }
+    $stmt_auth_jc->bind_param("i", $job_card_id);
+    if (!$stmt_auth_jc->execute()) { send_json_response(500, ['error' => 'Server error executing time log authorization check. ' . $stmt_auth_jc->error]); }
+    $result_auth_jc = $stmt_auth_jc->get_result();
+    if ($result_auth_jc->num_rows === 0) {
+        send_json_response(404, ['error' => 'Job Card not found.']);
+    }
+    $jc_auth_details = $result_auth_jc->fetch_assoc();
+    $project_client_id = (int)$jc_auth_details['project_client_id'];
+    $job_card_assignee_id = $jc_auth_details['job_card_assignee'] ? (int)$jc_auth_details['job_card_assignee'] : null;
+    $project_main_freelancer_id = $jc_auth_details['project_main_freelancer_id'] ? (int)$jc_auth_details['project_main_freelancer_id'] : null;
+    $project_status = $jc_auth_details['project_status'];
+    $stmt_auth_jc->close();
+
+    // Project must be in progress to log time
+    if ($project_status !== 'in_progress' && $project_status !== 'assigned' && $project_status !== 'active') { // 'active' if used
+        send_json_response(403, ['error' => "Time cannot be logged for this job card as the project status is '{$project_status}'. Project must be active."]);
+    }
+
+    $is_authorized_to_log = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_log = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_logging_time) {
+        // Clients typically don't log time this way, but could be for record keeping if feature exists.
+        // For now, let's restrict clients from logging time directly unless specific requirements arise.
+        // send_json_response(403, ['error' => 'Clients cannot directly log time for job cards.']);
+        // OR, allow it: $is_authorized_to_log = true; (Let's assume not for now)
+    } elseif ($user_role === 'freelancer') {
+        if ($job_card_assignee_id === $user_id_logging_time || $project_main_freelancer_id === $user_id_logging_time) {
+            $is_authorized_to_log = true;
+        }
+    }
+
+    if (!$is_authorized_to_log) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to log time for this job card.']);
+    }
+
+    // Insert new time log
+    $sql_insert_log = "INSERT INTO time_logs (job_card_id, user_id, start_time, end_time, duration_minutes, notes)
+                       VALUES (?, ?, ?, ?, ?, ?)";
+    $stmt_insert_log = $conn->prepare($sql_insert_log);
+    if (!$stmt_insert_log) {
+        send_json_response(500, ['error' => 'Server error preparing time log creation. ' . $conn->error]);
+    }
+
+    $formatted_start_time = $start_time_ts->format('Y-m-d H:i:s');
+    $formatted_end_time = $end_time_ts->format('Y-m-d H:i:s');
+
+    $stmt_insert_log->bind_param("iissis",
+        $job_card_id,
+        $user_id_logging_time,
+        $formatted_start_time,
+        $formatted_end_time,
+        $duration_minutes,
+        $notes
+    );
+
+    if ($stmt_insert_log->execute()) {
+        $new_time_log_id = $stmt_insert_log->insert_id;
+        send_json_response(201, [
+            'message' => 'Time logged successfully.',
+            'time_log_id' => $new_time_log_id,
+            'duration_minutes' => $duration_minutes
+        ]);
+    } else {
+        send_json_response(500, ['error' => 'Failed to log time. ' . $stmt_insert_log->error]);
+    }
+    $stmt_insert_log->close();
+
+} // END NEW: Log Time for a Job Card
+
+// NEW: Get All Time Logs for a Specific Project
+elseif ($action === 'get_project_time_logs' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['project_id']) ? (int)$_GET['project_id'] : null;
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required to fetch all project time logs.']);
+    }
+
+    // Authorization: Check if user is allowed to view all time logs for this project
+    $stmt_auth_proj_logs = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if (!$stmt_auth_proj_logs) { send_json_response(500, ['error' => 'Server error preparing project ownership check for logs.']); }
+    $stmt_auth_proj_logs->bind_param("i", $project_id);
+    if (!$stmt_auth_proj_logs->execute()) { send_json_response(500, ['error' => 'Server error executing project ownership check for logs.']); }
+    $result_auth_proj_logs = $stmt_auth_proj_logs->get_result();
+    if ($result_auth_proj_logs->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found.']);
+    }
+    $project_auth_details = $result_auth_proj_logs->fetch_assoc();
+    $project_client_id = (int)$project_auth_details['client_id'];
+    $stmt_auth_proj_logs->close();
+
+    $is_authorized_to_view_project_logs = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_view_project_logs = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_requesting) {
+        $is_authorized_to_view_project_logs = true;
+    }
+    // Freelancers are generally not authorized to see *all* project logs via this endpoint.
+
+    if (!$is_authorized_to_view_project_logs) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to view all time logs for this project.']);
+    }
+
+    // Fetch all time logs for the project
+    $sql_get_all_logs = "SELECT
+                            tl.id, tl.job_card_id, tl.user_id,
+                            tl.start_time, tl.end_time, tl.duration_minutes, tl.notes,
+                            tl.created_at, tl.updated_at,
+                            u.username AS logger_username,
+                            jc.title AS job_card_title
+                         FROM time_logs tl
+                         JOIN users u ON tl.user_id = u.id
+                         JOIN job_cards jc ON tl.job_card_id = jc.id
+                         WHERE jc.project_id = ?
+                         ORDER BY tl.start_time DESC";
+
+    $stmt_get_all_logs = $conn->prepare($sql_get_all_logs);
+    if ($stmt_get_all_logs === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for fetching project time logs: ' . $conn->error]);
+    }
+    $stmt_get_all_logs->bind_param("i", $project_id);
+
+    if (!$stmt_get_all_logs->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for fetching project time logs: ' . $stmt_get_all_logs->error]);
+    }
+
+    $result_all_logs = $stmt_get_all_logs->get_result();
+    $project_time_logs_list = [];
+    while ($row = $result_all_logs->fetch_assoc()) {
+        $row['duration_minutes'] = (int)$row['duration_minutes'];
+        $project_time_logs_list[] = $row;
+    }
+    $stmt_get_all_logs->close();
+
+    send_json_response(200, $project_time_logs_list);
+
+} // END NEW: Get All Time Logs for a Specific Project
+
+// NEW: Update a Specific Time Log
+elseif ($action === 'update_time_log' && ($method === 'PUT' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for update.']);
+    }
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (empty($data)) {
+        send_json_response(400, ['error' => 'No data provided for update or invalid JSON.']);
+    }
+
+    // Fetch original time log to check ownership and get existing values
+    $stmt_fetch_log = $conn->prepare("SELECT user_id, start_time, end_time FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log) { send_json_response(500, ['error' => 'Server error preparing original log fetch.']); }
+    $stmt_fetch_log->bind_param("i", $time_log_id);
+    if (!$stmt_fetch_log->execute()) { send_json_response(500, ['error' => 'Server error executing original log fetch.']); }
+    $result_fetch_log = $stmt_fetch_log->get_result();
+    if ($result_fetch_log->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $original_log_data = $result_fetch_log->fetch_assoc();
+    $log_owner_id = (int)$original_log_data['user_id'];
+    $stmt_fetch_log->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this time log.']);
+    }
+
+    // Determine new start and end times
+    $new_start_time_str = $data['start_time'] ?? $original_log_data['start_time'];
+    $new_end_time_str = $data['end_time'] ?? $original_log_data['end_time'];
+
+    try {
+        $new_start_time_ts = new DateTime($new_start_time_str);
+        $new_end_time_ts = new DateTime($new_end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid new start or end time format. Please use ISO8601.']);
+    }
+
+    if ($new_start_time_ts >= $new_end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+    $new_duration_minutes = ($new_end_time_ts->getTimestamp() - $new_start_time_ts->getTimestamp()) / 60;
+    if ($new_duration_minutes <= 0) {
+        send_json_response(400, ['error' => 'Calculated duration must be positive.']);
+    }
+
+    $formatted_new_start_time = $new_start_time_ts->format('Y-m-d H:i:s');
+    $formatted_new_end_time = $new_end_time_ts->format('Y-m-d H:i:s');
+
+    // Build the SQL query dynamically for fields other than times/duration
+    $fields_to_update = [];
+    $params = [];
+    $types = "";
+
+    // Always update times and duration as they are derived or taken from original
+    $fields_to_update[] = "start_time = ?"; $params[] = $formatted_new_start_time; $types .= "s";
+    $fields_to_update[] = "end_time = ?"; $params[] = $formatted_new_end_time; $types .= "s";
+    $fields_to_update[] = "duration_minutes = ?"; $params[] = $new_duration_minutes; $types .= "i";
+
+    if (array_key_exists('notes', $data)) { // Allow setting notes to null or empty string
+        $fields_to_update[] = "notes = ?"; $params[] = $data['notes']; $types .= "s";
+    }
+
+    if (count($fields_to_update) === 3 && !array_key_exists('notes', $data)) {
+        // Only time fields were present, but maybe notes was intended to be cleared but not sent
+        // Or, if only notes is sent, time fields are based on original log.
+        // This logic means if only notes is sent, times/duration are not re-saved unless they were also sent.
+        // For simplicity, if any of start_time, end_time, or notes is in $data, we update.
+        // If $data only had notes, then $new_start_time_str and $new_end_time_str would be original values.
+        // If $data was empty, it's caught earlier.
+        // If $data had only start_time, end_time would be original, and duration calculated.
+        // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+        // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+    }
+
+    $fields_to_update[] = "updated_at = NOW()";
+
+    $sql_update_log = "UPDATE time_logs SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+    $params[] = $time_log_id;
+    $types .= "i";
+
+    $stmt_update_log = $conn->prepare($sql_update_log);
+    if ($stmt_update_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare time log update statement: ' . $conn->error]);
+    }
+    $stmt_update_log->bind_param($types, ...$params);
+
+    if ($stmt_update_log->execute()) {
+        if ($stmt_update_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log updated successfully.']);
+        } else {
+            send_json_response(200, ['message' => 'Time log data was the same or log not found; no changes made.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to update time log: ' . $stmt_update_log->error]);
+    }
+    $stmt_update_log->close();
+
+} // END NEW: Update a Specific Time Log
+
+// NEW: Delete a Specific Time Log
+elseif ($action === 'delete_time_log' && ($method === 'DELETE' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = null;
+    if ($method === 'DELETE') {
+        $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    } elseif ($method === 'POST') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $time_log_id = isset($data['time_log_id']) ? (int)$data['time_log_id'] : (isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null);
+    }
+
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for deletion.']);
+    }
+
+    // Fetch original time log to check ownership
+    $stmt_fetch_log_owner = $conn->prepare("SELECT user_id FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log_owner) { send_json_response(500, ['error' => 'Server error preparing log ownership check.']); }
+    $stmt_fetch_log_owner->bind_param("i", $time_log_id);
+    if (!$stmt_fetch_log_owner->execute()) { send_json_response(500, ['error' => 'Server error executing log ownership check.']); }
+    $result_fetch_log_owner = $stmt_fetch_log_owner->get_result();
+    if ($result_fetch_log_owner->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $log_owner_data = $result_fetch_log_owner->fetch_assoc();
+    $log_owner_id = (int)$log_owner_data['user_id'];
+    $stmt_fetch_log_owner->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this time log.']);
+    }
+
+    // Proceed with delete logic
+    $stmt_delete_log = $conn->prepare("DELETE FROM time_logs WHERE id = ?");
+    if ($stmt_delete_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement for time log: ' . $conn->error]);
+    }
+    $stmt_delete_log->bind_param("i", $time_log_id);
+
+    if ($stmt_delete_log->execute()) {
+        if ($stmt_delete_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log deleted successfully.']);
+        } else {
+            // This case implies the log was not found, though the check above should catch it.
+            send_json_response(404, ['message' => 'Time log not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete time log: ' . $stmt_delete_log->error]);
+    }
+    $stmt_delete_log->close();
+
+} // END NEW: Delete a Specific Time Log
+
+// NEW: Find or Create 1-on-1 Conversation
+elseif ($action === 'find_or_create_conversation' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $recipient_user_id = isset($data['recipient_user_id']) ? (int)$data['recipient_user_id'] : null;
+
+    if (!$recipient_user_id) {
+        send_json_response(400, ['error' => 'Recipient user ID is required.']);
+    }
+
+    if ($recipient_user_id === $current_user_id) {
+        send_json_response(400, ['error' => 'Cannot create a conversation with yourself.']);
+    }
+
+    // Check if recipient user exists
+    $stmt_user_check = $conn->prepare("SELECT id FROM users WHERE id = ?");
+    if (!$stmt_user_check) { send_json_response(500, ['error' => 'Server error preparing recipient check.']); }
+    $stmt_user_check->bind_param("i", $recipient_user_id);
+    if (!$stmt_user_check->execute()) { send_json_response(500, ['error' => 'Server error executing recipient check.']); }
+    if ($stmt_user_check->get_result()->num_rows === 0) {
+        send_json_response(404, ['error' => 'Recipient user not found.']);
+    }
+    $stmt_user_check->close();
+
+    // Check for existing 1-on-1 conversation
+    // This query finds conversations involving BOTH users, and only those two users.
+    $sql_find_convo = "SELECT cp1.conversation_id
+                       FROM conversation_participants cp1
+                       JOIN conversation_participants cp2 ON cp1.conversation_id = cp2.conversation_id
+                       WHERE cp1.user_id = ? AND cp2.user_id = ?
+                       AND (SELECT COUNT(*) FROM conversation_participants cp_count WHERE cp_count.conversation_id = cp1.conversation_id) = 2";
+
+    $stmt_find = $conn->prepare($sql_find_convo);
+    if (!$stmt_find) { send_json_response(500, ['error' => 'Server error preparing conversation search. ' . $conn->error]); }
+    // Bind params carefully for the two user IDs
+    $stmt_find->bind_param("ii", $current_user_id, $recipient_user_id);
+
+
+    if (!$stmt_find->execute()) { send_json_response(500, ['error' => 'Server error executing conversation search. ' . $stmt_find->error]); }
+    $result_find = $stmt_find->get_result();
+
+    if ($existing_convo = $result_find->fetch_assoc()) {
+        $stmt_find->close();
+        send_json_response(200, ['conversation_id' => (int)$existing_convo['conversation_id'], 'existed' => true]);
+    } else {
+        $stmt_find->close();
+        // No existing 1-on-1 conversation found, create a new one
+        $conn->begin_transaction();
+        try {
+            // 1. Create conversation
+            // last_message_at can be set to NOW() or remain NULL initially
+            $stmt_create_convo = $conn->prepare("INSERT INTO conversations (last_message_at) VALUES (NOW())");
+            if (!$stmt_create_convo) { throw new Exception('Failed to prepare conversation creation. ' . $conn->error); }
+            if (!$stmt_create_convo->execute()) { throw new Exception('Failed to execute conversation creation. ' . $stmt_create_convo->error); }
+            $new_conversation_id = $conn->insert_id;
+            $stmt_create_convo->close();
+
+            if (!$new_conversation_id) { throw new Exception('Failed to get new conversation ID.'); }
+
+            // 2. Add participants
+            $stmt_add_participant = $conn->prepare("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)");
+            if (!$stmt_add_participant) { throw new Exception('Failed to prepare participant insertion. ' . $conn->error); }
+
+            // Add current user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $current_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add current user to conversation. ' . $stmt_add_participant->error); }
+
+            // Add recipient user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $recipient_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add recipient user to conversation. ' . $stmt_add_participant->error); }
+            $stmt_add_participant->close();
+
+            $conn->commit();
+            send_json_response(201, ['conversation_id' => $new_conversation_id, 'existed' => false]);
+
+        } catch (Exception $e) {
+            $conn->rollback();
+            send_json_response(500, ['error' => 'Failed to create conversation: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Find or Create 1-on-1 Conversation
+
+// NEW: Get Messages for a Conversation
+elseif ($action === 'get_conversation_messages' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $conversation_id = isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : null;
+    if (!$conversation_id) {
+        send_json_response(400, ['error' => 'Conversation ID is required.']);
+    }
+
+    // Authorize: Check if current user is part of this conversation
+    $stmt_auth_convo = $conn->prepare(
+        "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+         FROM conversations c
+         LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+         WHERE c.id = ?"
+    );
+    if (!$stmt_auth_convo) { send_json_response(500, ['error' => 'Server error preparing conversation participation check.']); }
+    $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+    if (!$stmt_auth_convo->execute()) { send_json_response(500, ['error' => 'Server error executing conversation participation check.']); }
+    $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+    $stmt_auth_convo->close();
+
+    if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+        send_json_response(404, ['error' => 'Conversation not found.']);
+    }
+    if (!$result_auth_convo['participant_exists']) {
+        send_json_response(403, ['error' => 'Forbidden: You are not a participant in this conversation.']);
+    }
+
+    // Pagination parameters
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
+    $before_message_id = isset($_GET['before_message_id']) ? (int)$_GET['before_message_id'] : null;
+    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0; // Alternative: offset based pagination
+
+    $sql_messages = "SELECT
+                        m.id AS message_id, m.conversation_id, m.sender_id, m.content,
+                        m.created_at, m.read_at,
+                        u.username AS sender_username
+                     FROM messages m
+                     JOIN users u ON m.sender_id = u.id
+                     WHERE m.conversation_id = ?";
+
+    $params = [$conversation_id];
+    $types = "i";
+
+    if ($before_message_id) {
+        // Assumes IDs are auto-incrementing and somewhat time-ordered for this simple pagination
+        // A more robust cursor pagination would use created_at + id
+        $sql_messages .= " AND m.id < ?";
+        $params[] = $before_message_id;
+        $types .= "i";
+    }
+
+    $sql_messages .= " ORDER BY m.created_at DESC, m.id DESC"; // Get newest first
+    $sql_messages .= " LIMIT ?";
+    $params[] = $limit;
+    $types .= "i";
+
+    // If using offset pagination instead of cursor (before_message_id):
+    // $sql_messages .= " LIMIT ? OFFSET ?";
+    // $params[] = $limit; $params[] = $offset; $types .= "ii";
+
+
+    $stmt_messages = $conn->prepare($sql_messages);
+    if (!$stmt_messages) {
+        send_json_response(500, ['error' => 'Server error preparing message fetch: ' . $conn->error]);
+    }
+    $stmt_messages->bind_param($types, ...$params);
+
+    if (!$stmt_messages->execute()) {
+        send_json_response(500, ['error' => 'Server error executing message fetch: ' . $stmt_messages->error]);
+    }
+    $result_messages = $stmt_messages->get_result();
+
+    $messages_list = [];
+    while ($row = $result_messages->fetch_assoc()) {
+        $messages_list[] = [
+            'id' => (int)$row['message_id'], // message_id aliased as id for frontend typically
+            'conversation_id' => (int)$row['conversation_id'],
+            'sender_id' => (int)$row['sender_id'],
+            'sender_username' => $row['sender_username'],
+            'content' => $row['content'],
+            'created_at' => $row['created_at'], // ISO8601 format from DB
+            'read_at' => $row['read_at'] // ISO8601 format from DB or null
+        ];
+    }
+    $stmt_messages->close();
+
+    // Messages are fetched newest first, client might want to reverse for display
+    send_json_response(200, array_reverse($messages_list)); // Reverse to get oldest of the batch first for typical chat UI
+
+} // END NEW: Get Messages for a Conversation
+
+// NEW: Send Message to a Conversation
+elseif ($action === 'send_message' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $sender_id = (int)$authenticated_user['id'];
+    $sender_username = $authenticated_user['username']; // For response
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $conversation_id = isset($data['conversation_id']) ? (int)$data['conversation_id'] : null;
+    $content = $data['content'] ?? null;
+
+    if (!$conversation_id || $content === null || trim($content) === '') { // Content can be "0", so check for null or empty string explicitly
+        send_json_response(400, ['error' => 'Conversation ID and message content are required.']);
+    }
+
+    $content = trim($content); // Trim content before length check and storage
+    if (mb_strlen($content) > 10000) { // Basic content length validation (e.g. 10k chars)
+        send_json_response(400, ['error' => 'Message content is too long.']);
+    }
+
+    // Start transaction
+    $conn->begin_transaction();
+
+    try {
+        // 1. Authorization: Check if current user is part of this conversation AND conversation exists
+        $stmt_auth_convo = $conn->prepare(
+            "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+             FROM conversations c
+             LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+             WHERE c.id = ?"
+        );
+        if (!$stmt_auth_convo) { throw new Exception('Server error preparing conversation participation check. ' . $conn->error); }
+        $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+        if (!$stmt_auth_convo->execute()) { throw new Exception('Server error executing conversation participation check. ' . $stmt_auth_convo->error); }
+        $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+        $stmt_auth_convo->close();
+
+        if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+            throw new Exception('Conversation not found.', 404);
+        }
+        if (!$result_auth_convo['participant_exists']) {
+            throw new Exception('Forbidden: You are not a participant in this conversation.', 403);
+        }
+
+        // 2. Insert the new message
+        $current_timestamp_mysql = date('Y-m-d H:i:s'); // For consistent timestamp
+        $stmt_insert_message = $conn->prepare(
+            "INSERT INTO messages (conversation_id, sender_id, content, created_at)
+             VALUES (?, ?, ?, ?)"
+        );
+        if (!$stmt_insert_message) { throw new Exception('Server error preparing message insertion. ' . $conn->error); }
+        $stmt_insert_message->bind_param("iiss", $conversation_id, $sender_id, $content, $current_timestamp_mysql);
+        if (!$stmt_insert_message->execute()) { throw new Exception('Server error executing message insertion. ' . $stmt_insert_message->error); }
+        $new_message_id = $conn->insert_id;
+        $stmt_insert_message->close();
+
+        if (!$new_message_id) {
+            throw new Exception('Failed to create message or get new message ID.');
+        }
+
+        // 3. Update last_message_at in conversations table
+        $stmt_update_convo = $conn->prepare("UPDATE conversations SET last_message_at = ? WHERE id = ?");
+        if (!$stmt_update_convo) { throw new Exception('Server error preparing conversation update. ' . $conn->error); }
+        $stmt_update_convo->bind_param("si", $current_timestamp_mysql, $conversation_id);
+        if (!$stmt_update_convo->execute()) { throw new Exception('Server error executing conversation update. ' . $stmt_update_convo->error); }
+        $stmt_update_convo->close();
+
+        // Commit transaction
+        $conn->commit();
+
+        // Prepare and send response
+        $new_message_data = [
+            'id' => $new_message_id,
+            'conversation_id' => $conversation_id,
+            'sender_id' => $sender_id,
+            'sender_username' => $sender_username, // Added for immediate use by frontend
+            'content' => $content,
+            'created_at' => $current_timestamp_mysql,
+            'read_at' => null // New messages are unread by default for others
+        ];
+        send_json_response(201, $new_message_data);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        $error_code = $e->getCode() >= 400 && $e->getCode() < 500 ? $e->getCode() : 500; // Use specific client error codes if set
+        if ($error_code === 403) {
+            send_json_response(403, ['error' => $e->getMessage()]);
+        } elseif ($error_code === 404) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response($error_code, ['error' => 'Failed to send message: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Send Message to a Conversation
+
+// --- Projects API ---
+// MODIFIED: get_projects to handle single project fetch and join user tables
+elseif ($action === 'get_projects' && $method === 'GET') {
+    $project_id_filter = isset($_GET['id']) ? (int)$_GET['id'] : (isset($_GET['project_id']) ? (int)$_GET['project_id'] : null);
+
+    if ($project_id_filter !== null) {
+        // Fetch a single project by ID
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id
+                WHERE p.id = ?";
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for single project: ' . $conn->error]);
+        }
+        $stmt->bind_param("i", $project_id_filter);
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for single project: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        if ($project = $result->fetch_assoc()) {
+            if (isset($project['client_id'])) $project['client_id'] = (int)$project['client_id'];
+            if (isset($project['freelancer_id'])) $project['freelancer_id'] = $project['freelancer_id'] === null ? null : (int)$project['freelancer_id'];
+
+            // Fetch skills for the single project
+            $project['skills_required'] = [];
+            $stmt_skills_proj = $conn->prepare("SELECT s.id, s.name FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ? ORDER BY s.name ASC");
+            if ($stmt_skills_proj) {
+                $stmt_skills_proj->bind_param("i", $project_id_filter);
+                if ($stmt_skills_proj->execute()) {
+                    $result_skills_proj = $stmt_skills_proj->get_result();
+                    while ($skill_row_proj = $result_skills_proj->fetch_assoc()) {
+                        $project['skills_required'][] = ['id' => (int)$skill_row_proj['id'], 'name' => $skill_row_proj['name']];
+                    }
+                } else { error_log("Failed to execute skills fetch for single project: " . $stmt_skills_proj->error); }
+                $stmt_skills_proj->close();
+            } else { error_log("Failed to prepare skills fetch for single project: " . $conn->error); }
+
+            send_json_response(200, $project); // Return single project object
+        } else {
+            send_json_response(404, ['error' => 'Project not found.']);
+        }
+        $stmt->close();
+        // exit; // send_json_response includes exit
+    } else {
+        // Existing logic for fetching multiple projects with status filter
+        $status_filter = isset($_GET['status']) ? $_GET['status'] : 'open';
+
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id";
+        $params = [];
+        $types = "";
+
+        if ($status_filter) {
+            if ($status_filter !== 'all' && $status_filter !== '') {
+                 $sql .= " WHERE p.status = ?";
+                 $params[] = $status_filter;
+                 $types .= "s";
+            } else if ($status_filter === '') {
+                $sql .= " WHERE p.status = ?";
+                $params[] = 'open';
+                $types .= "s";
+            }
+        }
+        $sql .= " ORDER BY p.created_at DESC";
+
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for projects list: ' . $conn->error]);
+        }
+        if (!empty($types)) {
+            $stmt->bind_param($types, ...$params);
+        }
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for projects list: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        $projects = [];
+        while ($row = $result->fetch_assoc()) {
+            if (isset($row['client_id'])) $row['client_id'] = (int)$row['client_id'];
+            if (isset($row['freelancer_id'])) $row['freelancer_id'] = $row['freelancer_id'] === null ? null : (int)$row['freelancer_id'];
+            $projects[] = $row;
+        }
+        $stmt->close();
+        send_json_response(200, $projects);
+    }
+}
+// MODIFIED: Create Project with Admin client_id assignment
+elseif ($action === 'create_project' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $auth_user_id = (int)$authenticated_user['id'];
+    $auth_user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+
+    if (empty($data['title']) || empty($data['description'])) {
+        send_json_response(400, ['error' => 'Missing required fields: title, description.']);
+    }
+
+    $title = $data['title'];
+    $description = $data['description'];
+    $final_client_id = null;
+
+    // Determine client_id based on role and payload
+    if ($auth_user_role === 'admin') {
+        if (isset($data['client_id']) && !empty($data['client_id'])) {
+            $payload_client_id = (int)$data['client_id'];
+            // Validate this client_id
+            $stmt_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_client_check) { send_json_response(500, ['error' => 'Server error preparing client validation.']); }
+            $stmt_client_check->bind_param("i", $payload_client_id);
+            if (!$stmt_client_check->execute()) { send_json_response(500, ['error' => 'Server error executing client validation.']); }
+            $result_client_check = $stmt_client_check->get_result();
+            if ($result_client_check->num_rows === 0) {
+                send_json_response(404, ['error' => "Specified client_id '{$payload_client_id}' not found."]);
+            }
+            $client_to_assign = $result_client_check->fetch_assoc();
+            if ($client_to_assign['role'] !== 'client') {
+                send_json_response(400, ['error' => "User '{$payload_client_id}' is not a client. Project can only be assigned to a client user."]);
+            }
+            $stmt_client_check->close();
+            $final_client_id = $payload_client_id;
+        } else {
+            // Admin creating project for themselves (no client_id in payload)
+            $final_client_id = $auth_user_id;
+        }
+    } elseif ($auth_user_role === 'client') {
+        $final_client_id = $auth_user_id;
+    } else {
+        // Other roles (e.g. freelancer) are not allowed to create projects
+        send_json_response(403, ['error' => 'Forbidden: Your role does not have permission to create projects.']);
+    }
+
+    if ($final_client_id === null) { // Should be caught by role check, but as a safeguard
+        send_json_response(500, ['error' => 'Could not determine client for the project.']);
+    }
+
+    $freelancer_id = isset($data['freelancer_id']) && !empty($data['freelancer_id']) ? (int)$data['freelancer_id'] : null;
+    if ($freelancer_id !== null) { // Optional: Validate freelancer_id if provided
+        $stmt_f_check = $conn->prepare("SELECT role FROM users WHERE id = ?");
+        if (!$stmt_f_check) { send_json_response(500, ['error' => 'Server error: Freelancer validation prep failed.']);}
+        $stmt_f_check->bind_param("i", $freelancer_id);
+        if (!$stmt_f_check->execute()) { send_json_response(500, ['error' => 'Server error: Freelancer validation exec failed.']);}
+        $res_f_check = $stmt_f_check->get_result();
+        if ($res_f_check->num_rows === 0) { send_json_response(404, ['error' => 'Assigned freelancer not found.']); }
+        if ($res_f_check->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'Assigned user is not a freelancer.']);}
+        $stmt_f_check->close();
+    }
+
+    $status = $data['status'] ?? 'open'; // Default status, or from payload
+    $valid_project_statuses = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled']; // Extend as needed
+    if (!in_array($status, $valid_project_statuses)) {
+        send_json_response(400, ['error' => 'Invalid project status provided.']);
+    }
+
+
+    $stmt = $conn->prepare("INSERT INTO projects (title, description, client_id, freelancer_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for project creation: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("ssiis", $title, $description, $final_client_id, $freelancer_id, $status);
+
+    if ($stmt->execute()) {
+        $new_project_id_for_notification = $stmt->insert_id;
+        $current_project_status = $status; // $status variable from create_project scope
+
+        // Send response first, then notify
+        send_json_response(201, [
+            'message' => 'Project created successfully.',
+            'project_id' => $new_project_id_for_notification,
+            'client_id' => $final_client_id
+        ]);
+
+        if ($current_project_status === 'pending_approval' || $current_project_status === 'Pending Approval') { // Case consistency
+             create_admin_notification($conn, 'project_awaits_approval', 'project', $new_project_id_for_notification);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to create project: ' . $stmt->error]);
+    }
+    $stmt->close();
+}
+// END MODIFIED: Create Project
+// MODIFIED: update_project to allow admin client_id change and other enhancements
+elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST')) { // Allow POST too
+    $authenticated_user = require_authentication($conn);
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (!$project_id && isset($data['project_id_to_update'])) { // Use a distinct name to avoid conflict
+        $project_id = (int)$data['project_id_to_update'];
+    }
+
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for update.']);
+    }
+    // Remove project_id_to_update from $data if it exists, as it's not a table field
+    if (isset($data['project_id_to_update'])) {
+        unset($data['project_id_to_update']);
+    }
+    if (empty($data) && !isset($data['skill_ids'])) { // Check if $data is empty OR only skill_ids is set (which means no project table fields)
+        send_json_response(400, ['error' => 'Invalid JSON or no data provided for project table update. If only updating skills, ensure skill_ids is provided.']);
+    }
+
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) { send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check. ' . $conn->error]); }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) { send_json_response(500, ['error' => 'Server error: Failed to execute ownership check. ' . $stmt_check_owner->error]); }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) { send_json_response(404, ['error' => 'Project not found.']); }
+    $project_data_db = $result_owner_check->fetch_assoc();
+    $project_client_id_original = (int)$project_data_db['client_id'];
+    $stmt_check_owner->close();
+
+    if ($user_role !== 'admin' && $project_client_id_original !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this project.']);
+    }
+
+    $conn->begin_transaction();
+    try {
+        $fields_to_update = [];
+        $params = [];
+        $types = "";
+
+        if ($user_role === 'admin' && isset($data['client_id'])) {
+            $new_client_id = (int)$data['client_id'];
+            $stmt_new_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_new_client_check) { throw new Exception('Server error preparing new client validation.'); }
+            $stmt_new_client_check->bind_param("i", $new_client_id);
+            if (!$stmt_new_client_check->execute()) { throw new Exception('Server error executing new client validation.'); }
+            $result_new_client_check = $stmt_new_client_check->get_result();
+            if ($result_new_client_check->num_rows === 0) {
+                throw new Exception("New client_id '{$new_client_id}' not found.");
+            }
+            $new_client_data = $result_new_client_check->fetch_assoc();
+            if ($new_client_data['role'] !== 'client') {
+                throw new Exception("User '{$new_client_id}' is not a client. Project can only be assigned to a client user.");
+            }
+            $stmt_new_client_check->close();
+            $fields_to_update[] = "client_id = ?"; $params[] = $new_client_id; $types .= "i";
+        }
+
+        if (isset($data['title'])) {
+            $fields_to_update[] = "title = ?"; $params[] = $data['title']; $types .= "s";
+        }
+        if (isset($data['description'])) {
+            $fields_to_update[] = "description = ?"; $params[] = $data['description']; $types .= "s";
+        }
+        if (array_key_exists('freelancer_id', $data)) {
+            $assign_freelancer_id = $data['freelancer_id'] === null ? null : (int)$data['freelancer_id'];
+            if ($assign_freelancer_id !== null) {
+                $stmt_f_check_update = $conn->prepare("SELECT role FROM users WHERE id = ?");
+                if (!$stmt_f_check_update) { throw new Exception('Server error: Freelancer validation prep failed.');}
+                $stmt_f_check_update->bind_param("i", $assign_freelancer_id);
+                if (!$stmt_f_check_update->execute()) { throw new Exception('Server error: Freelancer validation exec failed.');}
+                $res_f_check_update = $stmt_f_check_update->get_result();
+                if ($res_f_check_update->num_rows === 0) { throw new Exception('Assigned freelancer for update not found.'); }
+                if ($res_f_check_update->fetch_assoc()['role'] !== 'freelancer') { throw new Exception('Assigned user for update is not a freelancer.');}
+                $stmt_f_check_update->close();
+            }
+            $fields_to_update[] = "freelancer_id = ?"; $params[] = $assign_freelancer_id; $types .= "i";
+        }
+        if (isset($data['status'])) {
+            $valid_project_statuses_update = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled', 'archived'];
+            if (!in_array($data['status'], $valid_project_statuses_update)) {
+                throw new Exception('Invalid project status for update.');
+            }
+            $fields_to_update[] = "status = ?"; $params[] = $data['status']; $types .= "s";
+        }
+
+        $project_table_updated = false;
+        if (!empty($fields_to_update)) {
+            $fields_to_update[] = "updated_at = NOW()";
+            $sql_update_project_table = "UPDATE projects SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+            $current_params_for_project = $params;
+            $current_params_for_project[] = $project_id;
+            $current_types_for_project = $types . "i";
+
+            $stmt_update_project_table = $conn->prepare($sql_update_project_table);
+            if ($stmt_update_project_table === false) {
+                throw new Exception('Failed to prepare project table update statement: ' . $conn->error);
+            }
+            if (strlen($current_types_for_project) !== count($current_params_for_project)){
+                 throw new Exception('Param count mismatch for projects table update. Types: '.$current_types_for_project.' Params: '.count($current_params_for_project));
+            }
+             if (!empty($current_types_for_project)) { // Check if there are params to bind
+                $stmt_update_project_table->bind_param($current_types_for_project, ...$current_params_for_project);
+             }
+
+            if (!$stmt_update_project_table->execute()) {
+                throw new Exception('Failed to update project details in projects table: ' . $stmt_update_project_table->error);
+            }
+            if($stmt_update_project_table->affected_rows > 0) $project_table_updated = true;
+            $stmt_update_project_table->close();
+        }
+
+        $skills_table_updated = false;
+        if (isset($data['skill_ids']) && is_array($data['skill_ids'])) {
+            $skill_ids_for_project = array_map('intval', $data['skill_ids']);
+
+            $stmt_delete_proj_skills = $conn->prepare("DELETE FROM project_skills WHERE project_id = ?");
+            if (!$stmt_delete_proj_skills) { throw new Exception('Failed to prepare deleting project skills. ' . $conn->error); }
+            $stmt_delete_proj_skills->bind_param("i", $project_id);
+            if (!$stmt_delete_proj_skills->execute()) { throw new Exception('Failed to delete project skills. ' . $stmt_delete_proj_skills->error); }
+            // We consider skills updated if the key 'skill_ids' is present, even if it's empty (means remove all)
+            // or if rows were deleted or inserted.
+            if ($stmt_delete_proj_skills->affected_rows > 0 || !empty($skill_ids_for_project)) {
+                $skills_table_updated = true;
+            }
+            $stmt_delete_proj_skills->close();
+
+            if (!empty($skill_ids_for_project)) {
+                $proj_skill_placeholders = implode(',', array_fill(0, count($skill_ids_for_project), '?'));
+                $stmt_check_valid_proj_skills = $conn->prepare("SELECT id FROM skills WHERE id IN ($proj_skill_placeholders)");
+                if (!$stmt_check_valid_proj_skills) { throw new Exception('Failed to prepare project skill ID validation. ' . $conn->error); }
+                $proj_skill_types = str_repeat('i', count($skill_ids_for_project));
+                $stmt_check_valid_proj_skills->bind_param($proj_skill_types, ...$skill_ids_for_project);
+                if (!$stmt_check_valid_proj_skills->execute()) { throw new Exception('Server error executing project skill ID validation. ' . $stmt_check_valid_proj_skills->error); }
+                $valid_proj_skill_result = $stmt_check_valid_proj_skills->get_result();
+                if ($valid_proj_skill_result->num_rows !== count($skill_ids_for_project)) {
+                    throw new Exception('One or more provided skill IDs for project are invalid.');
+                }
+                $stmt_check_valid_proj_skills->close();
+
+                $sql_insert_project_skill = "INSERT INTO project_skills (project_id, skill_id) VALUES (?, ?)";
+                $stmt_insert_proj_skill = $conn->prepare($sql_insert_project_skill);
+                if (!$stmt_insert_proj_skill) { throw new Exception('Failed to prepare adding project skill. ' . $conn->error); }
+
+                $inserted_skill_rows = 0;
+                foreach ($skill_ids_for_project as $skill_id_proj) {
+                    $stmt_insert_proj_skill->bind_param("ii", $project_id, $skill_id_proj);
+                    if (!$stmt_insert_proj_skill->execute()) {
+                        throw new Exception('Failed to add skill ID ' . $skill_id_proj . ' for project. ' . $stmt_insert_proj_skill->error);
+                    }
+                    if ($stmt_insert_proj_skill->affected_rows > 0) $inserted_skill_rows++;
+                }
+                $stmt_insert_proj_skill->close();
+                if ($inserted_skill_rows > 0) $skills_table_updated = true;
+            }
+        }
+
+        if (!$project_table_updated && !$skills_table_updated && !(isset($data['skill_ids']) && empty($data['skill_ids']))) {
+            // This condition means no project fields were in $data to update (so $fields_to_update was empty)
+            // AND skill_ids was not provided at all (so no attempt to clear/update skills)
+            // OR skill_ids was provided but was identical to existing skills (not easily checkable here without fetching old skills)
+            // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+            // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+            if (empty($fields_to_update) && !isset($data['skill_ids'])) {
+                 $conn->rollback(); // Nothing to commit
+                 send_json_response(200, ['message' => 'No update data provided for project or skills.']);
+            }
+        }
+
+        $conn->commit();
+        send_json_response(200, ['message' => 'Project details and/or skills updated successfully.']);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        if (strpos($e->getMessage(), 'Duplicate entry') !== false || strpos($e->getMessage(), 'already exists') !== false) {
+            send_json_response(409, ['error' => $e->getMessage()]);
+        } elseif (strpos($e->getMessage(), 'not found') !== false) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response(500, ['error' => 'Failed to update project: ' . $e->getMessage()]);
+        }
+    }
+}
+// END MODIFIED: update_project
+elseif ($action === 'delete_project' && $method === 'DELETE') {
+    $authenticated_user = require_authentication($conn); // 1. Require Authentication
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for deletion.']);
+    }
+
+    // 2. Authorize User: Fetch project's client_id first
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) {
+        send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check for delete. ' . $conn->error]);
+    }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) {
+        send_json_response(500, ['error' => 'Server error: Failed to execute ownership check for delete. ' . $stmt_check_owner->error]);
+    }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found, cannot delete.']);
+    }
+    $project_data = $result_owner_check->fetch_assoc();
+    $project_client_id = (int)$project_data['client_id'];
+    $stmt_check_owner->close();
+
+    // Authorization check
+    if ($user_role !== 'admin' && $project_client_id !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this project.']);
+    }
+
+    // Proceed with delete logic
+    // TODO: Consider what happens to related data (e.g., applications, job cards) when a project is deleted.
+    // For now, it's a direct delete. Future enhancements might involve soft deletes or cascading deletes/archiving.
+
+    $stmt = $conn->prepare("DELETE FROM projects WHERE id = ?");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("i", $project_id);
+
+    if ($stmt->execute()) {
+        if ($stmt->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Project deleted successfully.']);
+        } else {
+            // This case should ideally not be reached if the ownership check found the project.
+            // If it is, it means the project was deleted between the check and this operation.
+            send_json_response(404, ['message' => 'Project not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete project: ' . $stmt->error]);
+    }
+    $stmt->close();
+} else {
+    // No action or invalid action/method combination
+    send_json_response(404, ['error' => 'API endpoint not found or invalid request.']);
+}
+
+// Close the database connection
+$conn->close();
+?>
+
+// NEW: Log Time for a Job Card
+elseif ($action === 'log_time' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_logging_time = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $job_card_id = isset($data['job_card_id']) ? (int)$data['job_card_id'] : null;
+    $start_time_str = $data['start_time'] ?? null;
+    $end_time_str = $data['end_time'] ?? null;
+    $notes = $data['notes'] ?? null;
+
+    if (!$job_card_id || empty($start_time_str) || empty($end_time_str)) {
+        send_json_response(400, ['error' => 'Job Card ID, start time, and end time are required.']);
+    }
+
+    // Validate and parse timestamps
+    try {
+        $start_time_ts = new DateTime($start_time_str);
+        $end_time_ts = new DateTime($end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid start or end time format. Please use ISO8601 format (e.g., YYYY-MM-DDTHH:MM:SSZ).']);
+    }
+
+    if ($start_time_ts >= $end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+
+    // Calculate duration in minutes
+    $duration_minutes = ($end_time_ts->getTimestamp() - $start_time_ts->getTimestamp()) / 60;
+    if ($duration_minutes <= 0) { // Should be caught by above, but as safety
+        send_json_response(400, ['error' => 'Duration must be positive. Ensure end time is after start time.']);
+    }
+
+
+    // Authorization: Check if user is allowed to log time for this job card
+    $stmt_auth_jc = $conn->prepare(
+        "SELECT jc.assigned_freelancer_id AS job_card_assignee,
+                p.client_id AS project_client_id,
+                p.freelancer_id AS project_main_freelancer_id,
+                jc_proj.status AS project_status
+         FROM job_cards jc
+         JOIN projects p ON jc.project_id = p.id
+         JOIN projects jc_proj ON jc.project_id = jc_proj.id
+         WHERE jc.id = ?"
+    );
+    if (!$stmt_auth_jc) { send_json_response(500, ['error' => 'Server error preparing time log authorization check. ' . $conn->error]); }
+    $stmt_auth_jc->bind_param("i", $job_card_id);
+    if (!$stmt_auth_jc->execute()) { send_json_response(500, ['error' => 'Server error executing time log authorization check. ' . $stmt_auth_jc->error]); }
+    $result_auth_jc = $stmt_auth_jc->get_result();
+    if ($result_auth_jc->num_rows === 0) {
+        send_json_response(404, ['error' => 'Job Card not found.']);
+    }
+    $jc_auth_details = $result_auth_jc->fetch_assoc();
+    $project_client_id = (int)$jc_auth_details['project_client_id'];
+    $job_card_assignee_id = $jc_auth_details['job_card_assignee'] ? (int)$jc_auth_details['job_card_assignee'] : null;
+    $project_main_freelancer_id = $jc_auth_details['project_main_freelancer_id'] ? (int)$jc_auth_details['project_main_freelancer_id'] : null;
+    $project_status = $jc_auth_details['project_status'];
+    $stmt_auth_jc->close();
+
+    // Project must be in progress to log time
+    if ($project_status !== 'in_progress' && $project_status !== 'assigned' && $project_status !== 'active') { // 'active' if used
+        send_json_response(403, ['error' => "Time cannot be logged for this job card as the project status is '{$project_status}'. Project must be active."]);
+    }
+
+    $is_authorized_to_log = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_log = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_logging_time) {
+        // Clients typically don't log time this way, but could be for record keeping if feature exists.
+        // For now, let's restrict clients from logging time directly unless specific requirements arise.
+        // send_json_response(403, ['error' => 'Clients cannot directly log time for job cards.']);
+        // OR, allow it: $is_authorized_to_log = true; (Let's assume not for now)
+    } elseif ($user_role === 'freelancer') {
+        if ($job_card_assignee_id === $user_id_logging_time || $project_main_freelancer_id === $user_id_logging_time) {
+            $is_authorized_to_log = true;
+        }
+    }
+
+    if (!$is_authorized_to_log) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to log time for this job card.']);
+    }
+
+    // Insert new time log
+    $sql_insert_log = "INSERT INTO time_logs (job_card_id, user_id, start_time, end_time, duration_minutes, notes)
+                       VALUES (?, ?, ?, ?, ?, ?)";
+    $stmt_insert_log = $conn->prepare($sql_insert_log);
+    if (!$stmt_insert_log) {
+        send_json_response(500, ['error' => 'Server error preparing time log creation. ' . $conn->error]);
+    }
+
+    $formatted_start_time = $start_time_ts->format('Y-m-d H:i:s');
+    $formatted_end_time = $end_time_ts->format('Y-m-d H:i:s');
+
+    $stmt_insert_log->bind_param("iissis",
+        $job_card_id,
+        $user_id_logging_time,
+        $formatted_start_time,
+        $formatted_end_time,
+        $duration_minutes,
+        $notes
+    );
+
+    if ($stmt_insert_log->execute()) {
+        $new_time_log_id = $stmt_insert_log->insert_id;
+        send_json_response(201, [
+            'message' => 'Time logged successfully.',
+            'time_log_id' => $new_time_log_id,
+            'duration_minutes' => $duration_minutes
+        ]);
+    } else {
+        send_json_response(500, ['error' => 'Failed to log time. ' . $stmt_insert_log->error]);
+    }
+    $stmt_insert_log->close();
+
+} // END NEW: Log Time for a Job Card
+
+// NEW: Get All Time Logs for a Specific Project
+elseif ($action === 'get_project_time_logs' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['project_id']) ? (int)$_GET['project_id'] : null;
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required to fetch all project time logs.']);
+    }
+
+    // Authorization: Check if user is allowed to view all time logs for this project
+    $stmt_auth_proj_logs = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if (!$stmt_auth_proj_logs) { send_json_response(500, ['error' => 'Server error preparing project ownership check for logs.']); }
+    $stmt_auth_proj_logs->bind_param("i", $project_id);
+    if (!$stmt_auth_proj_logs->execute()) { send_json_response(500, ['error' => 'Server error executing project ownership check for logs.']); }
+    $result_auth_proj_logs = $stmt_auth_proj_logs->get_result();
+    if ($result_auth_proj_logs->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found.']);
+    }
+    $project_auth_details = $result_auth_proj_logs->fetch_assoc();
+    $project_client_id = (int)$project_auth_details['client_id'];
+    $stmt_auth_proj_logs->close();
+
+    $is_authorized_to_view_project_logs = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_view_project_logs = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_requesting) {
+        $is_authorized_to_view_project_logs = true;
+    }
+    // Freelancers are generally not authorized to see *all* project logs via this endpoint.
+
+    if (!$is_authorized_to_view_project_logs) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to view all time logs for this project.']);
+    }
+
+    // Fetch all time logs for the project
+    $sql_get_all_logs = "SELECT
+                            tl.id, tl.job_card_id, tl.user_id,
+                            tl.start_time, tl.end_time, tl.duration_minutes, tl.notes,
+                            tl.created_at, tl.updated_at,
+                            u.username AS logger_username,
+                            jc.title AS job_card_title
+                         FROM time_logs tl
+                         JOIN users u ON tl.user_id = u.id
+                         JOIN job_cards jc ON tl.job_card_id = jc.id
+                         WHERE jc.project_id = ?
+                         ORDER BY tl.start_time DESC";
+
+    $stmt_get_all_logs = $conn->prepare($sql_get_all_logs);
+    if ($stmt_get_all_logs === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for fetching project time logs: ' . $conn->error]);
+    }
+    $stmt_get_all_logs->bind_param("i", $project_id);
+
+    if (!$stmt_get_all_logs->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for fetching project time logs: ' . $stmt_get_all_logs->error]);
+    }
+
+    $result_all_logs = $stmt_get_all_logs->get_result();
+    $project_time_logs_list = [];
+    while ($row = $result_all_logs->fetch_assoc()) {
+        $row['duration_minutes'] = (int)$row['duration_minutes'];
+        $project_time_logs_list[] = $row;
+    }
+    $stmt_get_all_logs->close();
+
+    send_json_response(200, $project_time_logs_list);
+
+} // END NEW: Get All Time Logs for a Specific Project
+
+// NEW: Update a Specific Time Log
+elseif ($action === 'update_time_log' && ($method === 'PUT' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for update.']);
+    }
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (empty($data)) {
+        send_json_response(400, ['error' => 'No data provided for update or invalid JSON.']);
+    }
+
+    // Fetch original time log to check ownership and get existing values
+    $stmt_fetch_log = $conn->prepare("SELECT user_id, start_time, end_time FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log) { send_json_response(500, ['error' => 'Server error preparing original log fetch.']); }
+    $stmt_fetch_log->bind_param("i", $time_log_id);
+    if (!$stmt_fetch_log->execute()) { send_json_response(500, ['error' => 'Server error executing original log fetch.']); }
+    $result_fetch_log = $stmt_fetch_log->get_result();
+    if ($result_fetch_log->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $original_log_data = $result_fetch_log->fetch_assoc();
+    $log_owner_id = (int)$original_log_data['user_id'];
+    $stmt_fetch_log->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this time log.']);
+    }
+
+    // Determine new start and end times
+    $new_start_time_str = $data['start_time'] ?? $original_log_data['start_time'];
+    $new_end_time_str = $data['end_time'] ?? $original_log_data['end_time'];
+
+    try {
+        $new_start_time_ts = new DateTime($new_start_time_str);
+        $new_end_time_ts = new DateTime($new_end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid new start or end time format. Please use ISO8601.']);
+    }
+
+    if ($new_start_time_ts >= $new_end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+    $new_duration_minutes = ($new_end_time_ts->getTimestamp() - $new_start_time_ts->getTimestamp()) / 60;
+    if ($new_duration_minutes <= 0) {
+        send_json_response(400, ['error' => 'Calculated duration must be positive.']);
+    }
+
+    $formatted_new_start_time = $new_start_time_ts->format('Y-m-d H:i:s');
+    $formatted_new_end_time = $new_end_time_ts->format('Y-m-d H:i:s');
+
+    // Build the SQL query dynamically for fields other than times/duration
+    $fields_to_update = [];
+    $params = [];
+    $types = "";
+
+    // Always update times and duration as they are derived or taken from original
+    $fields_to_update[] = "start_time = ?"; $params[] = $formatted_new_start_time; $types .= "s";
+    $fields_to_update[] = "end_time = ?"; $params[] = $formatted_new_end_time; $types .= "s";
+    $fields_to_update[] = "duration_minutes = ?"; $params[] = $new_duration_minutes; $types .= "i";
+
+    if (array_key_exists('notes', $data)) { // Allow setting notes to null or empty string
+        $fields_to_update[] = "notes = ?"; $params[] = $data['notes']; $types .= "s";
+    }
+
+    if (count($fields_to_update) === 3 && !array_key_exists('notes', $data)) {
+        // Only time fields were present, but maybe notes was intended to be cleared but not sent
+        // Or, if only notes is sent, time fields are based on original log.
+        // This logic means if only notes is sent, times/duration are not re-saved unless they were also sent.
+        // For simplicity, if any of start_time, end_time, or notes is in $data, we update.
+        // If $data only had notes, then $new_start_time_str and $new_end_time_str would be original values.
+        // If $data was empty, it's caught earlier.
+        // If $data had only start_time, end_time would be original, and duration calculated.
+        // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+        // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+    }
+
+    $fields_to_update[] = "updated_at = NOW()";
+
+    $sql_update_log = "UPDATE time_logs SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+    $params[] = $time_log_id;
+    $types .= "i";
+
+    $stmt_update_log = $conn->prepare($sql_update_log);
+    if ($stmt_update_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare time log update statement: ' . $conn->error]);
+    }
+    $stmt_update_log->bind_param($types, ...$params);
+
+    if ($stmt_update_log->execute()) {
+        if ($stmt_update_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log updated successfully.']);
+        } else {
+            send_json_response(200, ['message' => 'Time log data was the same or log not found; no changes made.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to update time log: ' . $stmt_update_log->error]);
+    }
+    $stmt_update_log->close();
+
+} // END NEW: Update a Specific Time Log
+
+// NEW: Delete a Specific Time Log
+elseif ($action === 'delete_time_log' && ($method === 'DELETE' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = null;
+    if ($method === 'DELETE') {
+        $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    } elseif ($method === 'POST') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $time_log_id = isset($data['time_log_id']) ? (int)$data['time_log_id'] : (isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null);
+    }
+
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for deletion.']);
+    }
+
+    // Fetch original time log to check ownership
+    $stmt_fetch_log_owner = $conn->prepare("SELECT user_id FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log_owner) { send_json_response(500, ['error' => 'Server error preparing log ownership check.']); }
+    $stmt_fetch_log_owner->bind_param("i", $time_log_id);
+    if (!$stmt_fetch_log_owner->execute()) { send_json_response(500, ['error' => 'Server error executing log ownership check.']); }
+    $result_fetch_log_owner = $stmt_fetch_log_owner->get_result();
+    if ($result_fetch_log_owner->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $log_owner_data = $result_fetch_log_owner->fetch_assoc();
+    $log_owner_id = (int)$log_owner_data['user_id'];
+    $stmt_fetch_log_owner->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this time log.']);
+    }
+
+    // Proceed with delete logic
+    $stmt_delete_log = $conn->prepare("DELETE FROM time_logs WHERE id = ?");
+    if ($stmt_delete_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement for time log: ' . $conn->error]);
+    }
+    $stmt_delete_log->bind_param("i", $time_log_id);
+
+    if ($stmt_delete_log->execute()) {
+        if ($stmt_delete_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log deleted successfully.']);
+        } else {
+            // This case implies the log was not found, though the check above should catch it.
+            send_json_response(404, ['message' => 'Time log not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete time log: ' . $stmt_delete_log->error]);
+    }
+    $stmt_delete_log->close();
+
+} // END NEW: Delete a Specific Time Log
+
+// NEW: Find or Create 1-on-1 Conversation
+elseif ($action === 'find_or_create_conversation' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $recipient_user_id = isset($data['recipient_user_id']) ? (int)$data['recipient_user_id'] : null;
+
+    if (!$recipient_user_id) {
+        send_json_response(400, ['error' => 'Recipient user ID is required.']);
+    }
+
+    if ($recipient_user_id === $current_user_id) {
+        send_json_response(400, ['error' => 'Cannot create a conversation with yourself.']);
+    }
+
+    // Check if recipient user exists
+    $stmt_user_check = $conn->prepare("SELECT id FROM users WHERE id = ?");
+    if (!$stmt_user_check) { send_json_response(500, ['error' => 'Server error preparing recipient check.']); }
+    $stmt_user_check->bind_param("i", $recipient_user_id);
+    if (!$stmt_user_check->execute()) { send_json_response(500, ['error' => 'Server error executing recipient check.']); }
+    if ($stmt_user_check->get_result()->num_rows === 0) {
+        send_json_response(404, ['error' => 'Recipient user not found.']);
+    }
+    $stmt_user_check->close();
+
+    // Check for existing 1-on-1 conversation
+    // This query finds conversations involving BOTH users, and only those two users.
+    $sql_find_convo = "SELECT cp1.conversation_id
+                       FROM conversation_participants cp1
+                       JOIN conversation_participants cp2 ON cp1.conversation_id = cp2.conversation_id
+                       WHERE cp1.user_id = ? AND cp2.user_id = ?
+                       AND (SELECT COUNT(*) FROM conversation_participants cp_count WHERE cp_count.conversation_id = cp1.conversation_id) = 2";
+
+    $stmt_find = $conn->prepare($sql_find_convo);
+    if (!$stmt_find) { send_json_response(500, ['error' => 'Server error preparing conversation search. ' . $conn->error]); }
+    // Bind params carefully for the two user IDs
+    $stmt_find->bind_param("ii", $current_user_id, $recipient_user_id);
+
+
+    if (!$stmt_find->execute()) { send_json_response(500, ['error' => 'Server error executing conversation search. ' . $stmt_find->error]); }
+    $result_find = $stmt_find->get_result();
+
+    if ($existing_convo = $result_find->fetch_assoc()) {
+        $stmt_find->close();
+        send_json_response(200, ['conversation_id' => (int)$existing_convo['conversation_id'], 'existed' => true]);
+    } else {
+        $stmt_find->close();
+        // No existing 1-on-1 conversation found, create a new one
+        $conn->begin_transaction();
+        try {
+            // 1. Create conversation
+            // last_message_at can be set to NOW() or remain NULL initially
+            $stmt_create_convo = $conn->prepare("INSERT INTO conversations (last_message_at) VALUES (NOW())");
+            if (!$stmt_create_convo) { throw new Exception('Failed to prepare conversation creation. ' . $conn->error); }
+            if (!$stmt_create_convo->execute()) { throw new Exception('Failed to execute conversation creation. ' . $stmt_create_convo->error); }
+            $new_conversation_id = $conn->insert_id;
+            $stmt_create_convo->close();
+
+            if (!$new_conversation_id) { throw new Exception('Failed to get new conversation ID.'); }
+
+            // 2. Add participants
+            $stmt_add_participant = $conn->prepare("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)");
+            if (!$stmt_add_participant) { throw new Exception('Failed to prepare participant insertion. ' . $conn->error); }
+
+            // Add current user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $current_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add current user to conversation. ' . $stmt_add_participant->error); }
+
+            // Add recipient user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $recipient_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add recipient user to conversation. ' . $stmt_add_participant->error); }
+            $stmt_add_participant->close();
+
+            $conn->commit();
+            send_json_response(201, ['conversation_id' => $new_conversation_id, 'existed' => false]);
+
+        } catch (Exception $e) {
+            $conn->rollback();
+            send_json_response(500, ['error' => 'Failed to create conversation: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Find or Create 1-on-1 Conversation
+
+// NEW: Get Messages for a Conversation
+elseif ($action === 'get_conversation_messages' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $conversation_id = isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : null;
+    if (!$conversation_id) {
+        send_json_response(400, ['error' => 'Conversation ID is required.']);
+    }
+
+    // Authorize: Check if current user is part of this conversation
+    $stmt_auth_convo = $conn->prepare(
+        "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+         FROM conversations c
+         LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+         WHERE c.id = ?"
+    );
+    if (!$stmt_auth_convo) { send_json_response(500, ['error' => 'Server error preparing conversation participation check.']); }
+    $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+    if (!$stmt_auth_convo->execute()) { send_json_response(500, ['error' => 'Server error executing conversation participation check.']); }
+    $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+    $stmt_auth_convo->close();
+
+    if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+        send_json_response(404, ['error' => 'Conversation not found.']);
+    }
+    if (!$result_auth_convo['participant_exists']) {
+        send_json_response(403, ['error' => 'Forbidden: You are not a participant in this conversation.']);
+    }
+
+    // Pagination parameters
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
+    $before_message_id = isset($_GET['before_message_id']) ? (int)$_GET['before_message_id'] : null;
+    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0; // Alternative: offset based pagination
+
+    $sql_messages = "SELECT
+                        m.id AS message_id, m.conversation_id, m.sender_id, m.content,
+                        m.created_at, m.read_at,
+                        u.username AS sender_username
+                     FROM messages m
+                     JOIN users u ON m.sender_id = u.id
+                     WHERE m.conversation_id = ?";
+
+    $params = [$conversation_id];
+    $types = "i";
+
+    if ($before_message_id) {
+        // Assumes IDs are auto-incrementing and somewhat time-ordered for this simple pagination
+        // A more robust cursor pagination would use created_at + id
+        $sql_messages .= " AND m.id < ?";
+        $params[] = $before_message_id;
+        $types .= "i";
+    }
+
+    $sql_messages .= " ORDER BY m.created_at DESC, m.id DESC"; // Get newest first
+    $sql_messages .= " LIMIT ?";
+    $params[] = $limit;
+    $types .= "i";
+
+    // If using offset pagination instead of cursor (before_message_id):
+    // $sql_messages .= " LIMIT ? OFFSET ?";
+    // $params[] = $limit; $params[] = $offset; $types .= "ii";
+
+
+    $stmt_messages = $conn->prepare($sql_messages);
+    if (!$stmt_messages) {
+        send_json_response(500, ['error' => 'Server error preparing message fetch: ' . $conn->error]);
+    }
+    $stmt_messages->bind_param($types, ...$params);
+
+    if (!$stmt_messages->execute()) {
+        send_json_response(500, ['error' => 'Server error executing message fetch: ' . $stmt_messages->error]);
+    }
+    $result_messages = $stmt_messages->get_result();
+
+    $messages_list = [];
+    while ($row = $result_messages->fetch_assoc()) {
+        $messages_list[] = [
+            'id' => (int)$row['message_id'], // message_id aliased as id for frontend typically
+            'conversation_id' => (int)$row['conversation_id'],
+            'sender_id' => (int)$row['sender_id'],
+            'sender_username' => $row['sender_username'],
+            'content' => $row['content'],
+            'created_at' => $row['created_at'], // ISO8601 format from DB
+            'read_at' => $row['read_at'] // ISO8601 format from DB or null
+        ];
+    }
+    $stmt_messages->close();
+
+    // Messages are fetched newest first, client might want to reverse for display
+    send_json_response(200, array_reverse($messages_list)); // Reverse to get oldest of the batch first for typical chat UI
+
+} // END NEW: Get Messages for a Conversation
+
+// NEW: Send Message to a Conversation
+elseif ($action === 'send_message' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $sender_id = (int)$authenticated_user['id'];
+    $sender_username = $authenticated_user['username']; // For response
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $conversation_id = isset($data['conversation_id']) ? (int)$data['conversation_id'] : null;
+    $content = $data['content'] ?? null;
+
+    if (!$conversation_id || $content === null || trim($content) === '') { // Content can be "0", so check for null or empty string explicitly
+        send_json_response(400, ['error' => 'Conversation ID and message content are required.']);
+    }
+
+    $content = trim($content); // Trim content before length check and storage
+    if (mb_strlen($content) > 10000) { // Basic content length validation (e.g. 10k chars)
+        send_json_response(400, ['error' => 'Message content is too long.']);
+    }
+
+    // Start transaction
+    $conn->begin_transaction();
+
+    try {
+        // 1. Authorization: Check if current user is part of this conversation AND conversation exists
+        $stmt_auth_convo = $conn->prepare(
+            "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+             FROM conversations c
+             LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+             WHERE c.id = ?"
+        );
+        if (!$stmt_auth_convo) { throw new Exception('Server error preparing conversation participation check. ' . $conn->error); }
+        $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+        if (!$stmt_auth_convo->execute()) { throw new Exception('Server error executing conversation participation check. ' . $stmt_auth_convo->error); }
+        $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+        $stmt_auth_convo->close();
+
+        if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+            throw new Exception('Conversation not found.', 404);
+        }
+        if (!$result_auth_convo['participant_exists']) {
+            throw new Exception('Forbidden: You are not a participant in this conversation.', 403);
+        }
+
+        // 2. Insert the new message
+        $current_timestamp_mysql = date('Y-m-d H:i:s'); // For consistent timestamp
+        $stmt_insert_message = $conn->prepare(
+            "INSERT INTO messages (conversation_id, sender_id, content, created_at)
+             VALUES (?, ?, ?, ?)"
+        );
+        if (!$stmt_insert_message) { throw new Exception('Server error preparing message insertion. ' . $conn->error); }
+        $stmt_insert_message->bind_param("iiss", $conversation_id, $sender_id, $content, $current_timestamp_mysql);
+        if (!$stmt_insert_message->execute()) { throw new Exception('Server error executing message insertion. ' . $stmt_insert_message->error); }
+        $new_message_id = $conn->insert_id;
+        $stmt_insert_message->close();
+
+        if (!$new_message_id) {
+            throw new Exception('Failed to create message or get new message ID.');
+        }
+
+        // 3. Update last_message_at in conversations table
+        $stmt_update_convo = $conn->prepare("UPDATE conversations SET last_message_at = ? WHERE id = ?");
+        if (!$stmt_update_convo) { throw new Exception('Server error preparing conversation update. ' . $conn->error); }
+        $stmt_update_convo->bind_param("si", $current_timestamp_mysql, $conversation_id);
+        if (!$stmt_update_convo->execute()) { throw new Exception('Server error executing conversation update. ' . $stmt_update_convo->error); }
+        $stmt_update_convo->close();
+
+        // Commit transaction
+        $conn->commit();
+
+        // Prepare and send response
+        $new_message_data = [
+            'id' => $new_message_id,
+            'conversation_id' => $conversation_id,
+            'sender_id' => $sender_id,
+            'sender_username' => $sender_username, // Added for immediate use by frontend
+            'content' => $content,
+            'created_at' => $current_timestamp_mysql,
+            'read_at' => null // New messages are unread by default for others
+        ];
+        send_json_response(201, $new_message_data);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        $error_code = $e->getCode() >= 400 && $e->getCode() < 500 ? $e->getCode() : 500; // Use specific client error codes if set
+        if ($error_code === 403) {
+            send_json_response(403, ['error' => $e->getMessage()]);
+        } elseif ($error_code === 404) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response($error_code, ['error' => 'Failed to send message: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Send Message to a Conversation
+
+// --- Projects API ---
+// MODIFIED: get_projects to handle single project fetch and join user tables
+elseif ($action === 'get_projects' && $method === 'GET') {
+    $project_id_filter = isset($_GET['id']) ? (int)$_GET['id'] : (isset($_GET['project_id']) ? (int)$_GET['project_id'] : null);
+
+    if ($project_id_filter !== null) {
+        // Fetch a single project by ID
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id
+                WHERE p.id = ?";
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for single project: ' . $conn->error]);
+        }
+        $stmt->bind_param("i", $project_id_filter);
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for single project: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        if ($project = $result->fetch_assoc()) {
+            if (isset($project['client_id'])) $project['client_id'] = (int)$project['client_id'];
+            if (isset($project['freelancer_id'])) $project['freelancer_id'] = $project['freelancer_id'] === null ? null : (int)$project['freelancer_id'];
+
+            // Fetch skills for the single project
+            $project['skills_required'] = [];
+            $stmt_skills_proj = $conn->prepare("SELECT s.id, s.name FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ? ORDER BY s.name ASC");
+            if ($stmt_skills_proj) {
+                $stmt_skills_proj->bind_param("i", $project_id_filter);
+                if ($stmt_skills_proj->execute()) {
+                    $result_skills_proj = $stmt_skills_proj->get_result();
+                    while ($skill_row_proj = $result_skills_proj->fetch_assoc()) {
+                        $project['skills_required'][] = ['id' => (int)$skill_row_proj['id'], 'name' => $skill_row_proj['name']];
+                    }
+                } else { error_log("Failed to execute skills fetch for single project: " . $stmt_skills_proj->error); }
+                $stmt_skills_proj->close();
+            } else { error_log("Failed to prepare skills fetch for single project: " . $conn->error); }
+
+            send_json_response(200, $project); // Return single project object
+        } else {
+            send_json_response(404, ['error' => 'Project not found.']);
+        }
+        $stmt->close();
+        // exit; // send_json_response includes exit
+    } else {
+        // Existing logic for fetching multiple projects with status filter
+        $status_filter = isset($_GET['status']) ? $_GET['status'] : 'open';
+
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id";
+        $params = [];
+        $types = "";
+
+        if ($status_filter) {
+            if ($status_filter !== 'all' && $status_filter !== '') {
+                 $sql .= " WHERE p.status = ?";
+                 $params[] = $status_filter;
+                 $types .= "s";
+            } else if ($status_filter === '') {
+                $sql .= " WHERE p.status = ?";
+                $params[] = 'open';
+                $types .= "s";
+            }
+        }
+        $sql .= " ORDER BY p.created_at DESC";
+
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for projects list: ' . $conn->error]);
+        }
+        if (!empty($types)) {
+            $stmt->bind_param($types, ...$params);
+        }
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for projects list: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        $projects = [];
+        while ($row = $result->fetch_assoc()) {
+            if (isset($row['client_id'])) $row['client_id'] = (int)$row['client_id'];
+            if (isset($row['freelancer_id'])) $row['freelancer_id'] = $row['freelancer_id'] === null ? null : (int)$row['freelancer_id'];
+            $projects[] = $row;
+        }
+        $stmt->close();
+        send_json_response(200, $projects);
+    }
+}
+// MODIFIED: Create Project with Admin client_id assignment
+elseif ($action === 'create_project' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $auth_user_id = (int)$authenticated_user['id'];
+    $auth_user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+
+    if (empty($data['title']) || empty($data['description'])) {
+        send_json_response(400, ['error' => 'Missing required fields: title, description.']);
+    }
+
+    $title = $data['title'];
+    $description = $data['description'];
+    $final_client_id = null;
+
+    // Determine client_id based on role and payload
+    if ($auth_user_role === 'admin') {
+        if (isset($data['client_id']) && !empty($data['client_id'])) {
+            $payload_client_id = (int)$data['client_id'];
+            // Validate this client_id
+            $stmt_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_client_check) { send_json_response(500, ['error' => 'Server error preparing client validation.']); }
+            $stmt_client_check->bind_param("i", $payload_client_id);
+            if (!$stmt_client_check->execute()) { send_json_response(500, ['error' => 'Server error executing client validation.']); }
+            $result_client_check = $stmt_client_check->get_result();
+            if ($result_client_check->num_rows === 0) {
+                send_json_response(404, ['error' => "Specified client_id '{$payload_client_id}' not found."]);
+            }
+            $client_to_assign = $result_client_check->fetch_assoc();
+            if ($client_to_assign['role'] !== 'client') {
+                send_json_response(400, ['error' => "User '{$payload_client_id}' is not a client. Project can only be assigned to a client user."]);
+            }
+            $stmt_client_check->close();
+            $final_client_id = $payload_client_id;
+        } else {
+            // Admin creating project for themselves (no client_id in payload)
+            $final_client_id = $auth_user_id;
+        }
+    } elseif ($auth_user_role === 'client') {
+        $final_client_id = $auth_user_id;
+    } else {
+        // Other roles (e.g. freelancer) are not allowed to create projects
+        send_json_response(403, ['error' => 'Forbidden: Your role does not have permission to create projects.']);
+    }
+
+    if ($final_client_id === null) { // Should be caught by role check, but as a safeguard
+        send_json_response(500, ['error' => 'Could not determine client for the project.']);
+    }
+
+    $freelancer_id = isset($data['freelancer_id']) && !empty($data['freelancer_id']) ? (int)$data['freelancer_id'] : null;
+    if ($freelancer_id !== null) { // Optional: Validate freelancer_id if provided
+        $stmt_f_check = $conn->prepare("SELECT role FROM users WHERE id = ?");
+        if (!$stmt_f_check) { send_json_response(500, ['error' => 'Server error: Freelancer validation prep failed.']);}
+        $stmt_f_check->bind_param("i", $freelancer_id);
+        if (!$stmt_f_check->execute()) { send_json_response(500, ['error' => 'Server error: Freelancer validation exec failed.']);}
+        $res_f_check = $stmt_f_check->get_result();
+        if ($res_f_check->num_rows === 0) { send_json_response(404, ['error' => 'Assigned freelancer not found.']); }
+        if ($res_f_check->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'Assigned user is not a freelancer.']);}
+        $stmt_f_check->close();
+    }
+
+    $status = $data['status'] ?? 'open'; // Default status, or from payload
+    $valid_project_statuses = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled']; // Extend as needed
+    if (!in_array($status, $valid_project_statuses)) {
+        send_json_response(400, ['error' => 'Invalid project status provided.']);
+    }
+
+
+    $stmt = $conn->prepare("INSERT INTO projects (title, description, client_id, freelancer_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for project creation: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("ssiis", $title, $description, $final_client_id, $freelancer_id, $status);
+
+    if ($stmt->execute()) {
+        $new_project_id_for_notification = $stmt->insert_id;
+        $current_project_status = $status; // $status variable from create_project scope
+
+        // Send response first, then notify
+        send_json_response(201, [
+            'message' => 'Project created successfully.',
+            'project_id' => $new_project_id_for_notification,
+            'client_id' => $final_client_id
+        ]);
+
+        if ($current_project_status === 'pending_approval' || $current_project_status === 'Pending Approval') { // Case consistency
+             create_admin_notification($conn, 'project_awaits_approval', 'project', $new_project_id_for_notification);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to create project: ' . $stmt->error]);
+    }
+    $stmt->close();
+}
+// END MODIFIED: Create Project
+// MODIFIED: update_project to allow admin client_id change and other enhancements
+elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST')) { // Allow POST too
+    $authenticated_user = require_authentication($conn);
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (!$project_id && isset($data['project_id_to_update'])) { // Use a distinct name to avoid conflict
+        $project_id = (int)$data['project_id_to_update'];
+    }
+
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for update.']);
+    }
+    // Remove project_id_to_update from $data if it exists, as it's not a table field
+    if (isset($data['project_id_to_update'])) {
+        unset($data['project_id_to_update']);
+    }
+    if (empty($data) && !isset($data['skill_ids'])) { // Check if $data is empty OR only skill_ids is set (which means no project table fields)
+        send_json_response(400, ['error' => 'Invalid JSON or no data provided for project table update. If only updating skills, ensure skill_ids is provided.']);
+    }
+
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) { send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check. ' . $conn->error]); }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) { send_json_response(500, ['error' => 'Server error: Failed to execute ownership check. ' . $stmt_check_owner->error]); }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) { send_json_response(404, ['error' => 'Project not found.']); }
+    $project_data_db = $result_owner_check->fetch_assoc();
+    $project_client_id_original = (int)$project_data_db['client_id'];
+    $stmt_check_owner->close();
+
+    if ($user_role !== 'admin' && $project_client_id_original !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this project.']);
+    }
+
+    $conn->begin_transaction();
+    try {
+        $fields_to_update = [];
+        $params = [];
+        $types = "";
+
+        if ($user_role === 'admin' && isset($data['client_id'])) {
+            $new_client_id = (int)$data['client_id'];
+            $stmt_new_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_new_client_check) { throw new Exception('Server error preparing new client validation.'); }
+            $stmt_new_client_check->bind_param("i", $new_client_id);
+            if (!$stmt_new_client_check->execute()) { throw new Exception('Server error executing new client validation.'); }
+            $result_new_client_check = $stmt_new_client_check->get_result();
+            if ($result_new_client_check->num_rows === 0) {
+                throw new Exception("New client_id '{$new_client_id}' not found.");
+            }
+            $new_client_data = $result_new_client_check->fetch_assoc();
+            if ($new_client_data['role'] !== 'client') {
+                throw new Exception("User '{$new_client_id}' is not a client. Project can only be assigned to a client user.");
+            }
+            $stmt_new_client_check->close();
+            $fields_to_update[] = "client_id = ?"; $params[] = $new_client_id; $types .= "i";
+        }
+
+        if (isset($data['title'])) {
+            $fields_to_update[] = "title = ?"; $params[] = $data['title']; $types .= "s";
+        }
+        if (isset($data['description'])) {
+            $fields_to_update[] = "description = ?"; $params[] = $data['description']; $types .= "s";
+        }
+        if (array_key_exists('freelancer_id', $data)) {
+            $assign_freelancer_id = $data['freelancer_id'] === null ? null : (int)$data['freelancer_id'];
+            if ($assign_freelancer_id !== null) {
+                $stmt_f_check_update = $conn->prepare("SELECT role FROM users WHERE id = ?");
+                if (!$stmt_f_check_update) { throw new Exception('Server error: Freelancer validation prep failed.');}
+                $stmt_f_check_update->bind_param("i", $assign_freelancer_id);
+                if (!$stmt_f_check_update->execute()) { throw new Exception('Server error: Freelancer validation exec failed.');}
+                $res_f_check_update = $stmt_f_check_update->get_result();
+                if ($res_f_check_update->num_rows === 0) { throw new Exception('Assigned freelancer for update not found.'); }
+                if ($res_f_check_update->fetch_assoc()['role'] !== 'freelancer') { throw new Exception('Assigned user for update is not a freelancer.');}
+                $stmt_f_check_update->close();
+            }
+            $fields_to_update[] = "freelancer_id = ?"; $params[] = $assign_freelancer_id; $types .= "i";
+        }
+        if (isset($data['status'])) {
+            $valid_project_statuses_update = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled', 'archived'];
+            if (!in_array($data['status'], $valid_project_statuses_update)) {
+                throw new Exception('Invalid project status for update.');
+            }
+            $fields_to_update[] = "status = ?"; $params[] = $data['status']; $types .= "s";
+        }
+
+        $project_table_updated = false;
+        if (!empty($fields_to_update)) {
+            $fields_to_update[] = "updated_at = NOW()";
+            $sql_update_project_table = "UPDATE projects SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+            $current_params_for_project = $params;
+            $current_params_for_project[] = $project_id;
+            $current_types_for_project = $types . "i";
+
+            $stmt_update_project_table = $conn->prepare($sql_update_project_table);
+            if ($stmt_update_project_table === false) {
+                throw new Exception('Failed to prepare project table update statement: ' . $conn->error);
+            }
+            if (strlen($current_types_for_project) !== count($current_params_for_project)){
+                 throw new Exception('Param count mismatch for projects table update. Types: '.$current_types_for_project.' Params: '.count($current_params_for_project));
+            }
+             if (!empty($current_types_for_project)) { // Check if there are params to bind
+                $stmt_update_project_table->bind_param($current_types_for_project, ...$current_params_for_project);
+             }
+
+            if (!$stmt_update_project_table->execute()) {
+                throw new Exception('Failed to update project details in projects table: ' . $stmt_update_project_table->error);
+            }
+            if($stmt_update_project_table->affected_rows > 0) $project_table_updated = true;
+            $stmt_update_project_table->close();
+        }
+
+        $skills_table_updated = false;
+        if (isset($data['skill_ids']) && is_array($data['skill_ids'])) {
+            $skill_ids_for_project = array_map('intval', $data['skill_ids']);
+
+            $stmt_delete_proj_skills = $conn->prepare("DELETE FROM project_skills WHERE project_id = ?");
+            if (!$stmt_delete_proj_skills) { throw new Exception('Failed to prepare deleting project skills. ' . $conn->error); }
+            $stmt_delete_proj_skills->bind_param("i", $project_id);
+            if (!$stmt_delete_proj_skills->execute()) { throw new Exception('Failed to delete project skills. ' . $stmt_delete_proj_skills->error); }
+            // We consider skills updated if the key 'skill_ids' is present, even if it's empty (means remove all)
+            // or if rows were deleted or inserted.
+            if ($stmt_delete_proj_skills->affected_rows > 0 || !empty($skill_ids_for_project)) {
+                $skills_table_updated = true;
+            }
+            $stmt_delete_proj_skills->close();
+
+            if (!empty($skill_ids_for_project)) {
+                $proj_skill_placeholders = implode(',', array_fill(0, count($skill_ids_for_project), '?'));
+                $stmt_check_valid_proj_skills = $conn->prepare("SELECT id FROM skills WHERE id IN ($proj_skill_placeholders)");
+                if (!$stmt_check_valid_proj_skills) { throw new Exception('Failed to prepare project skill ID validation. ' . $conn->error); }
+                $proj_skill_types = str_repeat('i', count($skill_ids_for_project));
+                $stmt_check_valid_proj_skills->bind_param($proj_skill_types, ...$skill_ids_for_project);
+                if (!$stmt_check_valid_proj_skills->execute()) { throw new Exception('Server error executing project skill ID validation. ' . $stmt_check_valid_proj_skills->error); }
+                $valid_proj_skill_result = $stmt_check_valid_proj_skills->get_result();
+                if ($valid_proj_skill_result->num_rows !== count($skill_ids_for_project)) {
+                    throw new Exception('One or more provided skill IDs for project are invalid.');
+                }
+                $stmt_check_valid_proj_skills->close();
+
+                $sql_insert_project_skill = "INSERT INTO project_skills (project_id, skill_id) VALUES (?, ?)";
+                $stmt_insert_proj_skill = $conn->prepare($sql_insert_project_skill);
+                if (!$stmt_insert_proj_skill) { throw new Exception('Failed to prepare adding project skill. ' . $conn->error); }
+
+                $inserted_skill_rows = 0;
+                foreach ($skill_ids_for_project as $skill_id_proj) {
+                    $stmt_insert_proj_skill->bind_param("ii", $project_id, $skill_id_proj);
+                    if (!$stmt_insert_proj_skill->execute()) {
+                        throw new Exception('Failed to add skill ID ' . $skill_id_proj . ' for project. ' . $stmt_insert_proj_skill->error);
+                    }
+                    if ($stmt_insert_proj_skill->affected_rows > 0) $inserted_skill_rows++;
+                }
+                $stmt_insert_proj_skill->close();
+                if ($inserted_skill_rows > 0) $skills_table_updated = true;
+            }
+        }
+
+        if (!$project_table_updated && !$skills_table_updated && !(isset($data['skill_ids']) && empty($data['skill_ids']))) {
+            // This condition means no project fields were in $data to update (so $fields_to_update was empty)
+            // AND skill_ids was not provided at all (so no attempt to clear/update skills)
+            // OR skill_ids was provided but was identical to existing skills (not easily checkable here without fetching old skills)
+            // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+            // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+            if (empty($fields_to_update) && !isset($data['skill_ids'])) {
+                 $conn->rollback(); // Nothing to commit
+                 send_json_response(200, ['message' => 'No update data provided for project or skills.']);
+            }
+        }
+
+        $conn->commit();
+        send_json_response(200, ['message' => 'Project details and/or skills updated successfully.']);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        if (strpos($e->getMessage(), 'Duplicate entry') !== false || strpos($e->getMessage(), 'already exists') !== false) {
+            send_json_response(409, ['error' => $e->getMessage()]);
+        } elseif (strpos($e->getMessage(), 'not found') !== false) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response(500, ['error' => 'Failed to update project: ' . $e->getMessage()]);
+        }
+    }
+}
+// END MODIFIED: update_project
+elseif ($action === 'delete_project' && $method === 'DELETE') {
+    $authenticated_user = require_authentication($conn); // 1. Require Authentication
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for deletion.']);
+    }
+
+    // 2. Authorize User: Fetch project's client_id first
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) {
+        send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check for delete. ' . $conn->error]);
+    }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) {
+        send_json_response(500, ['error' => 'Server error: Failed to execute ownership check for delete. ' . $stmt_check_owner->error]);
+    }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found, cannot delete.']);
+    }
+    $project_data = $result_owner_check->fetch_assoc();
+    $project_client_id = (int)$project_data['client_id'];
+    $stmt_check_owner->close();
+
+    // Authorization check
+    if ($user_role !== 'admin' && $project_client_id !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this project.']);
+    }
+
+    // Proceed with delete logic
+    // TODO: Consider what happens to related data (e.g., applications, job cards) when a project is deleted.
+    // For now, it's a direct delete. Future enhancements might involve soft deletes or cascading deletes/archiving.
+
+    $stmt = $conn->prepare("DELETE FROM projects WHERE id = ?");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("i", $project_id);
+
+    if ($stmt->execute()) {
+        if ($stmt->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Project deleted successfully.']);
+        } else {
+            // This case should ideally not be reached if the ownership check found the project.
+            // If it is, it means the project was deleted between the check and this operation.
+            send_json_response(404, ['message' => 'Project not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete project: ' . $stmt->error]);
+    }
+    $stmt->close();
+} else {
+    // No action or invalid action/method combination
+    send_json_response(404, ['error' => 'API endpoint not found or invalid request.']);
+}
+
+// Close the database connection
+$conn->close();
+?>
+
+// NEW: Log Time for a Job Card
+elseif ($action === 'log_time' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_logging_time = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $job_card_id = isset($data['job_card_id']) ? (int)$data['job_card_id'] : null;
+    $start_time_str = $data['start_time'] ?? null;
+    $end_time_str = $data['end_time'] ?? null;
+    $notes = $data['notes'] ?? null;
+
+    if (!$job_card_id || empty($start_time_str) || empty($end_time_str)) {
+        send_json_response(400, ['error' => 'Job Card ID, start time, and end time are required.']);
+    }
+
+    // Validate and parse timestamps
+    try {
+        $start_time_ts = new DateTime($start_time_str);
+        $end_time_ts = new DateTime($end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid start or end time format. Please use ISO8601 format (e.g., YYYY-MM-DDTHH:MM:SSZ).']);
+    }
+
+    if ($start_time_ts >= $end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+
+    // Calculate duration in minutes
+    $duration_minutes = ($end_time_ts->getTimestamp() - $start_time_ts->getTimestamp()) / 60;
+    if ($duration_minutes <= 0) { // Should be caught by above, but as safety
+        send_json_response(400, ['error' => 'Duration must be positive. Ensure end time is after start time.']);
+    }
+
+
+    // Authorization: Check if user is allowed to log time for this job card
+    $stmt_auth_jc = $conn->prepare(
+        "SELECT jc.assigned_freelancer_id AS job_card_assignee,
+                p.client_id AS project_client_id,
+                p.freelancer_id AS project_main_freelancer_id,
+                jc_proj.status AS project_status
+         FROM job_cards jc
+         JOIN projects p ON jc.project_id = p.id
+         JOIN projects jc_proj ON jc.project_id = jc_proj.id
+         WHERE jc.id = ?"
+    );
+    if (!$stmt_auth_jc) { send_json_response(500, ['error' => 'Server error preparing time log authorization check. ' . $conn->error]); }
+    $stmt_auth_jc->bind_param("i", $job_card_id);
+    if (!$stmt_auth_jc->execute()) { send_json_response(500, ['error' => 'Server error executing time log authorization check. ' . $stmt_auth_jc->error]); }
+    $result_auth_jc = $stmt_auth_jc->get_result();
+    if ($result_auth_jc->num_rows === 0) {
+        send_json_response(404, ['error' => 'Job Card not found.']);
+    }
+    $jc_auth_details = $result_auth_jc->fetch_assoc();
+    $project_client_id = (int)$jc_auth_details['project_client_id'];
+    $job_card_assignee_id = $jc_auth_details['job_card_assignee'] ? (int)$jc_auth_details['job_card_assignee'] : null;
+    $project_main_freelancer_id = $jc_auth_details['project_main_freelancer_id'] ? (int)$jc_auth_details['project_main_freelancer_id'] : null;
+    $project_status = $jc_auth_details['project_status'];
+    $stmt_auth_jc->close();
+
+    // Project must be in progress to log time
+    if ($project_status !== 'in_progress' && $project_status !== 'assigned' && $project_status !== 'active') { // 'active' if used
+        send_json_response(403, ['error' => "Time cannot be logged for this job card as the project status is '{$project_status}'. Project must be active."]);
+    }
+
+    $is_authorized_to_log = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_log = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_logging_time) {
+        // Clients typically don't log time this way, but could be for record keeping if feature exists.
+        // For now, let's restrict clients from logging time directly unless specific requirements arise.
+        // send_json_response(403, ['error' => 'Clients cannot directly log time for job cards.']);
+        // OR, allow it: $is_authorized_to_log = true; (Let's assume not for now)
+    } elseif ($user_role === 'freelancer') {
+        if ($job_card_assignee_id === $user_id_logging_time || $project_main_freelancer_id === $user_id_logging_time) {
+            $is_authorized_to_log = true;
+        }
+    }
+
+    if (!$is_authorized_to_log) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to log time for this job card.']);
+    }
+
+    // Insert new time log
+    $sql_insert_log = "INSERT INTO time_logs (job_card_id, user_id, start_time, end_time, duration_minutes, notes)
+                       VALUES (?, ?, ?, ?, ?, ?)";
+    $stmt_insert_log = $conn->prepare($sql_insert_log);
+    if (!$stmt_insert_log) {
+        send_json_response(500, ['error' => 'Server error preparing time log creation. ' . $conn->error]);
+    }
+
+    $formatted_start_time = $start_time_ts->format('Y-m-d H:i:s');
+    $formatted_end_time = $end_time_ts->format('Y-m-d H:i:s');
+
+    $stmt_insert_log->bind_param("iissis",
+        $job_card_id,
+        $user_id_logging_time,
+        $formatted_start_time,
+        $formatted_end_time,
+        $duration_minutes,
+        $notes
+    );
+
+    if ($stmt_insert_log->execute()) {
+        $new_time_log_id = $stmt_insert_log->insert_id;
+        send_json_response(201, [
+            'message' => 'Time logged successfully.',
+            'time_log_id' => $new_time_log_id,
+            'duration_minutes' => $duration_minutes
+        ]);
+    } else {
+        send_json_response(500, ['error' => 'Failed to log time. ' . $stmt_insert_log->error]);
+    }
+    $stmt_insert_log->close();
+
+} // END NEW: Log Time for a Job Card
+
+// NEW: Get All Time Logs for a Specific Project
+elseif ($action === 'get_project_time_logs' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['project_id']) ? (int)$_GET['project_id'] : null;
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required to fetch all project time logs.']);
+    }
+
+    // Authorization: Check if user is allowed to view all time logs for this project
+    $stmt_auth_proj_logs = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if (!$stmt_auth_proj_logs) { send_json_response(500, ['error' => 'Server error preparing project ownership check for logs.']); }
+    $stmt_auth_proj_logs->bind_param("i", $project_id);
+    if (!$stmt_auth_proj_logs->execute()) { send_json_response(500, ['error' => 'Server error executing project ownership check for logs.']); }
+    $result_auth_proj_logs = $stmt_auth_proj_logs->get_result();
+    if ($result_auth_proj_logs->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found.']);
+    }
+    $project_auth_details = $result_auth_proj_logs->fetch_assoc();
+    $project_client_id = (int)$project_auth_details['client_id'];
+    $stmt_auth_proj_logs->close();
+
+    $is_authorized_to_view_project_logs = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_view_project_logs = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_requesting) {
+        $is_authorized_to_view_project_logs = true;
+    }
+    // Freelancers are generally not authorized to see *all* project logs via this endpoint.
+
+    if (!$is_authorized_to_view_project_logs) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to view all time logs for this project.']);
+    }
+
+    // Fetch all time logs for the project
+    $sql_get_all_logs = "SELECT
+                            tl.id, tl.job_card_id, tl.user_id,
+                            tl.start_time, tl.end_time, tl.duration_minutes, tl.notes,
+                            tl.created_at, tl.updated_at,
+                            u.username AS logger_username,
+                            jc.title AS job_card_title
+                         FROM time_logs tl
+                         JOIN users u ON tl.user_id = u.id
+                         JOIN job_cards jc ON tl.job_card_id = jc.id
+                         WHERE jc.project_id = ?
+                         ORDER BY tl.start_time DESC";
+
+    $stmt_get_all_logs = $conn->prepare($sql_get_all_logs);
+    if ($stmt_get_all_logs === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for fetching project time logs: ' . $conn->error]);
+    }
+    $stmt_get_all_logs->bind_param("i", $project_id);
+
+    if (!$stmt_get_all_logs->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for fetching project time logs: ' . $stmt_get_all_logs->error]);
+    }
+
+    $result_all_logs = $stmt_get_all_logs->get_result();
+    $project_time_logs_list = [];
+    while ($row = $result_all_logs->fetch_assoc()) {
+        $row['duration_minutes'] = (int)$row['duration_minutes'];
+        $project_time_logs_list[] = $row;
+    }
+    $stmt_get_all_logs->close();
+
+    send_json_response(200, $project_time_logs_list);
+
+} // END NEW: Get All Time Logs for a Specific Project
+
+// NEW: Update a Specific Time Log
+elseif ($action === 'update_time_log' && ($method === 'PUT' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for update.']);
+    }
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (empty($data)) {
+        send_json_response(400, ['error' => 'No data provided for update or invalid JSON.']);
+    }
+
+    // Fetch original time log to check ownership and get existing values
+    $stmt_fetch_log = $conn->prepare("SELECT user_id, start_time, end_time FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log) { send_json_response(500, ['error' => 'Server error preparing original log fetch.']); }
+    $stmt_fetch_log->bind_param("i", $time_log_id);
+    if (!$stmt_fetch_log->execute()) { send_json_response(500, ['error' => 'Server error executing original log fetch.']); }
+    $result_fetch_log = $stmt_fetch_log->get_result();
+    if ($result_fetch_log->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $original_log_data = $result_fetch_log->fetch_assoc();
+    $log_owner_id = (int)$original_log_data['user_id'];
+    $stmt_fetch_log->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this time log.']);
+    }
+
+    // Determine new start and end times
+    $new_start_time_str = $data['start_time'] ?? $original_log_data['start_time'];
+    $new_end_time_str = $data['end_time'] ?? $original_log_data['end_time'];
+
+    try {
+        $new_start_time_ts = new DateTime($new_start_time_str);
+        $new_end_time_ts = new DateTime($new_end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid new start or end time format. Please use ISO8601.']);
+    }
+
+    if ($new_start_time_ts >= $new_end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+    $new_duration_minutes = ($new_end_time_ts->getTimestamp() - $new_start_time_ts->getTimestamp()) / 60;
+    if ($new_duration_minutes <= 0) {
+        send_json_response(400, ['error' => 'Calculated duration must be positive.']);
+    }
+
+    $formatted_new_start_time = $new_start_time_ts->format('Y-m-d H:i:s');
+    $formatted_new_end_time = $new_end_time_ts->format('Y-m-d H:i:s');
+
+    // Build the SQL query dynamically for fields other than times/duration
+    $fields_to_update = [];
+    $params = [];
+    $types = "";
+
+    // Always update times and duration as they are derived or taken from original
+    $fields_to_update[] = "start_time = ?"; $params[] = $formatted_new_start_time; $types .= "s";
+    $fields_to_update[] = "end_time = ?"; $params[] = $formatted_new_end_time; $types .= "s";
+    $fields_to_update[] = "duration_minutes = ?"; $params[] = $new_duration_minutes; $types .= "i";
+
+    if (array_key_exists('notes', $data)) { // Allow setting notes to null or empty string
+        $fields_to_update[] = "notes = ?"; $params[] = $data['notes']; $types .= "s";
+    }
+
+    if (count($fields_to_update) === 3 && !array_key_exists('notes', $data)) {
+        // Only time fields were present, but maybe notes was intended to be cleared but not sent
+        // Or, if only notes is sent, time fields are based on original log.
+        // This logic means if only notes is sent, times/duration are not re-saved unless they were also sent.
+        // For simplicity, if any of start_time, end_time, or notes is in $data, we update.
+        // If $data only had notes, then $new_start_time_str and $new_end_time_str would be original values.
+        // If $data was empty, it's caught earlier.
+        // If $data had only start_time, end_time would be original, and duration calculated.
+        // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+        // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+    }
+
+    $fields_to_update[] = "updated_at = NOW()";
+
+    $sql_update_log = "UPDATE time_logs SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+    $params[] = $time_log_id;
+    $types .= "i";
+
+    $stmt_update_log = $conn->prepare($sql_update_log);
+    if ($stmt_update_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare time log update statement: ' . $conn->error]);
+    }
+    $stmt_update_log->bind_param($types, ...$params);
+
+    if ($stmt_update_log->execute()) {
+        if ($stmt_update_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log updated successfully.']);
+        } else {
+            send_json_response(200, ['message' => 'Time log data was the same or log not found; no changes made.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to update time log: ' . $stmt_update_log->error]);
+    }
+    $stmt_update_log->close();
+
+} // END NEW: Update a Specific Time Log
+
+// NEW: Delete a Specific Time Log
+elseif ($action === 'delete_time_log' && ($method === 'DELETE' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = null;
+    if ($method === 'DELETE') {
+        $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    } elseif ($method === 'POST') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $time_log_id = isset($data['time_log_id']) ? (int)$data['time_log_id'] : (isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null);
+    }
+
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for deletion.']);
+    }
+
+    // Fetch original time log to check ownership
+    $stmt_fetch_log_owner = $conn->prepare("SELECT user_id FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log_owner) { send_json_response(500, ['error' => 'Server error preparing log ownership check.']); }
+    $stmt_fetch_log_owner->bind_param("i", $time_log_id);
+    if (!$stmt_fetch_log_owner->execute()) { send_json_response(500, ['error' => 'Server error executing log ownership check.']); }
+    $result_fetch_log_owner = $stmt_fetch_log_owner->get_result();
+    if ($result_fetch_log_owner->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $log_owner_data = $result_fetch_log_owner->fetch_assoc();
+    $log_owner_id = (int)$log_owner_data['user_id'];
+    $stmt_fetch_log_owner->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this time log.']);
+    }
+
+    // Proceed with delete logic
+    $stmt_delete_log = $conn->prepare("DELETE FROM time_logs WHERE id = ?");
+    if ($stmt_delete_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement for time log: ' . $conn->error]);
+    }
+    $stmt_delete_log->bind_param("i", $time_log_id);
+
+    if ($stmt_delete_log->execute()) {
+        if ($stmt_delete_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log deleted successfully.']);
+        } else {
+            // This case implies the log was not found, though the check above should catch it.
+            send_json_response(404, ['message' => 'Time log not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete time log: ' . $stmt_delete_log->error]);
+    }
+    $stmt_delete_log->close();
+
+} // END NEW: Delete a Specific Time Log
+
+// NEW: Find or Create 1-on-1 Conversation
+elseif ($action === 'find_or_create_conversation' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $recipient_user_id = isset($data['recipient_user_id']) ? (int)$data['recipient_user_id'] : null;
+
+    if (!$recipient_user_id) {
+        send_json_response(400, ['error' => 'Recipient user ID is required.']);
+    }
+
+    if ($recipient_user_id === $current_user_id) {
+        send_json_response(400, ['error' => 'Cannot create a conversation with yourself.']);
+    }
+
+    // Check if recipient user exists
+    $stmt_user_check = $conn->prepare("SELECT id FROM users WHERE id = ?");
+    if (!$stmt_user_check) { send_json_response(500, ['error' => 'Server error preparing recipient check.']); }
+    $stmt_user_check->bind_param("i", $recipient_user_id);
+    if (!$stmt_user_check->execute()) { send_json_response(500, ['error' => 'Server error executing recipient check.']); }
+    if ($stmt_user_check->get_result()->num_rows === 0) {
+        send_json_response(404, ['error' => 'Recipient user not found.']);
+    }
+    $stmt_user_check->close();
+
+    // Check for existing 1-on-1 conversation
+    // This query finds conversations involving BOTH users, and only those two users.
+    $sql_find_convo = "SELECT cp1.conversation_id
+                       FROM conversation_participants cp1
+                       JOIN conversation_participants cp2 ON cp1.conversation_id = cp2.conversation_id
+                       WHERE cp1.user_id = ? AND cp2.user_id = ?
+                       AND (SELECT COUNT(*) FROM conversation_participants cp_count WHERE cp_count.conversation_id = cp1.conversation_id) = 2";
+
+    $stmt_find = $conn->prepare($sql_find_convo);
+    if (!$stmt_find) { send_json_response(500, ['error' => 'Server error preparing conversation search. ' . $conn->error]); }
+    // Bind params carefully for the two user IDs
+    $stmt_find->bind_param("ii", $current_user_id, $recipient_user_id);
+
+
+    if (!$stmt_find->execute()) { send_json_response(500, ['error' => 'Server error executing conversation search. ' . $stmt_find->error]); }
+    $result_find = $stmt_find->get_result();
+
+    if ($existing_convo = $result_find->fetch_assoc()) {
+        $stmt_find->close();
+        send_json_response(200, ['conversation_id' => (int)$existing_convo['conversation_id'], 'existed' => true]);
+    } else {
+        $stmt_find->close();
+        // No existing 1-on-1 conversation found, create a new one
+        $conn->begin_transaction();
+        try {
+            // 1. Create conversation
+            // last_message_at can be set to NOW() or remain NULL initially
+            $stmt_create_convo = $conn->prepare("INSERT INTO conversations (last_message_at) VALUES (NOW())");
+            if (!$stmt_create_convo) { throw new Exception('Failed to prepare conversation creation. ' . $conn->error); }
+            if (!$stmt_create_convo->execute()) { throw new Exception('Failed to execute conversation creation. ' . $stmt_create_convo->error); }
+            $new_conversation_id = $conn->insert_id;
+            $stmt_create_convo->close();
+
+            if (!$new_conversation_id) { throw new Exception('Failed to get new conversation ID.'); }
+
+            // 2. Add participants
+            $stmt_add_participant = $conn->prepare("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)");
+            if (!$stmt_add_participant) { throw new Exception('Failed to prepare participant insertion. ' . $conn->error); }
+
+            // Add current user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $current_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add current user to conversation. ' . $stmt_add_participant->error); }
+
+            // Add recipient user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $recipient_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add recipient user to conversation. ' . $stmt_add_participant->error); }
+            $stmt_add_participant->close();
+
+            $conn->commit();
+            send_json_response(201, ['conversation_id' => $new_conversation_id, 'existed' => false]);
+
+        } catch (Exception $e) {
+            $conn->rollback();
+            send_json_response(500, ['error' => 'Failed to create conversation: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Find or Create 1-on-1 Conversation
+
+// NEW: Get Messages for a Conversation
+elseif ($action === 'get_conversation_messages' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $conversation_id = isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : null;
+    if (!$conversation_id) {
+        send_json_response(400, ['error' => 'Conversation ID is required.']);
+    }
+
+    // Authorize: Check if current user is part of this conversation
+    $stmt_auth_convo = $conn->prepare(
+        "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+         FROM conversations c
+         LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+         WHERE c.id = ?"
+    );
+    if (!$stmt_auth_convo) { send_json_response(500, ['error' => 'Server error preparing conversation participation check.']); }
+    $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+    if (!$stmt_auth_convo->execute()) { send_json_response(500, ['error' => 'Server error executing conversation participation check.']); }
+    $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+    $stmt_auth_convo->close();
+
+    if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+        send_json_response(404, ['error' => 'Conversation not found.']);
+    }
+    if (!$result_auth_convo['participant_exists']) {
+        send_json_response(403, ['error' => 'Forbidden: You are not a participant in this conversation.']);
+    }
+
+    // Pagination parameters
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
+    $before_message_id = isset($_GET['before_message_id']) ? (int)$_GET['before_message_id'] : null;
+    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0; // Alternative: offset based pagination
+
+    $sql_messages = "SELECT
+                        m.id AS message_id, m.conversation_id, m.sender_id, m.content,
+                        m.created_at, m.read_at,
+                        u.username AS sender_username
+                     FROM messages m
+                     JOIN users u ON m.sender_id = u.id
+                     WHERE m.conversation_id = ?";
+
+    $params = [$conversation_id];
+    $types = "i";
+
+    if ($before_message_id) {
+        // Assumes IDs are auto-incrementing and somewhat time-ordered for this simple pagination
+        // A more robust cursor pagination would use created_at + id
+        $sql_messages .= " AND m.id < ?";
+        $params[] = $before_message_id;
+        $types .= "i";
+    }
+
+    $sql_messages .= " ORDER BY m.created_at DESC, m.id DESC"; // Get newest first
+    $sql_messages .= " LIMIT ?";
+    $params[] = $limit;
+    $types .= "i";
+
+    // If using offset pagination instead of cursor (before_message_id):
+    // $sql_messages .= " LIMIT ? OFFSET ?";
+    // $params[] = $limit; $params[] = $offset; $types .= "ii";
+
+
+    $stmt_messages = $conn->prepare($sql_messages);
+    if (!$stmt_messages) {
+        send_json_response(500, ['error' => 'Server error preparing message fetch: ' . $conn->error]);
+    }
+    $stmt_messages->bind_param($types, ...$params);
+
+    if (!$stmt_messages->execute()) {
+        send_json_response(500, ['error' => 'Server error executing message fetch: ' . $stmt_messages->error]);
+    }
+    $result_messages = $stmt_messages->get_result();
+
+    $messages_list = [];
+    while ($row = $result_messages->fetch_assoc()) {
+        $messages_list[] = [
+            'id' => (int)$row['message_id'], // message_id aliased as id for frontend typically
+            'conversation_id' => (int)$row['conversation_id'],
+            'sender_id' => (int)$row['sender_id'],
+            'sender_username' => $row['sender_username'],
+            'content' => $row['content'],
+            'created_at' => $row['created_at'], // ISO8601 format from DB
+            'read_at' => $row['read_at'] // ISO8601 format from DB or null
+        ];
+    }
+    $stmt_messages->close();
+
+    // Messages are fetched newest first, client might want to reverse for display
+    send_json_response(200, array_reverse($messages_list)); // Reverse to get oldest of the batch first for typical chat UI
+
+} // END NEW: Get Messages for a Conversation
+
+// NEW: Send Message to a Conversation
+elseif ($action === 'send_message' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $sender_id = (int)$authenticated_user['id'];
+    $sender_username = $authenticated_user['username']; // For response
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $conversation_id = isset($data['conversation_id']) ? (int)$data['conversation_id'] : null;
+    $content = $data['content'] ?? null;
+
+    if (!$conversation_id || $content === null || trim($content) === '') { // Content can be "0", so check for null or empty string explicitly
+        send_json_response(400, ['error' => 'Conversation ID and message content are required.']);
+    }
+
+    $content = trim($content); // Trim content before length check and storage
+    if (mb_strlen($content) > 10000) { // Basic content length validation (e.g. 10k chars)
+        send_json_response(400, ['error' => 'Message content is too long.']);
+    }
+
+    // Start transaction
+    $conn->begin_transaction();
+
+    try {
+        // 1. Authorization: Check if current user is part of this conversation AND conversation exists
+        $stmt_auth_convo = $conn->prepare(
+            "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+             FROM conversations c
+             LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+             WHERE c.id = ?"
+        );
+        if (!$stmt_auth_convo) { throw new Exception('Server error preparing conversation participation check. ' . $conn->error); }
+        $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+        if (!$stmt_auth_convo->execute()) { throw new Exception('Server error executing conversation participation check. ' . $stmt_auth_convo->error); }
+        $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+        $stmt_auth_convo->close();
+
+        if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+            throw new Exception('Conversation not found.', 404);
+        }
+        if (!$result_auth_convo['participant_exists']) {
+            throw new Exception('Forbidden: You are not a participant in this conversation.', 403);
+        }
+
+        // 2. Insert the new message
+        $current_timestamp_mysql = date('Y-m-d H:i:s'); // For consistent timestamp
+        $stmt_insert_message = $conn->prepare(
+            "INSERT INTO messages (conversation_id, sender_id, content, created_at)
+             VALUES (?, ?, ?, ?)"
+        );
+        if (!$stmt_insert_message) { throw new Exception('Server error preparing message insertion. ' . $conn->error); }
+        $stmt_insert_message->bind_param("iiss", $conversation_id, $sender_id, $content, $current_timestamp_mysql);
+        if (!$stmt_insert_message->execute()) { throw new Exception('Server error executing message insertion. ' . $stmt_insert_message->error); }
+        $new_message_id = $conn->insert_id;
+        $stmt_insert_message->close();
+
+        if (!$new_message_id) {
+            throw new Exception('Failed to create message or get new message ID.');
+        }
+
+        // 3. Update last_message_at in conversations table
+        $stmt_update_convo = $conn->prepare("UPDATE conversations SET last_message_at = ? WHERE id = ?");
+        if (!$stmt_update_convo) { throw new Exception('Server error preparing conversation update. ' . $conn->error); }
+        $stmt_update_convo->bind_param("si", $current_timestamp_mysql, $conversation_id);
+        if (!$stmt_update_convo->execute()) { throw new Exception('Server error executing conversation update. ' . $stmt_update_convo->error); }
+        $stmt_update_convo->close();
+
+        // Commit transaction
+        $conn->commit();
+
+        // Prepare and send response
+        $new_message_data = [
+            'id' => $new_message_id,
+            'conversation_id' => $conversation_id,
+            'sender_id' => $sender_id,
+            'sender_username' => $sender_username, // Added for immediate use by frontend
+            'content' => $content,
+            'created_at' => $current_timestamp_mysql,
+            'read_at' => null // New messages are unread by default for others
+        ];
+        send_json_response(201, $new_message_data);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        $error_code = $e->getCode() >= 400 && $e->getCode() < 500 ? $e->getCode() : 500; // Use specific client error codes if set
+        if ($error_code === 403) {
+            send_json_response(403, ['error' => $e->getMessage()]);
+        } elseif ($error_code === 404) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response($error_code, ['error' => 'Failed to send message: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Send Message to a Conversation
+
+// --- Projects API ---
+// MODIFIED: get_projects to handle single project fetch and join user tables
+elseif ($action === 'get_projects' && $method === 'GET') {
+    $project_id_filter = isset($_GET['id']) ? (int)$_GET['id'] : (isset($_GET['project_id']) ? (int)$_GET['project_id'] : null);
+
+    if ($project_id_filter !== null) {
+        // Fetch a single project by ID
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id
+                WHERE p.id = ?";
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for single project: ' . $conn->error]);
+        }
+        $stmt->bind_param("i", $project_id_filter);
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for single project: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        if ($project = $result->fetch_assoc()) {
+            if (isset($project['client_id'])) $project['client_id'] = (int)$project['client_id'];
+            if (isset($project['freelancer_id'])) $project['freelancer_id'] = $project['freelancer_id'] === null ? null : (int)$project['freelancer_id'];
+
+            // Fetch skills for the single project
+            $project['skills_required'] = [];
+            $stmt_skills_proj = $conn->prepare("SELECT s.id, s.name FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ? ORDER BY s.name ASC");
+            if ($stmt_skills_proj) {
+                $stmt_skills_proj->bind_param("i", $project_id_filter);
+                if ($stmt_skills_proj->execute()) {
+                    $result_skills_proj = $stmt_skills_proj->get_result();
+                    while ($skill_row_proj = $result_skills_proj->fetch_assoc()) {
+                        $project['skills_required'][] = ['id' => (int)$skill_row_proj['id'], 'name' => $skill_row_proj['name']];
+                    }
+                } else { error_log("Failed to execute skills fetch for single project: " . $stmt_skills_proj->error); }
+                $stmt_skills_proj->close();
+            } else { error_log("Failed to prepare skills fetch for single project: " . $conn->error); }
+
+            send_json_response(200, $project); // Return single project object
+        } else {
+            send_json_response(404, ['error' => 'Project not found.']);
+        }
+        $stmt->close();
+        // exit; // send_json_response includes exit
+    } else {
+        // Existing logic for fetching multiple projects with status filter
+        $status_filter = isset($_GET['status']) ? $_GET['status'] : 'open';
+
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id";
+        $params = [];
+        $types = "";
+
+        if ($status_filter) {
+            if ($status_filter !== 'all' && $status_filter !== '') {
+                 $sql .= " WHERE p.status = ?";
+                 $params[] = $status_filter;
+                 $types .= "s";
+            } else if ($status_filter === '') {
+                $sql .= " WHERE p.status = ?";
+                $params[] = 'open';
+                $types .= "s";
+            }
+        }
+        $sql .= " ORDER BY p.created_at DESC";
+
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for projects list: ' . $conn->error]);
+        }
+        if (!empty($types)) {
+            $stmt->bind_param($types, ...$params);
+        }
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for projects list: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        $projects = [];
+        while ($row = $result->fetch_assoc()) {
+            if (isset($row['client_id'])) $row['client_id'] = (int)$row['client_id'];
+            if (isset($row['freelancer_id'])) $row['freelancer_id'] = $row['freelancer_id'] === null ? null : (int)$row['freelancer_id'];
+            $projects[] = $row;
+        }
+        $stmt->close();
+        send_json_response(200, $projects);
+    }
+}
+// MODIFIED: Create Project with Admin client_id assignment
+elseif ($action === 'create_project' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $auth_user_id = (int)$authenticated_user['id'];
+    $auth_user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+
+    if (empty($data['title']) || empty($data['description'])) {
+        send_json_response(400, ['error' => 'Missing required fields: title, description.']);
+    }
+
+    $title = $data['title'];
+    $description = $data['description'];
+    $final_client_id = null;
+
+    // Determine client_id based on role and payload
+    if ($auth_user_role === 'admin') {
+        if (isset($data['client_id']) && !empty($data['client_id'])) {
+            $payload_client_id = (int)$data['client_id'];
+            // Validate this client_id
+            $stmt_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_client_check) { send_json_response(500, ['error' => 'Server error preparing client validation.']); }
+            $stmt_client_check->bind_param("i", $payload_client_id);
+            if (!$stmt_client_check->execute()) { send_json_response(500, ['error' => 'Server error executing client validation.']); }
+            $result_client_check = $stmt_client_check->get_result();
+            if ($result_client_check->num_rows === 0) {
+                send_json_response(404, ['error' => "Specified client_id '{$payload_client_id}' not found."]);
+            }
+            $client_to_assign = $result_client_check->fetch_assoc();
+            if ($client_to_assign['role'] !== 'client') {
+                send_json_response(400, ['error' => "User '{$payload_client_id}' is not a client. Project can only be assigned to a client user."]);
+            }
+            $stmt_client_check->close();
+            $final_client_id = $payload_client_id;
+        } else {
+            // Admin creating project for themselves (no client_id in payload)
+            $final_client_id = $auth_user_id;
+        }
+    } elseif ($auth_user_role === 'client') {
+        $final_client_id = $auth_user_id;
+    } else {
+        // Other roles (e.g. freelancer) are not allowed to create projects
+        send_json_response(403, ['error' => 'Forbidden: Your role does not have permission to create projects.']);
+    }
+
+    if ($final_client_id === null) { // Should be caught by role check, but as a safeguard
+        send_json_response(500, ['error' => 'Could not determine client for the project.']);
+    }
+
+    $freelancer_id = isset($data['freelancer_id']) && !empty($data['freelancer_id']) ? (int)$data['freelancer_id'] : null;
+    if ($freelancer_id !== null) { // Optional: Validate freelancer_id if provided
+        $stmt_f_check = $conn->prepare("SELECT role FROM users WHERE id = ?");
+        if (!$stmt_f_check) { send_json_response(500, ['error' => 'Server error: Freelancer validation prep failed.']);}
+        $stmt_f_check->bind_param("i", $freelancer_id);
+        if (!$stmt_f_check->execute()) { send_json_response(500, ['error' => 'Server error: Freelancer validation exec failed.']);}
+        $res_f_check = $stmt_f_check->get_result();
+        if ($res_f_check->num_rows === 0) { send_json_response(404, ['error' => 'Assigned freelancer not found.']); }
+        if ($res_f_check->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'Assigned user is not a freelancer.']);}
+        $stmt_f_check->close();
+    }
+
+    $status = $data['status'] ?? 'open'; // Default status, or from payload
+    $valid_project_statuses = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled']; // Extend as needed
+    if (!in_array($status, $valid_project_statuses)) {
+        send_json_response(400, ['error' => 'Invalid project status provided.']);
+    }
+
+
+    $stmt = $conn->prepare("INSERT INTO projects (title, description, client_id, freelancer_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for project creation: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("ssiis", $title, $description, $final_client_id, $freelancer_id, $status);
+
+    if ($stmt->execute()) {
+        $new_project_id_for_notification = $stmt->insert_id;
+        $current_project_status = $status; // $status variable from create_project scope
+
+        // Send response first, then notify
+        send_json_response(201, [
+            'message' => 'Project created successfully.',
+            'project_id' => $new_project_id_for_notification,
+            'client_id' => $final_client_id
+        ]);
+
+        if ($current_project_status === 'pending_approval' || $current_project_status === 'Pending Approval') { // Case consistency
+             create_admin_notification($conn, 'project_awaits_approval', 'project', $new_project_id_for_notification);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to create project: ' . $stmt->error]);
+    }
+    $stmt->close();
+}
+// END MODIFIED: Create Project
+// MODIFIED: update_project to allow admin client_id change and other enhancements
+elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST')) { // Allow POST too
+    $authenticated_user = require_authentication($conn);
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (!$project_id && isset($data['project_id_to_update'])) { // Use a distinct name to avoid conflict
+        $project_id = (int)$data['project_id_to_update'];
+    }
+
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for update.']);
+    }
+    // Remove project_id_to_update from $data if it exists, as it's not a table field
+    if (isset($data['project_id_to_update'])) {
+        unset($data['project_id_to_update']);
+    }
+    if (empty($data) && !isset($data['skill_ids'])) { // Check if $data is empty OR only skill_ids is set (which means no project table fields)
+        send_json_response(400, ['error' => 'Invalid JSON or no data provided for project table update. If only updating skills, ensure skill_ids is provided.']);
+    }
+
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) { send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check. ' . $conn->error]); }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) { send_json_response(500, ['error' => 'Server error: Failed to execute ownership check. ' . $stmt_check_owner->error]); }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) { send_json_response(404, ['error' => 'Project not found.']); }
+    $project_data_db = $result_owner_check->fetch_assoc();
+    $project_client_id_original = (int)$project_data_db['client_id'];
+    $stmt_check_owner->close();
+
+    if ($user_role !== 'admin' && $project_client_id_original !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this project.']);
+    }
+
+    $conn->begin_transaction();
+    try {
+        $fields_to_update = [];
+        $params = [];
+        $types = "";
+
+        if ($user_role === 'admin' && isset($data['client_id'])) {
+            $new_client_id = (int)$data['client_id'];
+            $stmt_new_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_new_client_check) { throw new Exception('Server error preparing new client validation.'); }
+            $stmt_new_client_check->bind_param("i", $new_client_id);
+            if (!$stmt_new_client_check->execute()) { throw new Exception('Server error executing new client validation.'); }
+            $result_new_client_check = $stmt_new_client_check->get_result();
+            if ($result_new_client_check->num_rows === 0) {
+                throw new Exception("New client_id '{$new_client_id}' not found.");
+            }
+            $new_client_data = $result_new_client_check->fetch_assoc();
+            if ($new_client_data['role'] !== 'client') {
+                throw new Exception("User '{$new_client_id}' is not a client. Project can only be assigned to a client user.");
+            }
+            $stmt_new_client_check->close();
+            $fields_to_update[] = "client_id = ?"; $params[] = $new_client_id; $types .= "i";
+        }
+
+        if (isset($data['title'])) {
+            $fields_to_update[] = "title = ?"; $params[] = $data['title']; $types .= "s";
+        }
+        if (isset($data['description'])) {
+            $fields_to_update[] = "description = ?"; $params[] = $data['description']; $types .= "s";
+        }
+        if (array_key_exists('freelancer_id', $data)) {
+            $assign_freelancer_id = $data['freelancer_id'] === null ? null : (int)$data['freelancer_id'];
+            if ($assign_freelancer_id !== null) {
+                $stmt_f_check_update = $conn->prepare("SELECT role FROM users WHERE id = ?");
+                if (!$stmt_f_check_update) { throw new Exception('Server error: Freelancer validation prep failed.');}
+                $stmt_f_check_update->bind_param("i", $assign_freelancer_id);
+                if (!$stmt_f_check_update->execute()) { throw new Exception('Server error: Freelancer validation exec failed.');}
+                $res_f_check_update = $stmt_f_check_update->get_result();
+                if ($res_f_check_update->num_rows === 0) { throw new Exception('Assigned freelancer for update not found.'); }
+                if ($res_f_check_update->fetch_assoc()['role'] !== 'freelancer') { throw new Exception('Assigned user for update is not a freelancer.');}
+                $stmt_f_check_update->close();
+            }
+            $fields_to_update[] = "freelancer_id = ?"; $params[] = $assign_freelancer_id; $types .= "i";
+        }
+        if (isset($data['status'])) {
+            $valid_project_statuses_update = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled', 'archived'];
+            if (!in_array($data['status'], $valid_project_statuses_update)) {
+                throw new Exception('Invalid project status for update.');
+            }
+            $fields_to_update[] = "status = ?"; $params[] = $data['status']; $types .= "s";
+        }
+
+        $project_table_updated = false;
+        if (!empty($fields_to_update)) {
+            $fields_to_update[] = "updated_at = NOW()";
+            $sql_update_project_table = "UPDATE projects SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+            $current_params_for_project = $params;
+            $current_params_for_project[] = $project_id;
+            $current_types_for_project = $types . "i";
+
+            $stmt_update_project_table = $conn->prepare($sql_update_project_table);
+            if ($stmt_update_project_table === false) {
+                throw new Exception('Failed to prepare project table update statement: ' . $conn->error);
+            }
+            if (strlen($current_types_for_project) !== count($current_params_for_project)){
+                 throw new Exception('Param count mismatch for projects table update. Types: '.$current_types_for_project.' Params: '.count($current_params_for_project));
+            }
+             if (!empty($current_types_for_project)) { // Check if there are params to bind
+                $stmt_update_project_table->bind_param($current_types_for_project, ...$current_params_for_project);
+             }
+
+            if (!$stmt_update_project_table->execute()) {
+                throw new Exception('Failed to update project details in projects table: ' . $stmt_update_project_table->error);
+            }
+            if($stmt_update_project_table->affected_rows > 0) $project_table_updated = true;
+            $stmt_update_project_table->close();
+        }
+
+        $skills_table_updated = false;
+        if (isset($data['skill_ids']) && is_array($data['skill_ids'])) {
+            $skill_ids_for_project = array_map('intval', $data['skill_ids']);
+
+            $stmt_delete_proj_skills = $conn->prepare("DELETE FROM project_skills WHERE project_id = ?");
+            if (!$stmt_delete_proj_skills) { throw new Exception('Failed to prepare deleting project skills. ' . $conn->error); }
+            $stmt_delete_proj_skills->bind_param("i", $project_id);
+            if (!$stmt_delete_proj_skills->execute()) { throw new Exception('Failed to delete project skills. ' . $stmt_delete_proj_skills->error); }
+            // We consider skills updated if the key 'skill_ids' is present, even if it's empty (means remove all)
+            // or if rows were deleted or inserted.
+            if ($stmt_delete_proj_skills->affected_rows > 0 || !empty($skill_ids_for_project)) {
+                $skills_table_updated = true;
+            }
+            $stmt_delete_proj_skills->close();
+
+            if (!empty($skill_ids_for_project)) {
+                $proj_skill_placeholders = implode(',', array_fill(0, count($skill_ids_for_project), '?'));
+                $stmt_check_valid_proj_skills = $conn->prepare("SELECT id FROM skills WHERE id IN ($proj_skill_placeholders)");
+                if (!$stmt_check_valid_proj_skills) { throw new Exception('Failed to prepare project skill ID validation. ' . $conn->error); }
+                $proj_skill_types = str_repeat('i', count($skill_ids_for_project));
+                $stmt_check_valid_proj_skills->bind_param($proj_skill_types, ...$skill_ids_for_project);
+                if (!$stmt_check_valid_proj_skills->execute()) { throw new Exception('Server error executing project skill ID validation. ' . $stmt_check_valid_proj_skills->error); }
+                $valid_proj_skill_result = $stmt_check_valid_proj_skills->get_result();
+                if ($valid_proj_skill_result->num_rows !== count($skill_ids_for_project)) {
+                    throw new Exception('One or more provided skill IDs for project are invalid.');
+                }
+                $stmt_check_valid_proj_skills->close();
+
+                $sql_insert_project_skill = "INSERT INTO project_skills (project_id, skill_id) VALUES (?, ?)";
+                $stmt_insert_proj_skill = $conn->prepare($sql_insert_project_skill);
+                if (!$stmt_insert_proj_skill) { throw new Exception('Failed to prepare adding project skill. ' . $conn->error); }
+
+                $inserted_skill_rows = 0;
+                foreach ($skill_ids_for_project as $skill_id_proj) {
+                    $stmt_insert_proj_skill->bind_param("ii", $project_id, $skill_id_proj);
+                    if (!$stmt_insert_proj_skill->execute()) {
+                        throw new Exception('Failed to add skill ID ' . $skill_id_proj . ' for project. ' . $stmt_insert_proj_skill->error);
+                    }
+                    if ($stmt_insert_proj_skill->affected_rows > 0) $inserted_skill_rows++;
+                }
+                $stmt_insert_proj_skill->close();
+                if ($inserted_skill_rows > 0) $skills_table_updated = true;
+            }
+        }
+
+        if (!$project_table_updated && !$skills_table_updated && !(isset($data['skill_ids']) && empty($data['skill_ids']))) {
+            // This condition means no project fields were in $data to update (so $fields_to_update was empty)
+            // AND skill_ids was not provided at all (so no attempt to clear/update skills)
+            // OR skill_ids was provided but was identical to existing skills (not easily checkable here without fetching old skills)
+            // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+            // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+            if (empty($fields_to_update) && !isset($data['skill_ids'])) {
+                 $conn->rollback(); // Nothing to commit
+                 send_json_response(200, ['message' => 'No update data provided for project or skills.']);
+            }
+        }
+
+        $conn->commit();
+        send_json_response(200, ['message' => 'Project details and/or skills updated successfully.']);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        if (strpos($e->getMessage(), 'Duplicate entry') !== false || strpos($e->getMessage(), 'already exists') !== false) {
+            send_json_response(409, ['error' => $e->getMessage()]);
+        } elseif (strpos($e->getMessage(), 'not found') !== false) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response(500, ['error' => 'Failed to update project: ' . $e->getMessage()]);
+        }
+    }
+}
+// END MODIFIED: update_project
+elseif ($action === 'delete_project' && $method === 'DELETE') {
+    $authenticated_user = require_authentication($conn); // 1. Require Authentication
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for deletion.']);
+    }
+
+    // 2. Authorize User: Fetch project's client_id first
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) {
+        send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check for delete. ' . $conn->error]);
+    }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) {
+        send_json_response(500, ['error' => 'Server error: Failed to execute ownership check for delete. ' . $stmt_check_owner->error]);
+    }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found, cannot delete.']);
+    }
+    $project_data = $result_owner_check->fetch_assoc();
+    $project_client_id = (int)$project_data['client_id'];
+    $stmt_check_owner->close();
+
+    // Authorization check
+    if ($user_role !== 'admin' && $project_client_id !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this project.']);
+    }
+
+    // Proceed with delete logic
+    // TODO: Consider what happens to related data (e.g., applications, job cards) when a project is deleted.
+    // For now, it's a direct delete. Future enhancements might involve soft deletes or cascading deletes/archiving.
+
+    $stmt = $conn->prepare("DELETE FROM projects WHERE id = ?");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("i", $project_id);
+
+    if ($stmt->execute()) {
+        if ($stmt->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Project deleted successfully.']);
+        } else {
+            // This case should ideally not be reached if the ownership check found the project.
+            // If it is, it means the project was deleted between the check and this operation.
+            send_json_response(404, ['message' => 'Project not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete project: ' . $stmt->error]);
+    }
+    $stmt->close();
+} else {
+    // No action or invalid action/method combination
+    send_json_response(404, ['error' => 'API endpoint not found or invalid request.']);
+}
+
+// Close the database connection
+$conn->close();
+?>
+
+// NEW: Log Time for a Job Card
+elseif ($action === 'log_time' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_logging_time = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $job_card_id = isset($data['job_card_id']) ? (int)$data['job_card_id'] : null;
+    $start_time_str = $data['start_time'] ?? null;
+    $end_time_str = $data['end_time'] ?? null;
+    $notes = $data['notes'] ?? null;
+
+    if (!$job_card_id || empty($start_time_str) || empty($end_time_str)) {
+        send_json_response(400, ['error' => 'Job Card ID, start time, and end time are required.']);
+    }
+
+    // Validate and parse timestamps
+    try {
+        $start_time_ts = new DateTime($start_time_str);
+        $end_time_ts = new DateTime($end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid start or end time format. Please use ISO8601 format (e.g., YYYY-MM-DDTHH:MM:SSZ).']);
+    }
+
+    if ($start_time_ts >= $end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+
+    // Calculate duration in minutes
+    $duration_minutes = ($end_time_ts->getTimestamp() - $start_time_ts->getTimestamp()) / 60;
+    if ($duration_minutes <= 0) { // Should be caught by above, but as safety
+        send_json_response(400, ['error' => 'Duration must be positive. Ensure end time is after start time.']);
+    }
+
+
+    // Authorization: Check if user is allowed to log time for this job card
+    $stmt_auth_jc = $conn->prepare(
+        "SELECT jc.assigned_freelancer_id AS job_card_assignee,
+                p.client_id AS project_client_id,
+                p.freelancer_id AS project_main_freelancer_id,
+                jc_proj.status AS project_status
+         FROM job_cards jc
+         JOIN projects p ON jc.project_id = p.id
+         JOIN projects jc_proj ON jc.project_id = jc_proj.id
+         WHERE jc.id = ?"
+    );
+    if (!$stmt_auth_jc) { send_json_response(500, ['error' => 'Server error preparing time log authorization check. ' . $conn->error]); }
+    $stmt_auth_jc->bind_param("i", $job_card_id);
+    if (!$stmt_auth_jc->execute()) { send_json_response(500, ['error' => 'Server error executing time log authorization check. ' . $stmt_auth_jc->error]); }
+    $result_auth_jc = $stmt_auth_jc->get_result();
+    if ($result_auth_jc->num_rows === 0) {
+        send_json_response(404, ['error' => 'Job Card not found.']);
+    }
+    $jc_auth_details = $result_auth_jc->fetch_assoc();
+    $project_client_id = (int)$jc_auth_details['project_client_id'];
+    $job_card_assignee_id = $jc_auth_details['job_card_assignee'] ? (int)$jc_auth_details['job_card_assignee'] : null;
+    $project_main_freelancer_id = $jc_auth_details['project_main_freelancer_id'] ? (int)$jc_auth_details['project_main_freelancer_id'] : null;
+    $project_status = $jc_auth_details['project_status'];
+    $stmt_auth_jc->close();
+
+    // Project must be in progress to log time
+    if ($project_status !== 'in_progress' && $project_status !== 'assigned' && $project_status !== 'active') { // 'active' if used
+        send_json_response(403, ['error' => "Time cannot be logged for this job card as the project status is '{$project_status}'. Project must be active."]);
+    }
+
+    $is_authorized_to_log = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_log = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_logging_time) {
+        // Clients typically don't log time this way, but could be for record keeping if feature exists.
+        // For now, let's restrict clients from logging time directly unless specific requirements arise.
+        // send_json_response(403, ['error' => 'Clients cannot directly log time for job cards.']);
+        // OR, allow it: $is_authorized_to_log = true; (Let's assume not for now)
+    } elseif ($user_role === 'freelancer') {
+        if ($job_card_assignee_id === $user_id_logging_time || $project_main_freelancer_id === $user_id_logging_time) {
+            $is_authorized_to_log = true;
+        }
+    }
+
+    if (!$is_authorized_to_log) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to log time for this job card.']);
+    }
+
+    // Insert new time log
+    $sql_insert_log = "INSERT INTO time_logs (job_card_id, user_id, start_time, end_time, duration_minutes, notes)
+                       VALUES (?, ?, ?, ?, ?, ?)";
+    $stmt_insert_log = $conn->prepare($sql_insert_log);
+    if (!$stmt_insert_log) {
+        send_json_response(500, ['error' => 'Server error preparing time log creation. ' . $conn->error]);
+    }
+
+    $formatted_start_time = $start_time_ts->format('Y-m-d H:i:s');
+    $formatted_end_time = $end_time_ts->format('Y-m-d H:i:s');
+
+    $stmt_insert_log->bind_param("iissis",
+        $job_card_id,
+        $user_id_logging_time,
+        $formatted_start_time,
+        $formatted_end_time,
+        $duration_minutes,
+        $notes
+    );
+
+    if ($stmt_insert_log->execute()) {
+        $new_time_log_id = $stmt_insert_log->insert_id;
+        send_json_response(201, [
+            'message' => 'Time logged successfully.',
+            'time_log_id' => $new_time_log_id,
+            'duration_minutes' => $duration_minutes
+        ]);
+    } else {
+        send_json_response(500, ['error' => 'Failed to log time. ' . $stmt_insert_log->error]);
+    }
+    $stmt_insert_log->close();
+
+} // END NEW: Log Time for a Job Card
+
+// NEW: Get All Time Logs for a Specific Project
+elseif ($action === 'get_project_time_logs' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['project_id']) ? (int)$_GET['project_id'] : null;
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required to fetch all project time logs.']);
+    }
+
+    // Authorization: Check if user is allowed to view all time logs for this project
+    $stmt_auth_proj_logs = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if (!$stmt_auth_proj_logs) { send_json_response(500, ['error' => 'Server error preparing project ownership check for logs.']); }
+    $stmt_auth_proj_logs->bind_param("i", $project_id);
+    if (!$stmt_auth_proj_logs->execute()) { send_json_response(500, ['error' => 'Server error executing project ownership check for logs.']); }
+    $result_auth_proj_logs = $stmt_auth_proj_logs->get_result();
+    if ($result_auth_proj_logs->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found.']);
+    }
+    $project_auth_details = $result_auth_proj_logs->fetch_assoc();
+    $project_client_id = (int)$project_auth_details['client_id'];
+    $stmt_auth_proj_logs->close();
+
+    $is_authorized_to_view_project_logs = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_view_project_logs = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_requesting) {
+        $is_authorized_to_view_project_logs = true;
+    }
+    // Freelancers are generally not authorized to see *all* project logs via this endpoint.
+
+    if (!$is_authorized_to_view_project_logs) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to view all time logs for this project.']);
+    }
+
+    // Fetch all time logs for the project
+    $sql_get_all_logs = "SELECT
+                            tl.id, tl.job_card_id, tl.user_id,
+                            tl.start_time, tl.end_time, tl.duration_minutes, tl.notes,
+                            tl.created_at, tl.updated_at,
+                            u.username AS logger_username,
+                            jc.title AS job_card_title
+                         FROM time_logs tl
+                         JOIN users u ON tl.user_id = u.id
+                         JOIN job_cards jc ON tl.job_card_id = jc.id
+                         WHERE jc.project_id = ?
+                         ORDER BY tl.start_time DESC";
+
+    $stmt_get_all_logs = $conn->prepare($sql_get_all_logs);
+    if ($stmt_get_all_logs === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for fetching project time logs: ' . $conn->error]);
+    }
+    $stmt_get_all_logs->bind_param("i", $project_id);
+
+    if (!$stmt_get_all_logs->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for fetching project time logs: ' . $stmt_get_all_logs->error]);
+    }
+
+    $result_all_logs = $stmt_get_all_logs->get_result();
+    $project_time_logs_list = [];
+    while ($row = $result_all_logs->fetch_assoc()) {
+        $row['duration_minutes'] = (int)$row['duration_minutes'];
+        $project_time_logs_list[] = $row;
+    }
+    $stmt_get_all_logs->close();
+
+    send_json_response(200, $project_time_logs_list);
+
+} // END NEW: Get All Time Logs for a Specific Project
+
+// NEW: Update a Specific Time Log
+elseif ($action === 'update_time_log' && ($method === 'PUT' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for update.']);
+    }
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (empty($data)) {
+        send_json_response(400, ['error' => 'No data provided for update or invalid JSON.']);
+    }
+
+    // Fetch original time log to check ownership and get existing values
+    $stmt_fetch_log = $conn->prepare("SELECT user_id, start_time, end_time FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log) { send_json_response(500, ['error' => 'Server error preparing original log fetch.']); }
+    $stmt_fetch_log->bind_param("i", $time_log_id);
+    if (!$stmt_fetch_log->execute()) { send_json_response(500, ['error' => 'Server error executing original log fetch.']); }
+    $result_fetch_log = $stmt_fetch_log->get_result();
+    if ($result_fetch_log->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $original_log_data = $result_fetch_log->fetch_assoc();
+    $log_owner_id = (int)$original_log_data['user_id'];
+    $stmt_fetch_log->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this time log.']);
+    }
+
+    // Determine new start and end times
+    $new_start_time_str = $data['start_time'] ?? $original_log_data['start_time'];
+    $new_end_time_str = $data['end_time'] ?? $original_log_data['end_time'];
+
+    try {
+        $new_start_time_ts = new DateTime($new_start_time_str);
+        $new_end_time_ts = new DateTime($new_end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid new start or end time format. Please use ISO8601.']);
+    }
+
+    if ($new_start_time_ts >= $new_end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+    $new_duration_minutes = ($new_end_time_ts->getTimestamp() - $new_start_time_ts->getTimestamp()) / 60;
+    if ($new_duration_minutes <= 0) {
+        send_json_response(400, ['error' => 'Calculated duration must be positive.']);
+    }
+
+    $formatted_new_start_time = $new_start_time_ts->format('Y-m-d H:i:s');
+    $formatted_new_end_time = $new_end_time_ts->format('Y-m-d H:i:s');
+
+    // Build the SQL query dynamically for fields other than times/duration
+    $fields_to_update = [];
+    $params = [];
+    $types = "";
+
+    // Always update times and duration as they are derived or taken from original
+    $fields_to_update[] = "start_time = ?"; $params[] = $formatted_new_start_time; $types .= "s";
+    $fields_to_update[] = "end_time = ?"; $params[] = $formatted_new_end_time; $types .= "s";
+    $fields_to_update[] = "duration_minutes = ?"; $params[] = $new_duration_minutes; $types .= "i";
+
+    if (array_key_exists('notes', $data)) { // Allow setting notes to null or empty string
+        $fields_to_update[] = "notes = ?"; $params[] = $data['notes']; $types .= "s";
+    }
+
+    if (count($fields_to_update) === 3 && !array_key_exists('notes', $data)) {
+        // Only time fields were present, but maybe notes was intended to be cleared but not sent
+        // Or, if only notes is sent, time fields are based on original log.
+        // This logic means if only notes is sent, times/duration are not re-saved unless they were also sent.
+        // For simplicity, if any of start_time, end_time, or notes is in $data, we update.
+        // If $data only had notes, then $new_start_time_str and $new_end_time_str would be original values.
+        // If $data was empty, it's caught earlier.
+        // If $data had only start_time, end_time would be original, and duration calculated.
+        // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+        // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+    }
+
+    $fields_to_update[] = "updated_at = NOW()";
+
+    $sql_update_log = "UPDATE time_logs SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+    $params[] = $time_log_id;
+    $types .= "i";
+
+    $stmt_update_log = $conn->prepare($sql_update_log);
+    if ($stmt_update_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare time log update statement: ' . $conn->error]);
+    }
+    $stmt_update_log->bind_param($types, ...$params);
+
+    if ($stmt_update_log->execute()) {
+        if ($stmt_update_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log updated successfully.']);
+        } else {
+            send_json_response(200, ['message' => 'Time log data was the same or log not found; no changes made.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to update time log: ' . $stmt_update_log->error]);
+    }
+    $stmt_update_log->close();
+
+} // END NEW: Update a Specific Time Log
+
+// NEW: Delete a Specific Time Log
+elseif ($action === 'delete_time_log' && ($method === 'DELETE' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = null;
+    if ($method === 'DELETE') {
+        $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    } elseif ($method === 'POST') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $time_log_id = isset($data['time_log_id']) ? (int)$data['time_log_id'] : (isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null);
+    }
+
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for deletion.']);
+    }
+
+    // Fetch original time log to check ownership
+    $stmt_fetch_log_owner = $conn->prepare("SELECT user_id FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log_owner) { send_json_response(500, ['error' => 'Server error preparing log ownership check.']); }
+    $stmt_fetch_log_owner->bind_param("i", $time_log_id);
+    if (!$stmt_fetch_log_owner->execute()) { send_json_response(500, ['error' => 'Server error executing log ownership check.']); }
+    $result_fetch_log_owner = $stmt_fetch_log_owner->get_result();
+    if ($result_fetch_log_owner->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $log_owner_data = $result_fetch_log_owner->fetch_assoc();
+    $log_owner_id = (int)$log_owner_data['user_id'];
+    $stmt_fetch_log_owner->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this time log.']);
+    }
+
+    // Proceed with delete logic
+    $stmt_delete_log = $conn->prepare("DELETE FROM time_logs WHERE id = ?");
+    if ($stmt_delete_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement for time log: ' . $conn->error]);
+    }
+    $stmt_delete_log->bind_param("i", $time_log_id);
+
+    if ($stmt_delete_log->execute()) {
+        if ($stmt_delete_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log deleted successfully.']);
+        } else {
+            // This case implies the log was not found, though the check above should catch it.
+            send_json_response(404, ['message' => 'Time log not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete time log: ' . $stmt_delete_log->error]);
+    }
+    $stmt_delete_log->close();
+
+} // END NEW: Delete a Specific Time Log
+
+// NEW: Find or Create 1-on-1 Conversation
+elseif ($action === 'find_or_create_conversation' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $recipient_user_id = isset($data['recipient_user_id']) ? (int)$data['recipient_user_id'] : null;
+
+    if (!$recipient_user_id) {
+        send_json_response(400, ['error' => 'Recipient user ID is required.']);
+    }
+
+    if ($recipient_user_id === $current_user_id) {
+        send_json_response(400, ['error' => 'Cannot create a conversation with yourself.']);
+    }
+
+    // Check if recipient user exists
+    $stmt_user_check = $conn->prepare("SELECT id FROM users WHERE id = ?");
+    if (!$stmt_user_check) { send_json_response(500, ['error' => 'Server error preparing recipient check.']); }
+    $stmt_user_check->bind_param("i", $recipient_user_id);
+    if (!$stmt_user_check->execute()) { send_json_response(500, ['error' => 'Server error executing recipient check.']); }
+    if ($stmt_user_check->get_result()->num_rows === 0) {
+        send_json_response(404, ['error' => 'Recipient user not found.']);
+    }
+    $stmt_user_check->close();
+
+    // Check for existing 1-on-1 conversation
+    // This query finds conversations involving BOTH users, and only those two users.
+    $sql_find_convo = "SELECT cp1.conversation_id
+                       FROM conversation_participants cp1
+                       JOIN conversation_participants cp2 ON cp1.conversation_id = cp2.conversation_id
+                       WHERE cp1.user_id = ? AND cp2.user_id = ?
+                       AND (SELECT COUNT(*) FROM conversation_participants cp_count WHERE cp_count.conversation_id = cp1.conversation_id) = 2";
+
+    $stmt_find = $conn->prepare($sql_find_convo);
+    if (!$stmt_find) { send_json_response(500, ['error' => 'Server error preparing conversation search. ' . $conn->error]); }
+    // Bind params carefully for the two user IDs
+    $stmt_find->bind_param("ii", $current_user_id, $recipient_user_id);
+
+
+    if (!$stmt_find->execute()) { send_json_response(500, ['error' => 'Server error executing conversation search. ' . $stmt_find->error]); }
+    $result_find = $stmt_find->get_result();
+
+    if ($existing_convo = $result_find->fetch_assoc()) {
+        $stmt_find->close();
+        send_json_response(200, ['conversation_id' => (int)$existing_convo['conversation_id'], 'existed' => true]);
+    } else {
+        $stmt_find->close();
+        // No existing 1-on-1 conversation found, create a new one
+        $conn->begin_transaction();
+        try {
+            // 1. Create conversation
+            // last_message_at can be set to NOW() or remain NULL initially
+            $stmt_create_convo = $conn->prepare("INSERT INTO conversations (last_message_at) VALUES (NOW())");
+            if (!$stmt_create_convo) { throw new Exception('Failed to prepare conversation creation. ' . $conn->error); }
+            if (!$stmt_create_convo->execute()) { throw new Exception('Failed to execute conversation creation. ' . $stmt_create_convo->error); }
+            $new_conversation_id = $conn->insert_id;
+            $stmt_create_convo->close();
+
+            if (!$new_conversation_id) { throw new Exception('Failed to get new conversation ID.'); }
+
+            // 2. Add participants
+            $stmt_add_participant = $conn->prepare("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)");
+            if (!$stmt_add_participant) { throw new Exception('Failed to prepare participant insertion. ' . $conn->error); }
+
+            // Add current user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $current_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add current user to conversation. ' . $stmt_add_participant->error); }
+
+            // Add recipient user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $recipient_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add recipient user to conversation. ' . $stmt_add_participant->error); }
+            $stmt_add_participant->close();
+
+            $conn->commit();
+            send_json_response(201, ['conversation_id' => $new_conversation_id, 'existed' => false]);
+
+        } catch (Exception $e) {
+            $conn->rollback();
+            send_json_response(500, ['error' => 'Failed to create conversation: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Find or Create 1-on-1 Conversation
+
+// NEW: Get Messages for a Conversation
+elseif ($action === 'get_conversation_messages' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $conversation_id = isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : null;
+    if (!$conversation_id) {
+        send_json_response(400, ['error' => 'Conversation ID is required.']);
+    }
+
+    // Authorize: Check if current user is part of this conversation
+    $stmt_auth_convo = $conn->prepare(
+        "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+         FROM conversations c
+         LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+         WHERE c.id = ?"
+    );
+    if (!$stmt_auth_convo) { send_json_response(500, ['error' => 'Server error preparing conversation participation check.']); }
+    $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+    if (!$stmt_auth_convo->execute()) { send_json_response(500, ['error' => 'Server error executing conversation participation check.']); }
+    $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+    $stmt_auth_convo->close();
+
+    if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+        send_json_response(404, ['error' => 'Conversation not found.']);
+    }
+    if (!$result_auth_convo['participant_exists']) {
+        send
+=======
+
+// NEW: Send Message to a Conversation
+elseif ($action === 'send_message' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $sender_id = (int)$authenticated_user['id'];
+    $sender_username = $authenticated_user['username']; // For response
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $conversation_id = isset($data['conversation_id']) ? (int)$data['conversation_id'] : null;
+    $content = $data['content'] ?? null;
+
+    if (!$conversation_id || $content === null || trim($content) === '') { // Content can be "0", so check for null or empty string explicitly
+        send_json_response(400, ['error' => 'Conversation ID and message content are required.']);
+    }
+
+    $content = trim($content); // Trim content before length check and storage
+    if (mb_strlen($content) > 10000) { // Basic content length validation (e.g. 10k chars)
+        send_json_response(400, ['error' => 'Message content is too long.']);
+    }
+
+    // Start transaction
+    $conn->begin_transaction();
+
+    try {
+        // 1. Authorization: Check if current user is part of this conversation AND conversation exists
+        $stmt_auth_convo = $conn->prepare(
+            "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+             FROM conversations c
+             LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+             WHERE c.id = ?"
+        );
+        if (!$stmt_auth_convo) { throw new Exception('Server error preparing conversation participation check. ' . $conn->error); }
+        $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+        if (!$stmt_auth_convo->execute()) { throw new Exception('Server error executing conversation participation check. ' . $stmt_auth_convo->error); }
+        $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+        $stmt_auth_convo->close();
+
+        if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+            throw new Exception('Conversation not found.', 404);
+        }
+        if (!$result_auth_convo['participant_exists']) {
+            throw new Exception('Forbidden: You are not a participant in this conversation.', 403);
+        }
+
+        // 2. Insert the new message
+        $current_timestamp_mysql = date('Y-m-d H:i:s'); // For consistent timestamp
+        $stmt_insert_message = $conn->prepare(
+            "INSERT INTO messages (conversation_id, sender_id, content, created_at)
+             VALUES (?, ?, ?, ?)"
+        );
+        if (!$stmt_insert_message) { throw new Exception('Server error preparing message insertion. ' . $conn->error); }
+        $stmt_insert_message->bind_param("iiss", $conversation_id, $sender_id, $content, $current_timestamp_mysql);
+        if (!$stmt_insert_message->execute()) { throw new Exception('Server error executing message insertion. ' . $stmt_insert_message->error); }
+        $new_message_id = $conn->insert_id;
+        $stmt_insert_message->close();
+
+        if (!$new_message_id) {
+            throw new Exception('Failed to create message or get new message ID.');
+        }
+
+        // 3. Update last_message_at in conversations table
+        $stmt_update_convo = $conn->prepare("UPDATE conversations SET last_message_at = ? WHERE id = ?");
+        if (!$stmt_update_convo) { throw new Exception('Server error preparing conversation update. ' . $conn->error); }
+        $stmt_update_convo->bind_param("si", $current_timestamp_mysql, $conversation_id);
+        if (!$stmt_update_convo->execute()) { throw new Exception('Server error executing conversation update. ' . $stmt_update_convo->error); }
+        $stmt_update_convo->close();
+
+        // Commit transaction
+        $conn->commit();
+
+        // Prepare and send response
+        $new_message_data = [
+            'id' => $new_message_id,
+            'conversation_id' => $conversation_id,
+            'sender_id' => $sender_id,
+            'sender_username' => $sender_username, // Added for immediate use by frontend
+            'content' => $content,
+            'created_at' => $current_timestamp_mysql,
+            'read_at' => null // New messages are unread by default for others
+        ];
+        send_json_response(201, $new_message_data);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        $error_code = $e->getCode() >= 400 && $e->getCode() < 500 ? $e->getCode() : 500; // Use specific client error codes if set
+        if ($error_code === 403) {
+            send_json_response(403, ['error' => $e->getMessage()]);
+        } elseif ($error_code === 404) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response($error_code, ['error' => 'Failed to send message: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Send Message to a Conversation
+
+>>>>>>> Stashed changes
+// --- Projects API ---
+// MODIFIED: get_projects to handle single project fetch and join user tables
+elseif ($action === 'get_projects' && $method === 'GET') {
+    $project_id_filter = isset($_GET['id']) ? (int)$_GET['id'] : (isset($_GET['project_id']) ? (int)$_GET['project_id'] : null);
+
+    if ($project_id_filter !== null) {
+        // Fetch a single project by ID
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id
+                WHERE p.id = ?";
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for single project: ' . $conn->error]);
+        }
+        $stmt->bind_param("i", $project_id_filter);
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for single project: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        if ($project = $result->fetch_assoc()) {
+            if (isset($project['client_id'])) $project['client_id'] = (int)$project['client_id'];
+            if (isset($project['freelancer_id'])) $project['freelancer_id'] = $project['freelancer_id'] === null ? null : (int)$project['freelancer_id'];
+
+            // Fetch skills for the single project
+            $project['skills_required'] = [];
+            $stmt_skills_proj = $conn->prepare("SELECT s.id, s.name FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ? ORDER BY s.name ASC");
+            if ($stmt_skills_proj) {
+                $stmt_skills_proj->bind_param("i", $project_id_filter);
+                if ($stmt_skills_proj->execute()) {
+                    $result_skills_proj = $stmt_skills_proj->get_result();
+                    while ($skill_row_proj = $result_skills_proj->fetch_assoc()) {
+                        $project['skills_required'][] = ['id' => (int)$skill_row_proj['id'], 'name' => $skill_row_proj['name']];
+                    }
+                } else { error_log("Failed to execute skills fetch for single project: " . $stmt_skills_proj->error); }
+                $stmt_skills_proj->close();
+            } else { error_log("Failed to prepare skills fetch for single project: " . $conn->error); }
+
+            send_json_response(200, $project); // Return single project object
+        } else {
+            send_json_response(404, ['error' => 'Project not found.']);
+        }
+        $stmt->close();
+        // exit; // send_json_response includes exit
+    } else {
+        // Existing logic for fetching multiple projects with status filter
+        $status_filter = isset($_GET['status']) ? $_GET['status'] : 'open';
+
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id";
+        $params = [];
+        $types = "";
+
+        if ($status_filter) {
+            if ($status_filter !== 'all' && $status_filter !== '') {
+                 $sql .= " WHERE p.status = ?";
+                 $params[] = $status_filter;
+                 $types .= "s";
+            } else if ($status_filter === '') {
+                $sql .= " WHERE p.status = ?";
+                $params[] = 'open';
+                $types .= "s";
+            }
+        }
+        $sql .= " ORDER BY p.created_at DESC";
+
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for projects list: ' . $conn->error]);
+        }
+        if (!empty($types)) {
+            $stmt->bind_param($types, ...$params);
+        }
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for projects list: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        $projects = [];
+        while ($row = $result->fetch_assoc()) {
+            if (isset($row['client_id'])) $row['client_id'] = (int)$row['client_id'];
+            if (isset($row['freelancer_id'])) $row['freelancer_id'] = $row['freelancer_id'] === null ? null : (int)$row['freelancer_id'];
+            $projects[] = $row;
+        }
+        $stmt->close();
+        send_json_response(200, $projects);
+    }
+}
+// MODIFIED: Create Project with Admin client_id assignment
+elseif ($action === 'create_project' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $auth_user_id = (int)$authenticated_user['id'];
+    $auth_user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+
+    if (empty($data['title']) || empty($data['description'])) {
+        send_json_response(400, ['error' => 'Missing required fields: title, description.']);
+    }
+
+    $title = $data['title'];
+    $description = $data['description'];
+    $final_client_id = null;
+
+    // Determine client_id based on role and payload
+    if ($auth_user_role === 'admin') {
+        if (isset($data['client_id']) && !empty($data['client_id'])) {
+            $payload_client_id = (int)$data['client_id'];
+            // Validate this client_id
+            $stmt_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_client_check) { send_json_response(500, ['error' => 'Server error preparing client validation.']); }
+            $stmt_client_check->bind_param("i", $payload_client_id);
+            if (!$stmt_client_check->execute()) { send_json_response(500, ['error' => 'Server error executing client validation.']); }
+            $result_client_check = $stmt_client_check->get_result();
+            if ($result_client_check->num_rows === 0) {
+                send_json_response(404, ['error' => "Specified client_id '{$payload_client_id}' not found."]);
+            }
+            $client_to_assign = $result_client_check->fetch_assoc();
+            if ($client_to_assign['role'] !== 'client') {
+                send_json_response(400, ['error' => "User '{$payload_client_id}' is not a client. Project can only be assigned to a client user."]);
+            }
+            $stmt_client_check->close();
+            $final_client_id = $payload_client_id;
+        } else {
+            // Admin creating project for themselves (no client_id in payload)
+            $final_client_id = $auth_user_id;
+        }
+    } elseif ($auth_user_role === 'client') {
+        $final_client_id = $auth_user_id;
+    } else {
+        // Other roles (e.g. freelancer) are not allowed to create projects
+        send_json_response(403, ['error' => 'Forbidden: Your role does not have permission to create projects.']);
+    }
+
+    if ($final_client_id === null) { // Should be caught by role check, but as a safeguard
+        send_json_response(500, ['error' => 'Could not determine client for the project.']);
+    }
+
+    $freelancer_id = isset($data['freelancer_id']) && !empty($data['freelancer_id']) ? (int)$data['freelancer_id'] : null;
+    if ($freelancer_id !== null) { // Optional: Validate freelancer_id if provided
+        $stmt_f_check = $conn->prepare("SELECT role FROM users WHERE id = ?");
+        if (!$stmt_f_check) { send_json_response(500, ['error' => 'Server error: Freelancer validation prep failed.']);}
+        $stmt_f_check->bind_param("i", $freelancer_id);
+        if (!$stmt_f_check->execute()) { send_json_response(500, ['error' => 'Server error: Freelancer validation exec failed.']);}
+        $res_f_check = $stmt_f_check->get_result();
+        if ($res_f_check->num_rows === 0) { send_json_response(404, ['error' => 'Assigned freelancer not found.']); }
+        if ($res_f_check->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'Assigned user is not a freelancer.']);}
+        $stmt_f_check->close();
+    }
+
+    $status = $data['status'] ?? 'open'; // Default status, or from payload
+    $valid_project_statuses = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled']; // Extend as needed
+    if (!in_array($status, $valid_project_statuses)) {
+        send_json_response(400, ['error' => 'Invalid project status provided.']);
+    }
+
+
+    $stmt = $conn->prepare("INSERT INTO projects (title, description, client_id, freelancer_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for project creation: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("ssiis", $title, $description, $final_client_id, $freelancer_id, $status);
+
+    if ($stmt->execute()) {
+        $new_project_id_for_notification = $stmt->insert_id;
+        $current_project_status = $status; // $status variable from create_project scope
+
+        // Send response first, then notify
+        send_json_response(201, [
+            'message' => 'Project created successfully.',
+            'project_id' => $new_project_id_for_notification,
+            'client_id' => $final_client_id
+        ]);
+
+        if ($current_project_status === 'pending_approval' || $current_project_status === 'Pending Approval') { // Case consistency
+             create_admin_notification($conn, 'project_awaits_approval', 'project', $new_project_id_for_notification);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to create project: ' . $stmt->error]);
+    }
+    $stmt->close();
+}
+// END MODIFIED: Create Project
+// MODIFIED: update_project to allow admin client_id change and other enhancements
+elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST')) { // Allow POST too
+    $authenticated_user = require_authentication($conn);
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (!$project_id && isset($data['project_id_to_update'])) { // Use a distinct name to avoid conflict
+        $project_id = (int)$data['project_id_to_update'];
+    }
+
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for update.']);
+    }
+    // Remove project_id_to_update from $data if it exists, as it's not a table field
+    if (isset($data['project_id_to_update'])) {
+        unset($data['project_id_to_update']);
+    }
+    if (empty($data) && !isset($data['skill_ids'])) { // Check if $data is empty OR only skill_ids is set (which means no project table fields)
+        send_json_response(400, ['error' => 'Invalid JSON or no data provided for project table update. If only updating skills, ensure skill_ids is provided.']);
+    }
+
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) { send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check. ' . $conn->error]); }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) { send_json_response(500, ['error' => 'Server error: Failed to execute ownership check. ' . $stmt_check_owner->error]); }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) { send_json_response(404, ['error' => 'Project not found.']); }
+    $project_data_db = $result_owner_check->fetch_assoc();
+    $project_client_id_original = (int)$project_data_db['client_id'];
+    $stmt_check_owner->close();
+
+    if ($user_role !== 'admin' && $project_client_id_original !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this project.']);
+    }
+
+    $conn->begin_transaction();
+    try {
+        $fields_to_update = [];
+        $params = [];
+        $types = "";
+
+        if ($user_role === 'admin' && isset($data['client_id'])) {
+            $new_client_id = (int)$data['client_id'];
+            $stmt_new_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_new_client_check) { throw new Exception('Server error preparing new client validation.'); }
+            $stmt_new_client_check->bind_param("i", $new_client_id);
+            if (!$stmt_new_client_check->execute()) { throw new Exception('Server error executing new client validation.'); }
+            $result_new_client_check = $stmt_new_client_check->get_result();
+            if ($result_new_client_check->num_rows === 0) {
+                throw new Exception("New client_id '{$new_client_id}' not found.");
+            }
+            $new_client_data = $result_new_client_check->fetch_assoc();
+            if ($new_client_data['role'] !== 'client') {
+                throw new Exception("User '{$new_client_id}' is not a client. Project can only be assigned to a client user.");
+            }
+            $stmt_new_client_check->close();
+            $fields_to_update[] = "client_id = ?"; $params[] = $new_client_id; $types .= "i";
+        }
+
+        if (isset($data['title'])) {
+            $fields_to_update[] = "title = ?"; $params[] = $data['title']; $types .= "s";
+        }
+        if (isset($data['description'])) {
+            $fields_to_update[] = "description = ?"; $params[] = $data['description']; $types .= "s";
+        }
+        if (array_key_exists('freelancer_id', $data)) {
+            $assign_freelancer_id = $data['freelancer_id'] === null ? null : (int)$data['freelancer_id'];
+            if ($assign_freelancer_id !== null) {
+                $stmt_f_check_update = $conn->prepare("SELECT role FROM users WHERE id = ?");
+                if (!$stmt_f_check_update) { throw new Exception('Server error: Freelancer validation prep failed.');}
+                $stmt_f_check_update->bind_param("i", $assign_freelancer_id);
+                if (!$stmt_f_check_update->execute()) { throw new Exception('Server error: Freelancer validation exec failed.');}
+                $res_f_check_update = $stmt_f_check_update->get_result();
+                if ($res_f_check_update->num_rows === 0) { throw new Exception('Assigned freelancer for update not found.'); }
+                if ($res_f_check_update->fetch_assoc()['role'] !== 'freelancer') { throw new Exception('Assigned user for update is not a freelancer.');}
+                $stmt_f_check_update->close();
+            }
+            $fields_to_update[] = "freelancer_id = ?"; $params[] = $assign_freelancer_id; $types .= "i";
+        }
+        if (isset($data['status'])) {
+            $valid_project_statuses_update = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled', 'archived'];
+            if (!in_array($data['status'], $valid_project_statuses_update)) {
+                throw new Exception('Invalid project status for update.');
+            }
+            $fields_to_update[] = "status = ?"; $params[] = $data['status']; $types .= "s";
+        }
+
+        $project_table_updated = false;
+        if (!empty($fields_to_update)) {
+            $fields_to_update[] = "updated_at = NOW()";
+            $sql_update_project_table = "UPDATE projects SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+            $current_params_for_project = $params;
+            $current_params_for_project[] = $project_id;
+            $current_types_for_project = $types . "i";
+
+            $stmt_update_project_table = $conn->prepare($sql_update_project_table);
+            if ($stmt_update_project_table === false) {
+                throw new Exception('Failed to prepare project table update statement: ' . $conn->error);
+            }
+            if (strlen($current_types_for_project) !== count($current_params_for_project)){
+                 throw new Exception('Param count mismatch for projects table update. Types: '.$current_types_for_project.' Params: '.count($current_params_for_project));
+            }
+             if (!empty($current_types_for_project)) { // Check if there are params to bind
+                $stmt_update_project_table->bind_param($current_types_for_project, ...$current_params_for_project);
+             }
+
+            if (!$stmt_update_project_table->execute()) {
+                throw new Exception('Failed to update project details in projects table: ' . $stmt_update_project_table->error);
+            }
+            if($stmt_update_project_table->affected_rows > 0) $project_table_updated = true;
+            $stmt_update_project_table->close();
+        }
+
+        $skills_table_updated = false;
+        if (isset($data['skill_ids']) && is_array($data['skill_ids'])) {
+            $skill_ids_for_project = array_map('intval', $data['skill_ids']);
+
+            $stmt_delete_proj_skills = $conn->prepare("DELETE FROM project_skills WHERE project_id = ?");
+            if (!$stmt_delete_proj_skills) { throw new Exception('Failed to prepare deleting project skills. ' . $conn->error); }
+            $stmt_delete_proj_skills->bind_param("i", $project_id);
+            if (!$stmt_delete_proj_skills->execute()) { throw new Exception('Failed to delete project skills. ' . $stmt_delete_proj_skills->error); }
+            // We consider skills updated if the key 'skill_ids' is present, even if it's empty (means remove all)
+            // or if rows were deleted or inserted.
+            if ($stmt_delete_proj_skills->affected_rows > 0 || !empty($skill_ids_for_project)) {
+                $skills_table_updated = true;
+            }
+            $stmt_delete_proj_skills->close();
+
+            if (!empty($skill_ids_for_project)) {
+                $proj_skill_placeholders = implode(',', array_fill(0, count($skill_ids_for_project), '?'));
+                $stmt_check_valid_proj_skills = $conn->prepare("SELECT id FROM skills WHERE id IN ($proj_skill_placeholders)");
+                if (!$stmt_check_valid_proj_skills) { throw new Exception('Failed to prepare project skill ID validation. ' . $conn->error); }
+                $proj_skill_types = str_repeat('i', count($skill_ids_for_project));
+                $stmt_check_valid_proj_skills->bind_param($proj_skill_types, ...$skill_ids_for_project);
+                if (!$stmt_check_valid_proj_skills->execute()) { throw new Exception('Failed to execute project skill ID validation. ' . $stmt_check_valid_proj_skills->error); }
+                $valid_proj_skill_result = $stmt_check_valid_proj_skills->get_result();
+                if ($valid_proj_skill_result->num_rows !== count($skill_ids_for_project)) {
+                    throw new Exception('One or more provided skill IDs for project are invalid.');
+                }
+                $stmt_check_valid_proj_skills->close();
+
+                $sql_insert_project_skill = "INSERT INTO project_skills (project_id, skill_id) VALUES (?, ?)";
+                $stmt_insert_proj_skill = $conn->prepare($sql_insert_project_skill);
+                if (!$stmt_insert_proj_skill) { throw new Exception('Failed to prepare adding project skill. ' . $conn->error); }
+
+                $inserted_skill_rows = 0;
+                foreach ($skill_ids_for_project as $skill_id_proj) {
+                    $stmt_insert_proj_skill->bind_param("ii", $project_id, $skill_id_proj);
+                    if (!$stmt_insert_proj_skill->execute()) {
+                        throw new Exception('Failed to add skill ID ' . $skill_id_proj . ' for project. ' . $stmt_insert_proj_skill->error);
+                    }
+                    if ($stmt_insert_proj_skill->affected_rows > 0) $inserted_skill_rows++;
+                }
+                $stmt_insert_proj_skill->close();
+                if ($inserted_skill_rows > 0) $skills_table_updated = true;
+            }
+        }
+
+        if (!$project_table_updated && !$skills_table_updated && !(isset($data['skill_ids']) && empty($data['skill_ids']))) {
+            // This condition means no project fields were in $data to update (so $fields_to_update was empty)
+            // AND skill_ids was not provided at all (so no attempt to clear/update skills)
+            // OR skill_ids was provided but was identical to existing skills (not easily checkable here without fetching old skills)
+            // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+            // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+            if (empty($fields_to_update) && !isset($data['skill_ids'])) {
+                 $conn->rollback(); // Nothing to commit
+                 send_json_response(200, ['message' => 'No update data provided for project or skills.']);
+            }
+        }
+
+        $conn->commit();
+        send_json_response(200, ['message' => 'Project details and/or skills updated successfully.']);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        if (strpos($e->getMessage(), 'Duplicate entry') !== false || strpos($e->getMessage(), 'already exists') !== false) {
+            send_json_response(409, ['error' => $e->getMessage()]);
+        } elseif (strpos($e->getMessage(), 'not found') !== false) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response(500, ['error' => 'Failed to update project: ' . $e->getMessage()]);
+        }
+    }
+}
+// END MODIFIED: update_project
+elseif ($action === 'delete_project' && $method === 'DELETE') {
+    $authenticated_user = require_authentication($conn); // 1. Require Authentication
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for deletion.']);
+    }
+
+    // 2. Authorize User: Fetch project's client_id first
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) {
+        send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check for delete. ' . $conn->error]);
+    }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) {
+        send_json_response(500, ['error' => 'Server error: Failed to execute ownership check for delete. ' . $stmt_check_owner->error]);
+    }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found, cannot delete.']);
+    }
+    $project_data = $result_owner_check->fetch_assoc();
+    $project_client_id = (int)$project_data['client_id'];
+    $stmt_check_owner->close();
+
+    // Authorization check
+    if ($user_role !== 'admin' && $project_client_id !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this project.']);
+    }
+
+    // Proceed with delete logic
+    // TODO: Consider what happens to related data (e.g., applications, job cards) when a project is deleted.
+    // For now, it's a direct delete. Future enhancements might involve soft deletes or cascading deletes/archiving.
+
+    $stmt = $conn->prepare("DELETE FROM projects WHERE id = ?");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("i", $project_id);
+
+    if ($stmt->execute()) {
+        if ($stmt->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Project deleted successfully.']);
+        } else {
+            // This case should ideally not be reached if the ownership check found the project.
+            // If it is, it means the project was deleted between the check and this operation.
+            send_json_response(404, ['message' => 'Project not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete project: ' . $stmt->error]);
+    }
+    $stmt->close();
+} else {
+    // No action or invalid action/method combination
+    send_json_response(404, ['error' => 'API endpoint not found or invalid request.']);
+}
+
+// Close the database connection
+$conn->close();
+?>
+
+// NEW: Log Time for a Job Card
+elseif ($action === 'log_time' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_logging_time = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $job_card_id = isset($data['job_card_id']) ? (int)$data['job_card_id'] : null;
+    $start_time_str = $data['start_time'] ?? null;
+    $end_time_str = $data['end_time'] ?? null;
+    $notes = $data['notes'] ?? null;
+
+    if (!$job_card_id || empty($start_time_str) || empty($end_time_str)) {
+        send_json_response(400, ['error' => 'Job Card ID, start time, and end time are required.']);
+    }
+
+    // Validate and parse timestamps
+    try {
+        $start_time_ts = new DateTime($start_time_str);
+        $end_time_ts = new DateTime($end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid start or end time format. Please use ISO8601 format (e.g., YYYY-MM-DDTHH:MM:SSZ).']);
+    }
+
+    if ($start_time_ts >= $end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+
+    // Calculate duration in minutes
+    $duration_minutes = ($end_time_ts->getTimestamp() - $start_time_ts->getTimestamp()) / 60;
+    if ($duration_minutes <= 0) { // Should be caught by above, but as safety
+        send_json_response(400, ['error' => 'Duration must be positive. Ensure end time is after start time.']);
+    }
+
+
+    // Authorization: Check if user is allowed to log time for this job card
+    $stmt_auth_jc = $conn->prepare(
+        "SELECT jc.assigned_freelancer_id AS job_card_assignee,
+                p.client_id AS project_client_id,
+                p.freelancer_id AS project_main_freelancer_id,
+                jc_proj.status AS project_status
+         FROM job_cards jc
+         JOIN projects p ON jc.project_id = p.id
+         JOIN projects jc_proj ON jc.project_id = jc_proj.id
+         WHERE jc.id = ?"
+    );
+    if (!$stmt_auth_jc) { send_json_response(500, ['error' => 'Server error preparing time log authorization check. ' . $conn->error]); }
+    $stmt_auth_jc->bind_param("i", $job_card_id);
+    if (!$stmt_auth_jc->execute()) { send_json_response(500, ['error' => 'Server error executing time log authorization check. ' . $stmt_auth_jc->error]); }
+    $result_auth_jc = $stmt_auth_jc->get_result();
+    if ($result_auth_jc->num_rows === 0) {
+        send_json_response(404, ['error' => 'Job Card not found.']);
+    }
+    $jc_auth_details = $result_auth_jc->fetch_assoc();
+    $project_client_id = (int)$jc_auth_details['project_client_id'];
+    $job_card_assignee_id = $jc_auth_details['job_card_assignee'] ? (int)$jc_auth_details['job_card_assignee'] : null;
+    $project_main_freelancer_id = $jc_auth_details['project_main_freelancer_id'] ? (int)$jc_auth_details['project_main_freelancer_id'] : null;
+    $project_status = $jc_auth_details['project_status'];
+    $stmt_auth_jc->close();
+
+    // Project must be in progress to log time
+    if ($project_status !== 'in_progress' && $project_status !== 'assigned' && $project_status !== 'active') { // 'active' if used
+        send_json_response(403, ['error' => "Time cannot be logged for this job card as the project status is '{$project_status}'. Project must be active."]);
+    }
+
+    $is_authorized_to_log = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_log = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_logging_time) {
+        // Clients typically don't log time this way, but could be for record keeping if feature exists.
+        // For now, let's restrict clients from logging time directly unless specific requirements arise.
+        // send_json_response(403, ['error' => 'Clients cannot directly log time for job cards.']);
+        // OR, allow it: $is_authorized_to_log = true; (Let's assume not for now)
+    } elseif ($user_role === 'freelancer') {
+        if ($job_card_assignee_id === $user_id_logging_time || $project_main_freelancer_id === $user_id_logging_time) {
+            $is_authorized_to_log = true;
+        }
+    }
+
+    if (!$is_authorized_to_log) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to log time for this job card.']);
+    }
+
+    // Insert new time log
+    $sql_insert_log = "INSERT INTO time_logs (job_card_id, user_id, start_time, end_time, duration_minutes, notes)
+                       VALUES (?, ?, ?, ?, ?, ?)";
+    $stmt_insert_log = $conn->prepare($sql_insert_log);
+    if (!$stmt_insert_log) {
+        send_json_response(500, ['error' => 'Server error preparing time log creation. ' . $conn->error]);
+    }
+
+    $formatted_start_time = $start_time_ts->format('Y-m-d H:i:s');
+    $formatted_end_time = $end_time_ts->format('Y-m-d H:i:s');
+
+    $stmt_insert_log->bind_param("iissis",
+        $job_card_id,
+        $user_id_logging_time,
+        $formatted_start_time,
+        $formatted_end_time,
+        $duration_minutes,
+        $notes
+    );
+
+    if ($stmt_insert_log->execute()) {
+        $new_time_log_id = $stmt_insert_log->insert_id;
+        send_json_response(201, [
+            'message' => 'Time logged successfully.',
+            'time_log_id' => $new_time_log_id,
+            'duration_minutes' => $duration_minutes
+        ]);
+    } else {
+        send_json_response(500, ['error' => 'Failed to log time. ' . $stmt_insert_log->error]);
+    }
+    $stmt_insert_log->close();
+
+} // END NEW: Log Time for a Job Card
+
+// NEW: Get All Time Logs for a Specific Project
+elseif ($action === 'get_project_time_logs' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['project_id']) ? (int)$_GET['project_id'] : null;
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required to fetch all project time logs.']);
+    }
+
+    // Authorization: Check if user is allowed to view all time logs for this project
+    $stmt_auth_proj_logs = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if (!$stmt_auth_proj_logs) { send_json_response(500, ['error' => 'Server error preparing project ownership check for logs.']); }
+    $stmt_auth_proj_logs->bind_param("i", $project_id);
+    if (!$stmt_auth_proj_logs->execute()) { send_json_response(500, ['error' => 'Server error executing project ownership check for logs.']); }
+    $result_auth_proj_logs = $stmt_auth_proj_logs->get_result();
+    if ($result_auth_proj_logs->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found.']);
+    }
+    $project_auth_details = $result_auth_proj_logs->fetch_assoc();
+    $project_client_id = (int)$project_auth_details['client_id'];
+    $stmt_auth_proj_logs->close();
+
+    $is_authorized_to_view_project_logs = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_view_project_logs = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_requesting) {
+        $is_authorized_to_view_project_logs = true;
+    }
+    // Freelancers are generally not authorized to see *all* project logs via this endpoint.
+
+    if (!$is_authorized_to_view_project_logs) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to view all time logs for this project.']);
+    }
+
+    // Fetch all time logs for the project
+    $sql_get_all_logs = "SELECT
+                            tl.id, tl.job_card_id, tl.user_id,
+                            tl.start_time, tl.end_time, tl.duration_minutes, tl.notes,
+                            tl.created_at, tl.updated_at,
+                            u.username AS logger_username,
+                            jc.title AS job_card_title
+                         FROM time_logs tl
+                         JOIN users u ON tl.user_id = u.id
+                         JOIN job_cards jc ON tl.job_card_id = jc.id
+                         WHERE jc.project_id = ?
+                         ORDER BY tl.start_time DESC";
+
+    $stmt_get_all_logs = $conn->prepare($sql_get_all_logs);
+    if ($stmt_get_all_logs === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for fetching project time logs: ' . $conn->error]);
+    }
+    $stmt_get_all_logs->bind_param("i", $project_id);
+
+    if (!$stmt_get_all_logs->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for fetching project time logs: ' . $stmt_get_all_logs->error]);
+    }
+
+    $result_all_logs = $stmt_get_all_logs->get_result();
+    $project_time_logs_list = [];
+    while ($row = $result_all_logs->fetch_assoc()) {
+        $row['duration_minutes'] = (int)$row['duration_minutes'];
+        $project_time_logs_list[] = $row;
+    }
+    $stmt_get_all_logs->close();
+
+    send_json_response(200, $project_time_logs_list);
+
+} // END NEW: Get All Time Logs for a Specific Project
+
+// NEW: Update a Specific Time Log
+elseif ($action === 'update_time_log' && ($method === 'PUT' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for update.']);
+    }
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (empty($data)) {
+        send_json_response(400, ['error' => 'No data provided for update or invalid JSON.']);
+    }
+
+    // Fetch original time log to check ownership and get existing values
+    $stmt_fetch_log = $conn->prepare("SELECT user_id, start_time, end_time FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log) { send_json_response(500, ['error' => 'Server error preparing original log fetch.']); }
+    $stmt_fetch_log->bind_param("i", $time_log_id);
+    $stmt_fetch_log->execute();
+    $result_fetch_log = $stmt_fetch_log->get_result();
+    if ($result_fetch_log->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $original_log_data = $result_fetch_log->fetch_assoc();
+    $log_owner_id = (int)$original_log_data['user_id'];
+    $stmt_fetch_log->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this time log.']);
+    }
+
+    // Determine new start and end times
+    $new_start_time_str = $data['start_time'] ?? $original_log_data['start_time'];
+    $new_end_time_str = $data['end_time'] ?? $original_log_data['end_time'];
+
+    try {
+        $new_start_time_ts = new DateTime($new_start_time_str);
+        $new_end_time_ts = new DateTime($new_end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid new start or end time format. Please use ISO8601.']);
+    }
+
+    if ($new_start_time_ts >= $new_end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+    $new_duration_minutes = ($new_end_time_ts->getTimestamp() - $new_start_time_ts->getTimestamp()) / 60;
+    if ($new_duration_minutes <= 0) {
+        send_json_response(400, ['error' => 'Calculated duration must be positive.']);
+    }
+
+    $formatted_new_start_time = $new_start_time_ts->format('Y-m-d H:i:s');
+    $formatted_new_end_time = $new_end_time_ts->format('Y-m-d H:i:s');
+
+    // Build the SQL query dynamically for fields other than times/duration
+    $fields_to_update = [];
+    $params = [];
+    $types = "";
+
+    // Always update times and duration as they are derived or taken from original
+    $fields_to_update[] = "start_time = ?"; $params[] = $formatted_new_start_time; $types .= "s";
+    $fields_to_update[] = "end_time = ?"; $params[] = $formatted_new_end_time; $types .= "s";
+    $fields_to_update[] = "duration_minutes = ?"; $params[] = $new_duration_minutes; $types .= "i";
+
+    if (array_key_exists('notes', $data)) { // Allow setting notes to null or empty string
+        $fields_to_update[] = "notes = ?"; $params[] = $data['notes']; $types .= "s";
+    }
+
+    if (count($fields_to_update) === 3 && !array_key_exists('notes', $data)) {
+        // Only time fields were present, but maybe notes was intended to be cleared but not sent
+        // Or, if only notes is sent, time fields are based on original log.
+        // This logic means if only notes is sent, times/duration are not re-saved unless they were also sent.
+        // For simplicity, if any of start_time, end_time, or notes is in $data, we update.
+        // If $data only had notes, then $new_start_time_str and $new_end_time_str would be original values.
+        // If $data was empty, it's caught earlier.
+        // If $data had only start_time, end_time would be original, and duration calculated.
+        // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+        // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+    }
+
+    $fields_to_update[] = "updated_at = NOW()";
+
+    $sql_update_log = "UPDATE time_logs SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+    $params[] = $time_log_id;
+    $types .= "i";
+
+    $stmt_update_log = $conn->prepare($sql_update_log);
+    if ($stmt_update_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare time log update statement: ' . $conn->error]);
+    }
+    $stmt_update_log->bind_param($types, ...$params);
+
+    if ($stmt_update_log->execute()) {
+        if ($stmt_update_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log updated successfully.']);
+        } else {
+            send_json_response(200, ['message' => 'Time log data was the same or log not found; no changes made.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to update time log: ' . $stmt_update_log->error]);
+    }
+    $stmt_update_log->close();
+
+} // END NEW: Update a Specific Time Log
+
+// NEW: Delete a Specific Time Log
+elseif ($action === 'delete_time_log' && ($method === 'DELETE' || $method === 'POST')) {
+    $authenticated_user = require_authentication($conn);
+    $user_id_requesting = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $time_log_id = null;
+    if ($method === 'DELETE') {
+        $time_log_id = isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null;
+    } elseif ($method === 'POST') {
+        $data = json_decode(file_get_contents('php://input'), true);
+        $time_log_id = isset($data['time_log_id']) ? (int)$data['time_log_id'] : (isset($_GET['time_log_id']) ? (int)$_GET['time_log_id'] : null);
+    }
+
+    if (!$time_log_id) {
+        send_json_response(400, ['error' => 'Time Log ID is required for deletion.']);
+    }
+
+    // Fetch original time log to check ownership
+    $stmt_fetch_log_owner = $conn->prepare("SELECT user_id FROM time_logs WHERE id = ?");
+    if (!$stmt_fetch_log_owner) { send_json_response(500, ['error' => 'Server error preparing log ownership check.']); }
+    $stmt_fetch_log_owner->bind_param("i", $time_log_id);
+    if (!$stmt_fetch_log_owner->execute()) { send_json_response(500, ['error' => 'Server error executing log ownership check.']); }
+    $result_fetch_log_owner = $stmt_fetch_log_owner->get_result();
+    if ($result_fetch_log_owner->num_rows === 0) {
+        send_json_response(404, ['error' => 'Time Log not found.']);
+    }
+    $log_owner_data = $result_fetch_log_owner->fetch_assoc();
+    $log_owner_id = (int)$log_owner_data['user_id'];
+    $stmt_fetch_log_owner->close();
+
+    // Authorization check
+    if (!($user_role === 'admin' || $log_owner_id === $user_id_requesting)) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this time log.']);
+    }
+
+    // Proceed with delete logic
+    $stmt_delete_log = $conn->prepare("DELETE FROM time_logs WHERE id = ?");
+    if ($stmt_delete_log === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement for time log: ' . $conn->error]);
+    }
+    $stmt_delete_log->bind_param("i", $time_log_id);
+
+    if ($stmt_delete_log->execute()) {
+        if ($stmt_delete_log->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Time log deleted successfully.']);
+        } else {
+            // This case implies the log was not found, though the check above should catch it.
+            send_json_response(404, ['message' => 'Time log not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete time log: ' . $stmt_delete_log->error]);
+    }
+    $stmt_delete_log->close();
+
+} // END NEW: Delete a Specific Time Log
+
+// --- START NEW ADVANCED MESSAGING API ENDPOINTS ---
+
+// Get all message threads for the authenticated user (can be direct or project-related)
+elseif ($action === 'get_user_message_threads' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    // Fetch threads where the user is a participant
+    // Also fetch participants for each thread to display names, and last message snippet
+    $sql = "SELECT
+                t.id AS thread_id,
+                t.project_id,
+                p_project.title as project_title, -- Added project title
+                t.title AS thread_title,
+                t.type AS thread_type,
+                t.last_message_at,
+                t.created_at AS thread_created_at,
+                GROUP_CONCAT(DISTINCT CONCAT(u.id, ':', u.username, ':', IFNULL(u.avatar_url, '')) SEPARATOR ';') AS participants_data,
+                (SELECT m.content FROM messages m WHERE m.thread_id = t.id ORDER BY m.sent_at DESC LIMIT 1) AS last_message_content,
+                (SELECT m.sender_id FROM messages m WHERE m.thread_id = t.id ORDER BY m.sent_at DESC LIMIT 1) AS last_message_sender_id,
+                (SELECT u_sender.username FROM messages m_sender JOIN users u_sender ON m_sender.sender_id = u_sender.id WHERE m_sender.thread_id = t.id ORDER BY m_sender.sent_at DESC LIMIT 1) AS last_message_sender_username,
+                tp.unread_count,
+                tp.last_read_message_id
+            FROM message_threads t
+            JOIN thread_participants tp ON t.id = tp.thread_id
+            LEFT JOIN projects p_project ON t.project_id = p_project.id -- Left join for project title
+            LEFT JOIN thread_participants tp_all ON t.id = tp_all.thread_id -- To get all participants for the thread
+            LEFT JOIN users u ON tp_all.user_id = u.id
+            WHERE tp.user_id = ? AND t.is_active = 1
+            GROUP BY t.id, p_project.title -- Added project_title to GROUP BY
+            ORDER BY t.last_message_at DESC, t.created_at DESC";
+
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for getting user threads: ' . $conn->error]);
+    }
+    $stmt->bind_param("i", $current_user_id);
+    if (!$stmt->execute()) {
+        send_json_response(500, ['error' => 'Failed to execute statement for getting user threads: ' . $stmt->error]);
+    }
+
+    $result = $stmt->get_result();
+    $threads_list = [];
+    while ($row = $result->fetch_assoc()) {
+        $participants = [];
+        if ($row['participants_data']) {
+            $participants_raw = explode(';', $row['participants_data']);
+            foreach ($participants_raw as $p_raw) {
+                list($p_id, $p_username, $p_avatar) = explode(':', $p_raw, 3);
+                $participants[] = [
+                    'id' => (int)$p_id,
+                    'username' => $p_username,
+                    'avatar_url' => $p_avatar ?: null // Handle potentially empty avatar part
+                ];
+            }
+        }
+        $threads_list[] = [
+            'thread_id' => (int)$row['thread_id'],
+            'project_id' => $row['project_id'] ? (int)$row['project_id'] : null,
+            'project_title' => $row['project_title'], // Added project title
+            'title' => $row['thread_title'],
+            'type' => $row['thread_type'],
+            'last_message_at' => $row['last_message_at'],
+            'created_at' => $row['thread_created_at'],
+            'participants' => $participants,
+            'last_message_snippet' => $row['last_message_content'],
+            'last_message_sender_id' => $row['last_message_sender_id'] ? (int)$row['last_message_sender_id'] : null,
+            'last_message_sender_username' => $row['last_message_sender_username'],
+            'unread_count' => (int)$row['unread_count'],
+        ];
+    }
+    $stmt->close();
+    send_json_response(200, $threads_list);
+}
+
+// Get messages for a specific thread, respecting permissions
+elseif ($action === 'get_thread_messages' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $thread_id = isset($_GET['thread_id']) ? (int)$_GET['thread_id'] : null;
+    if (!$thread_id) {
+        send_json_response(400, ['error' => 'Thread ID is required.']);
+    }
+
+    // Authorize: Check if current user is a participant of this thread and get their visibility level
+    $stmt_auth = $conn->prepare("SELECT tp.visibility_level, tp.role_in_thread, mt.type as thread_actual_type
+                                 FROM thread_participants tp
+                                 JOIN message_threads mt ON tp.thread_id = mt.id
+                                 WHERE tp.thread_id = ? AND tp.user_id = ?");
+    if (!$stmt_auth) { send_json_response(500, ['error' => 'Auth prep failed: ' . $conn->error]); }
+    $stmt_auth->bind_param("ii", $thread_id, $current_user_id);
+    if (!$stmt_auth->execute()) { send_json_response(500, ['error' => 'Auth exec failed: ' . $stmt_auth->error]); }
+    $result_auth = $stmt_auth->get_result();
+    if ($result_auth->num_rows === 0) {
+        send_json_response(403, ['error' => 'Forbidden: You are not a participant in this thread.']);
+    }
+    $participant_info = $result_auth->fetch_assoc();
+    $visibility_level = $participant_info['visibility_level']; // 'all', 'non_sensitive_only', 'none'
+    $user_role_in_thread = $participant_info['role_in_thread']; // 'participant', 'admin_observer'
+    $thread_actual_type = $participant_info['thread_actual_type'];
+    $stmt_auth->close();
+
+    if ($visibility_level === 'none') {
+        send_json_response(200, []); // User has no visibility, return empty messages
+    }
+
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
+    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0;
+
+    $sql = "SELECT
+                m.id, m.thread_id, m.sender_id, m.content, m.sent_at,
+                m.attachment_url, m.attachment_type,
+                m.requires_approval, m.approval_status,
+                u.username AS sender_username, u.avatar_url AS sender_avatar_url, u.role as sender_role
+            FROM messages m
+            JOIN users u ON m.sender_id = u.id
+            WHERE m.thread_id = ? ";
+
+    // Visibility and Approval Logic
+    // An admin sees all messages in any thread they are part of, regardless of approval status.
+    // A sender always sees their own messages, even if pending approval.
+    // Others see messages based on approval status and their visibility_level.
+    if ($authenticated_user['role'] !== 'admin' && $current_user_id !== 'm.sender_id') { // This sender_id check needs to be dynamic
+         $sql .= " AND (m.sender_id = {$current_user_id} OR (m.requires_approval = 0) OR (m.requires_approval = 1 AND m.approval_status = 'approved')) ";
+        if ($visibility_level === 'non_sensitive_only') {
+            // This condition might be redundant if approval model covers sensitivity,
+            // or it could mean hiding even approved messages if they are flagged sensitive by other means.
+            // For now, 'non_sensitive_only' for a non-admin means they only see approved messages if they required approval.
+            // This is largely covered by the line above.
+        }
+    }
+
+
+    $sql .= " ORDER BY m.sent_at ASC LIMIT ? OFFSET ?";
+
+    $stmt = $conn->prepare($sql);
+    if (!$stmt) { send_json_response(500, ['error' => 'Msg fetch prep failed: ' . $conn->error]); }
+    $stmt->bind_param("iii", $thread_id, $limit, $offset);
+    if (!$stmt->execute()) { send_json_response(500, ['error' => 'Msg fetch exec failed: ' . $stmt->error]); }
+
+    $result = $stmt->get_result();
+    $messages = [];
+    while ($row = $result->fetch_assoc()) {
+        $can_view_message = false;
+        if ($authenticated_user['role'] === 'admin') {
+            $can_view_message = true;
+        } elseif ((int)$row['sender_id'] === $current_user_id) {
+            $can_view_message = true; // Sender always sees their message
+        } elseif (!(bool)$row['requires_approval'] || $row['approval_status'] === 'approved') {
+            // If message doesn't require approval, or it's approved, check visibility level
+            if ($visibility_level === 'all') {
+                $can_view_message = true;
+            } elseif ($visibility_level === 'non_sensitive_only') {
+                // This assumes that if a message required approval and was approved, it's considered non-sensitive enough
+                // for those with 'non_sensitive_only' visibility.
+                // A more granular system might have an explicit `is_sensitive` flag on messages.
+                $can_view_message = true;
+            }
+        }
+        // If message requires approval and is pending/rejected, non-admin non-sender won't see it.
+
+        if($can_view_message){
+            $messages[] = [
+                'id' => (int)$row['id'],
+                'thread_id' => (int)$row['thread_id'],
+                'sender_id' => (int)$row['sender_id'],
+                'sender_username' => $row['sender_username'],
+                'sender_avatar_url' => $row['sender_avatar_url'],
+                'content' => $row['content'],
+                'sent_at' => $row['sent_at'],
+                'attachment_url' => $row['attachment_url'],
+                'attachment_type' => $row['attachment_type'],
+                'requires_approval' => (bool)$row['requires_approval'],
+                'approval_status' => $row['approval_status'],
+            ];
+        }
+    }
+    $stmt->close();
+
+    if (!empty($messages)) {
+        $last_message_id_fetched = end($messages)['id'];
+        $update_read_stmt = $conn->prepare("UPDATE thread_participants SET last_read_message_id = ?, unread_count = 0 WHERE thread_id = ? AND user_id = ? AND (last_read_message_id < ? OR last_read_message_id IS NULL)");
+        if($update_read_stmt){
+            $update_read_stmt->bind_param("iiii", $last_message_id_fetched, $thread_id, $current_user_id, $last_message_id_fetched);
+            $update_read_stmt->execute();
+            $update_read_stmt->close();
+        } else {
+            error_log("Failed to prepare statement to update read status: " . $conn->error);
+        }
+    }
+    send_json_response(200, $messages);
+}
+
+// Send a message (handles various thread types and permissions)
+elseif ($action === 'send_project_message' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $sender_id = (int)$authenticated_user['id'];
+    $sender_role = $authenticated_user['role']; // 'admin', 'client', 'freelancer'
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $thread_id = isset($data['thread_id']) ? (int)$data['thread_id'] : null;
+    $project_id = isset($data['project_id']) ? (int)$data['project_id'] : null;
+    $content = $data['content'] ?? null;
+    $target_user_ids = isset($data['target_user_ids']) && is_array($data['target_user_ids']) ? array_map('intval', $data['target_user_ids']) : []; // For creating new direct/group threads
+    $thread_type_hint = $data['thread_type_hint'] ?? null; // e.g., 'project_admin_client', 'project_admin_freelancer', 'direct'
+    $admin_client_message_freelancer_visibility = isset($data['admin_client_message_freelancer_visibility']) ? $data['admin_client_message_freelancer_visibility'] : 'all'; // 'all', 'non_sensitive_only', 'none'
+
+
+    if (empty($content)) {
+        send_json_response(400, ['error' => 'Message content is required.']);
+    }
+    if (!$thread_id && !$project_id && empty($target_user_ids)) {
+        send_json_response(400, ['error' => 'Thread ID, Project ID, or Target User IDs must be provided.']);
+    }
+
+    $conn->begin_transaction();
+    try {
+        if (!$thread_id) {
+            // Create a new thread
+            if ($project_id && $thread_type_hint) {
+                // Creating a project-specific thread
+                // Determine participants based on project roles and thread_type_hint
+                $stmt_proj_details = $conn->prepare("SELECT client_id, freelancer_id FROM projects WHERE id = ?");
+                if(!$stmt_proj_details) throw new Exception("DB error: project details prep. ".$conn->error);
+                $stmt_proj_details->bind_param("i", $project_id);
+                $stmt_proj_details->execute();
+                $proj_res = $stmt_proj_details->get_result();
+                if($proj_res->num_rows === 0) throw new Exception("Project not found for new thread.", 404);
+                $project_data = $proj_res->fetch_assoc();
+                $stmt_proj_details->close();
+
+                $project_client_id = (int)$project_data['client_id'];
+                $project_freelancer_id = $project_data['freelancer_id'] ? (int)$project_data['freelancer_id'] : null;
+
+                $thread_participants_to_add = [];
+                $thread_title_parts = [];
+
+                if ($thread_type_hint === 'project_admin_client') {
+                    if ($sender_id !== $project_client_id && $sender_role !== 'admin') throw new Exception("Forbidden to create admin-client thread.", 403);
+                    $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
+                    if ($sender_id !== $project_client_id) $thread_participants_to_add[$project_client_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
+                    // Admin is always a participant or observer
+                     if (!isset($thread_participants_to_add[$sender_id]) && $sender_role === 'admin') $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
+
+                    // Add freelancer as observer if project has one and admin chooses visibility
+                    if($project_freelancer_id && $admin_client_message_freelancer_visibility !== 'none'){
+                         $thread_participants_to_add[$project_freelancer_id] = ['role_in_thread' => 'admin_observer', 'visibility_level' => $admin_client_message_freelancer_visibility, 'can_message_directly' => false];
+                    }
+                    $thread_title_parts[] = "Project Client";
+
+                } elseif ($thread_type_hint === 'project_admin_freelancer') {
+                     if (!$project_freelancer_id) throw new Exception("Project has no assigned freelancer for this thread type.", 400);
+                     if ($sender_id !== $project_freelancer_id && $sender_role !== 'admin') throw new Exception("Forbidden to create admin-freelancer thread.", 403);
+                     $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
+                     if ($sender_id !== $project_freelancer_id) $thread_participants_to_add[$project_freelancer_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
+                     if (!isset($thread_participants_to_add[$sender_id]) && $sender_role === 'admin') $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
+                     $thread_title_parts[] = "Project Freelancer";
+
+                } elseif ($thread_type_hint === 'project_freelancer_client') {
+                    if (!$project_freelancer_id) throw new Exception("Project has no assigned freelancer for this thread type.", 400);
+                    if (($sender_id !== $project_client_id) && ($sender_id !== $project_freelancer_id)) throw new Exception("Forbidden to create freelancer-client thread.", 403);
+                    $thread_participants_to_add[$project_client_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
+                    $thread_participants_to_add[$project_freelancer_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
+                    // Admin as observer
+                    // Find an admin to add as observer - for simplicity, can be the sender if admin, or first active admin.
+                    // This part needs careful selection of which admin if multiple.
+                    $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true]; // ensure sender is there
+                    // Add an admin as observer. For now, if sender is not admin, pick first active admin.
+                    if($sender_role !== 'admin'){
+                        $admin_observer_stmt = $conn->prepare("SELECT id FROM users WHERE role='admin' AND is_active=1 LIMIT 1");
+                        $admin_observer_stmt->execute();
+                        $admin_obs_res = $admin_observer_stmt->get_result();
+                        if($admin_obs_data = $admin_obs_res->fetch_assoc()){
+                            $thread_participants_to_add[(int)$admin_obs_data['id']] = ['role_in_thread' => 'admin_observer', 'visibility_level' => 'all', 'can_message_directly' => false];
+                        }
+                        $admin_observer_stmt->close();
+                    }
+                     $thread_title_parts[] = "Freelancer/Client";
+                } else {
+                    throw new Exception("Invalid project thread type hint.", 400);
+                }
+
+                $final_thread_title = "Project {$project_id}: " . implode(" & ", $thread_title_parts);
+                $stmt_create_thread = $conn->prepare("INSERT INTO message_threads (project_id, title, type, created_by_id, last_message_at) VALUES (?, ?, ?, ?, NOW())");
+                if(!$stmt_create_thread) throw new Exception("DB error: create thread prep. ".$conn->error);
+                $stmt_create_thread->bind_param("issi", $project_id, $final_thread_title, $thread_type_hint, $sender_id);
+                if(!$stmt_create_thread->execute()) throw new Exception("DB error: create thread exec. ".$stmt_create_thread->error);
+                $thread_id = $conn->insert_id;
+                $stmt_create_thread->close();
+
+                $stmt_add_p = $conn->prepare("INSERT INTO thread_participants (thread_id, user_id, role_in_thread, visibility_level, can_message_directly) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE role_in_thread=VALUES(role_in_thread), visibility_level=VALUES(visibility_level), can_message_directly=VALUES(can_message_directly)");
+                if(!$stmt_add_p) throw new Exception("DB error: add participant prep. ".$conn->error);
+                foreach($thread_participants_to_add as $user_id_to_add => $p_data){
+                    $stmt_add_p->bind_param("iisss", $thread_id, $user_id_to_add, $p_data['role_in_thread'], $p_data['visibility_level'], $p_data['can_message_directly']);
+                    if(!$stmt_add_p->execute())  throw new Exception("DB error: add participant exec for user $user_id_to_add. ".$stmt_add_p->error);
+                }
+                $stmt_add_p->close();
+
+            } elseif (!empty($target_user_ids) && $thread_type_hint === 'direct') {
+                // Creating a direct message (1-on-1 or small group)
+                if (count($target_user_ids) === 1 && $target_user_ids[0] === $sender_id) throw new Exception("Cannot create a direct message thread with only yourself.", 400);
+                $all_participants_for_dm = array_unique(array_merge($target_user_ids, [$sender_id]));
+                sort($all_participants_for_dm); // Sort to create a consistent title/identifier if needed
+
+                // Check if a similar DM thread already exists (same participants, type 'direct')
+                 $sql_find_dm = "SELECT t.id
+                                FROM message_threads t
+                                WHERE t.type = 'direct' AND
+                                      (SELECT COUNT(DISTINCT tp.user_id) FROM thread_participants tp WHERE tp.thread_id = t.id) = ? AND
+                                      NOT EXISTS (
+                                        SELECT u_id FROM (SELECT ? AS u_id ".str_repeat("UNION ALL SELECT ?", count($all_participants_for_dm)-1).") AS expected_users
+                                        WHERE u_id NOT IN (SELECT tp_check.user_id FROM thread_participants tp_check WHERE tp_check.thread_id = t.id)
+                                      ) AND
+                                       NOT EXISTS (
+                                        SELECT tp_check.user_id FROM thread_participants tp_check WHERE tp_check.thread_id = t.id
+                                        AND tp_check.user_id NOT IN (".implode(',', array_fill(0, count($all_participants_for_dm), '?')).")
+                                      )
+                                LIMIT 1";
+
+                $find_params = array_merge([count($all_participants_for_dm)], $all_participants_for_dm, $all_participants_for_dm);
+                $find_types = "i" . str_repeat('i', count($all_participants_for_dm) * 2);
+
+                $stmt_find_dm_thread = $conn->prepare($sql_find_dm);
+                 if (!$stmt_find_dm_thread) throw new Exception("DB error: find DM prep. " . $conn->error);
+                $stmt_find_dm_thread->bind_param($find_types, ...$find_params);
+                $stmt_find_dm_thread->execute();
+                $res_find_dm = $stmt_find_dm_thread->get_result();
+                if($existing_dm = $res_find_dm->fetch_assoc()){
+                    $thread_id = (int)$existing_dm['id'];
+                } else {
+                    // Create new direct thread
+                    $dm_title_users = []; // Fetch usernames for title
+                    $stmt_get_usernames = $conn->prepare("SELECT username FROM users WHERE id = ?");
+                    foreach($all_participants_for_dm as $uid) {
+                        $stmt_get_usernames->bind_param("i", $uid); $stmt_get_usernames->execute();
+                        $dm_title_users[] = $stmt_get_usernames->get_result()->fetch_assoc()['username'];
+                    }
+                    $stmt_get_usernames->close();
+                    $dm_thread_title = implode(', ', $dm_title_users);
+
+                    $stmt_create_thread = $conn->prepare("INSERT INTO message_threads (title, type, created_by_id, last_message_at) VALUES (?, 'direct', ?, NOW())");
+                    if(!$stmt_create_thread) throw new Exception("DB error: create DM thread prep. ".$conn->error);
+                    $stmt_create_thread->bind_param("si", $dm_thread_title, $sender_id);
+                    if(!$stmt_create_thread->execute()) throw new Exception("DB error: create DM thread exec. ".$stmt_create_thread->error);
+                    $thread_id = $conn->insert_id;
+                    $stmt_create_thread->close();
+
+                    $stmt_add_p = $conn->prepare("INSERT INTO thread_participants (thread_id, user_id, role_in_thread, visibility_level, can_message_directly) VALUES (?, ?, 'participant', 'all', 1)");
+                    if(!$stmt_add_p) throw new Exception("DB error: add DM participant prep. ".$conn->error);
+                    foreach($all_participants_for_dm as $user_id_to_add){
+                        $stmt_add_p->bind_param("ii", $thread_id, $user_id_to_add);
+                        if(!$stmt_add_p->execute())  throw new Exception("DB error: add DM participant exec for $user_id_to_add. ".$stmt_add_p->error);
+                    }
+                    $stmt_add_p->close();
+                }
+                $stmt_find_dm_thread->close();
+            } else {
+                 throw new Exception("Insufficient data to determine or create a thread.");
+            }
+        }
+
+        // Authorization: Check if sender is a participant of the thread and can send messages
+        $stmt_auth_participant = $conn->prepare("SELECT tp.can_message_directly, mt.type as current_thread_type, mt.project_id as current_project_id
+                                                 FROM thread_participants tp
+                                                 JOIN message_threads mt ON tp.thread_id = mt.id
+                                                 WHERE tp.thread_id = ? AND tp.user_id = ?");
+        if (!$stmt_auth_participant) throw new Exception("Auth participant prep failed: " . $conn->error);
+        $stmt_auth_participant->bind_param("ii", $thread_id, $sender_id);
+        if (!$stmt_auth_participant->execute()) throw new Exception("Auth participant exec failed: " . $stmt_auth_participant->error);
+        $result_auth_participant = $stmt_auth_participant->get_result();
+        if ($result_auth_participant->num_rows === 0) {
+            throw new Exception("Forbidden: You are not a participant in this thread or thread does not exist.", 403);
+        }
+        $participant_details = $result_auth_participant->fetch_assoc();
+        if (!$participant_details['can_message_directly']) {
+            throw new Exception("Forbidden: You do not have permission to send messages in this thread.", 403);
+        }
+        $current_thread_type = $participant_details['current_thread_type'];
+        // $current_project_id = $participant_details['current_project_id']; // Already have $project_id if creating new
+        $stmt_auth_participant->close();
+
+        $requires_approval = false;
+        $approval_status = null; // Default for messages not requiring approval
+
+        if ($sender_role === 'freelancer' && $current_thread_type === 'project_freelancer_client') {
+            $requires_approval = true;
+            $approval_status = 'pending';
+        }
+
+        $current_timestamp_mysql = date('Y-m-d H:i:s');
+        $stmt_insert_message = $conn->prepare(
+            "INSERT INTO messages (thread_id, sender_id, content, sent_at, requires_approval, approval_status)
+             VALUES (?, ?, ?, ?, ?, ?)"
+        );
+        if (!$stmt_insert_message) throw new Exception("Msg insert prep failed: " . $conn->error);
+        $stmt_insert_message->bind_param("iissis", $thread_id, $sender_id, $content, $current_timestamp_mysql, $requires_approval, $approval_status);
+        if (!$stmt_insert_message->execute()) throw new Exception("Msg insert exec failed: " . $stmt_insert_message->error . " Thread: $thread_id, Sender: $sender_id");
+        $new_message_id = $conn->insert_id;
+        $stmt_insert_message->close();
+
+        $stmt_update_thread = $conn->prepare("UPDATE message_threads SET last_message_at = ? WHERE id = ?");
+        if (!$stmt_update_thread) throw new Exception("Thread update prep failed: " . $conn->error);
+        $stmt_update_thread->bind_param("si", $current_timestamp_mysql, $thread_id);
+        $stmt_update_thread->execute();
+        $stmt_update_thread->close();
+
+        $stmt_update_unread = $conn->prepare("UPDATE thread_participants SET unread_count = unread_count + 1 WHERE thread_id = ? AND user_id != ?");
+        if ($stmt_update_unread) {
+            $stmt_update_unread->bind_param("ii", $thread_id, $sender_id);
+            $stmt_update_unread->execute();
+            $stmt_update_unread->close();
+        } else { error_log("Unread update prep failed: " . $conn->error); }
+
+        // Handle admin sending to client and freelancer visibility adjustment
+        if ($sender_role === 'admin' && $current_thread_type === 'project_admin_client' && $project_id) {
+            $stmt_get_proj_freelancer = $conn->prepare("SELECT freelancer_id FROM projects WHERE id = ?");
+            if($stmt_get_proj_freelancer){
+                $stmt_get_proj_freelancer->bind_param("i", $project_id); // Use $project_id from input or fetched if thread existed
+                $stmt_get_proj_freelancer->execute();
+                $res_proj_freelancer = $stmt_get_proj_freelancer->get_result();
+                if($proj_f_data = $res_proj_freelancer->fetch_assoc()){
+                    $project_freelancer_id_for_visibility = $proj_f_data['freelancer_id'] ? (int)$proj_f_data['freelancer_id'] : null;
+                    if($project_freelancer_id_for_visibility){
+                        $stmt_update_f_visibility = $conn->prepare("UPDATE thread_participants SET visibility_level = ? WHERE thread_id = ? AND user_id = ? AND role_in_thread = 'admin_observer'");
+                        if($stmt_update_f_visibility){
+                            $stmt_update_f_visibility->bind_param("sii", $admin_client_message_freelancer_visibility, $thread_id, $project_freelancer_id_for_visibility);
+                            $stmt_update_f_visibility->execute();
+                            $stmt_update_f_visibility->close();
+                        } else { error_log("Update freelancer visibility prep failed: ".$conn->error); }
+                    }
+                }
+                $stmt_get_proj_freelancer->close();
+            } else { error_log("Get project freelancer prep failed: ".$conn->error); }
+        }
+
+        $conn->commit();
+        send_json_response(201, [
+            'message' => 'Message sent successfully.', 'message_id' => $new_message_id, 'thread_id' => $thread_id,
+            'requires_approval' => $requires_approval, 'approval_status' => $approval_status
+        ]);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        $error_code = $e->getCode() === 403 || $e->getCode() === 404 || $e->getCode() === 400 ? $e->getCode() : 500;
+        send_json_response($error_code, ['error' => "Send message failed: " . $e->getMessage()]);
+    }
+}
+
+
+// Admin approves or rejects a message
+elseif ($action === 'moderate_project_message' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can moderate messages.']);
+    }
+    $admin_id = (int)$authenticated_user['id'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $message_id = isset($data['message_id']) ? (int)$data['message_id'] : null;
+    $new_approval_status = $data['approval_status'] ?? null; // 'approved' or 'rejected'
+
+    if (!$message_id || !in_array($new_approval_status, ['approved', 'rejected'])) {
+        send_json_response(400, ['error' => 'Message ID and valid approval status (approved/rejected) are required.']);
+    }
+
+    $stmt_check_msg = $conn->prepare("SELECT requires_approval, approval_status, thread_id, sender_id FROM messages WHERE id = ?");
+    if(!$stmt_check_msg) { send_json_response(500, ['error' => 'DB error checking message: ' . $conn->error]); }
+    $stmt_check_msg->bind_param("i", $message_id);
+    $stmt_check_msg->execute();
+    $result_msg_check = $stmt_check_msg->get_result();
+    if($result_msg_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Message not found.']);
+    }
+    $msg_data = $result_msg_check->fetch_assoc();
+    $message_thread_id = (int)$msg_data['thread_id'];
+    // $message_sender_id = (int)$msg_data['sender_id'];
+
+    if(!$msg_data['requires_approval']) {
+        send_json_response(400, ['error' => 'This message does not require approval.']);
+    }
+    $stmt_check_msg->close();
+
+    $stmt_update = $conn->prepare("UPDATE messages SET approval_status = ?, approved_by_id = ?, approved_at = NOW() WHERE id = ? AND requires_approval = 1");
+    if (!$stmt_update) {
+        send_json_response(500, ['error' => 'Failed to prepare message moderation statement: ' . $conn->error]);
+    }
+    $stmt_update->bind_param("sii", $new_approval_status, $admin_id, $message_id);
+
+    if ($stmt_update->execute()) {
+        if ($stmt_update->affected_rows > 0) {
+            if ($new_approval_status === 'approved') {
+                // If approved, increment unread count for participants of this thread (except sender and admin who just approved)
+                // This requires knowing the thread_id and who the participants are.
+                $stmt_notify_participants = $conn->prepare("UPDATE thread_participants SET unread_count = unread_count + 1 WHERE thread_id = ? AND user_id != ? AND user_id != ?");
+                if($stmt_notify_participants){
+                    $stmt_notify_participants->bind_param("iii", $message_thread_id, $msg_data['sender_id'], $admin_id);
+                    $stmt_notify_participants->execute();
+                    $stmt_notify_participants->close();
+                } else {
+                    error_log("Failed to prepare unread increment on approval: " . $conn->error);
+                }
+            }
+            send_json_response(200, ['message' => "Message {$new_approval_status} successfully."]);
+        } else {
+            send_json_response(400, ['message' => 'Message not updated. It might not require approval, not found, or status already set.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to moderate message: ' . $stmt_update->error]);
+    }
+    $stmt_update->close();
+}
+
+// --- END NEW ADVANCED MESSAGING API ENDPOINTS ---
+
+// --- Projects API ---
+// MODIFIED: get_projects to handle single project fetch and join user tables
+elseif ($action === 'get_projects' && $method === 'GET') {
+    $project_id_filter = isset($_GET['id']) ? (int)$_GET['id'] : (isset($_GET['project_id']) ? (int)$_GET['project_id'] : null);
+
+    if ($project_id_filter !== null) {
+        // Fetch a single project by ID
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id
+                WHERE p.id = ?";
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for single project: ' . $conn->error]);
+        }
+        $stmt->bind_param("i", $project_id_filter);
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for single project: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        if ($project = $result->fetch_assoc()) {
+            if (isset($project['client_id'])) $project['client_id'] = (int)$project['client_id'];
+            if (isset($project['freelancer_id'])) $project['freelancer_id'] = $project['freelancer_id'] === null ? null : (int)$project['freelancer_id'];
+
+            // Fetch skills for the single project
+            $project['skills_required'] = [];
+            $stmt_skills_proj = $conn->prepare("SELECT s.id, s.name FROM project_skills ps JOIN skills s ON ps.skill_id = s.id WHERE ps.project_id = ? ORDER BY s.name ASC");
+            if ($stmt_skills_proj) {
+                $stmt_skills_proj->bind_param("i", $project_id_filter);
+                if ($stmt_skills_proj->execute()) {
+                    $result_skills_proj = $stmt_skills_proj->get_result();
+                    while ($skill_row_proj = $result_skills_proj->fetch_assoc()) {
+                        $project['skills_required'][] = ['id' => (int)$skill_row_proj['id'], 'name' => $skill_row_proj['name']];
+                    }
+                } else { error_log("Failed to execute skills fetch for single project: " . $stmt_skills_proj->error); }
+                $stmt_skills_proj->close();
+            } else { error_log("Failed to prepare skills fetch for single project: " . $conn->error); }
+
+            send_json_response(200, $project); // Return single project object
+        } else {
+            send_json_response(404, ['error' => 'Project not found.']);
+        }
+        $stmt->close();
+        // exit; // send_json_response includes exit
+    } else {
+        // Existing logic for fetching multiple projects with status filter
+        $status_filter = isset($_GET['status']) ? $_GET['status'] : 'open';
+
+        $sql = "SELECT p.id, p.title, p.description, p.client_id, p.freelancer_id, p.status, p.created_at, p.updated_at,
+                       c.username as client_username, f.username as freelancer_username
+                FROM projects p
+                LEFT JOIN users c ON p.client_id = c.id
+                LEFT JOIN users f ON p.freelancer_id = f.id";
+        $params = [];
+        $types = "";
+
+        if ($status_filter) {
+            if ($status_filter !== 'all' && $status_filter !== '') {
+                 $sql .= " WHERE p.status = ?";
+                 $params[] = $status_filter;
+                 $types .= "s";
+            } else if ($status_filter === '') {
+                $sql .= " WHERE p.status = ?";
+                $params[] = 'open';
+                $types .= "s";
+            }
+        }
+        $sql .= " ORDER BY p.created_at DESC";
+
+        $stmt = $conn->prepare($sql);
+        if ($stmt === false) {
+            send_json_response(500, ['error' => 'Failed to prepare statement for projects list: ' . $conn->error]);
+        }
+        if (!empty($types)) {
+            $stmt->bind_param($types, ...$params);
+        }
+        if (!$stmt->execute()) {
+            send_json_response(500, ['error' => 'Failed to execute statement for projects list: ' . $stmt->error]);
+        }
+        $result = $stmt->get_result();
+        $projects = [];
+        while ($row = $result->fetch_assoc()) {
+            if (isset($row['client_id'])) $row['client_id'] = (int)$row['client_id'];
+            if (isset($row['freelancer_id'])) $row['freelancer_id'] = $row['freelancer_id'] === null ? null : (int)$row['freelancer_id'];
+            $projects[] = $row;
+        }
+        $stmt->close();
+        send_json_response(200, $projects);
+    }
+}
+// MODIFIED: Create Project with Admin client_id assignment
+elseif ($action === 'create_project' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $auth_user_id = (int)$authenticated_user['id'];
+    $auth_user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+
+    if (empty($data['title']) || empty($data['description'])) {
+        send_json_response(400, ['error' => 'Missing required fields: title, description.']);
+    }
+
+    $title = $data['title'];
+    $description = $data['description'];
+    $final_client_id = null;
+
+    // Determine client_id based on role and payload
+    if ($auth_user_role === 'admin') {
+        if (isset($data['client_id']) && !empty($data['client_id'])) {
+            $payload_client_id = (int)$data['client_id'];
+            // Validate this client_id
+            $stmt_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_client_check) { send_json_response(500, ['error' => 'Server error preparing client validation.']); }
+            $stmt_client_check->bind_param("i", $payload_client_id);
+            if (!$stmt_client_check->execute()) { send_json_response(500, ['error' => 'Server error executing client validation.']); }
+            $result_client_check = $stmt_client_check->get_result();
+            if ($result_client_check->num_rows === 0) {
+                send_json_response(404, ['error' => "Specified client_id '{$payload_client_id}' not found."]);
+            }
+            $client_to_assign = $result_client_check->fetch_assoc();
+            if ($client_to_assign['role'] !== 'client') {
+                send_json_response(400, ['error' => "User '{$payload_client_id}' is not a client. Project can only be assigned to a client user."]);
+            }
+            $stmt_client_check->close();
+            $final_client_id = $payload_client_id;
+        } else {
+            // Admin creating project for themselves (no client_id in payload)
+            $final_client_id = $auth_user_id;
+        }
+    } elseif ($auth_user_role === 'client') {
+        $final_client_id = $auth_user_id;
+    } else {
+        // Other roles (e.g. freelancer) are not allowed to create projects
+        send_json_response(403, ['error' => 'Forbidden: Your role does not have permission to create projects.']);
+    }
+
+    if ($final_client_id === null) { // Should be caught by role check, but as a safeguard
+        send_json_response(500, ['error' => 'Could not determine client for the project.']);
+    }
+
+    $freelancer_id = isset($data['freelancer_id']) && !empty($data['freelancer_id']) ? (int)$data['freelancer_id'] : null;
+    if ($freelancer_id !== null) { // Optional: Validate freelancer_id if provided
+        $stmt_f_check = $conn->prepare("SELECT role FROM users WHERE id = ?");
+        if (!$stmt_f_check) { send_json_response(500, ['error' => 'Server error: Freelancer validation prep failed.']);}
+        $stmt_f_check->bind_param("i", $freelancer_id);
+        if (!$stmt_f_check->execute()) { send_json_response(500, ['error' => 'Server error: Freelancer validation exec failed.']);}
+        $res_f_check = $stmt_f_check->get_result();
+        if ($res_f_check->num_rows === 0) { send_json_response(404, ['error' => 'Assigned freelancer not found.']); }
+        if ($res_f_check->fetch_assoc()['role'] !== 'freelancer') { send_json_response(400, ['error' => 'Assigned user is not a freelancer.']);}
+        $stmt_f_check->close();
+    }
+
+    $status = $data['status'] ?? 'open'; // Default status, or from payload
+    $valid_project_statuses = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled']; // Extend as needed
+    if (!in_array($status, $valid_project_statuses)) {
+        send_json_response(400, ['error' => 'Invalid project status provided.']);
+    }
+
+
+    $stmt = $conn->prepare("INSERT INTO projects (title, description, client_id, freelancer_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NOW(), NOW())");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare statement for project creation: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("ssiis", $title, $description, $final_client_id, $freelancer_id, $status);
+
+    if ($stmt->execute()) {
+        $new_project_id_for_notification = $stmt->insert_id;
+        $current_project_status = $status; // $status variable from create_project scope
+
+        // Send response first, then notify
+        send_json_response(201, [
+            'message' => 'Project created successfully.',
+            'project_id' => $new_project_id_for_notification,
+            'client_id' => $final_client_id
+        ]);
+
+        if ($current_project_status === 'pending_approval' || $current_project_status === 'Pending Approval') { // Case consistency
+             create_admin_notification($conn, 'project_awaits_approval', 'project', $new_project_id_for_notification);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to create project: ' . $stmt->error]);
+    }
+    $stmt->close();
+}
+// END MODIFIED: Create Project
+// MODIFIED: update_project to allow admin client_id change and other enhancements
+elseif ($action === 'update_project' && ($method === 'PUT' || $method === 'POST')) { // Allow POST too
+    $authenticated_user = require_authentication($conn);
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    if (!$project_id && isset($data['project_id_to_update'])) { // Use a distinct name to avoid conflict
+        $project_id = (int)$data['project_id_to_update'];
+    }
+
+
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for update.']);
+    }
+    // Remove project_id_to_update from $data if it exists, as it's not a table field
+    if (isset($data['project_id_to_update'])) {
+        unset($data['project_id_to_update']);
+    }
+    if (empty($data) && !isset($data['skill_ids'])) { // Check if $data is empty OR only skill_ids is set (which means no project table fields)
+        send_json_response(400, ['error' => 'Invalid JSON or no data provided for project table update. If only updating skills, ensure skill_ids is provided.']);
+    }
+
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) { send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check. ' . $conn->error]); }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) { send_json_response(500, ['error' => 'Server error: Failed to execute ownership check. ' . $stmt_check_owner->error]); }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) { send_json_response(404, ['error' => 'Project not found.']); }
+    $project_data_db = $result_owner_check->fetch_assoc();
+    $project_client_id_original = (int)$project_data_db['client_id'];
+    $stmt_check_owner->close();
+
+    if ($user_role !== 'admin' && $project_client_id_original !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to update this project.']);
+    }
+
+    $conn->begin_transaction();
+    try {
+        $fields_to_update = [];
+        $params = [];
+        $types = "";
+
+        if ($user_role === 'admin' && isset($data['client_id'])) {
+            $new_client_id = (int)$data['client_id'];
+            $stmt_new_client_check = $conn->prepare("SELECT id, role FROM users WHERE id = ?");
+            if (!$stmt_new_client_check) { throw new Exception('Server error preparing new client validation.'); }
+            $stmt_new_client_check->bind_param("i", $new_client_id);
+            if (!$stmt_new_client_check->execute()) { throw new Exception('Server error executing new client validation.'); }
+            $result_new_client_check = $stmt_new_client_check->get_result();
+            if ($result_new_client_check->num_rows === 0) {
+                throw new Exception("New client_id '{$new_client_id}' not found.");
+            }
+            $new_client_data = $result_new_client_check->fetch_assoc();
+            if ($new_client_data['role'] !== 'client') {
+                throw new Exception("User '{$new_client_id}' is not a client. Project can only be assigned to a client user.");
+            }
+            $stmt_new_client_check->close();
+            $fields_to_update[] = "client_id = ?"; $params[] = $new_client_id; $types .= "i";
+        }
+
+        if (isset($data['title'])) {
+            $fields_to_update[] = "title = ?"; $params[] = $data['title']; $types .= "s";
+        }
+        if (isset($data['description'])) {
+            $fields_to_update[] = "description = ?"; $params[] = $data['description']; $types .= "s";
+        }
+        if (array_key_exists('freelancer_id', $data)) {
+            $assign_freelancer_id = $data['freelancer_id'] === null ? null : (int)$data['freelancer_id'];
+            if ($assign_freelancer_id !== null) {
+                $stmt_f_check_update = $conn->prepare("SELECT role FROM users WHERE id = ?");
+                if (!$stmt_f_check_update) { throw new Exception('Server error: Freelancer validation prep failed.');}
+                $stmt_f_check_update->bind_param("i", $assign_freelancer_id);
+                if (!$stmt_f_check_update->execute()) { throw new Exception('Server error: Freelancer validation exec failed.');}
+                $res_f_check_update = $stmt_f_check_update->get_result();
+                if ($res_f_check_update->num_rows === 0) { throw new Exception('Assigned freelancer for update not found.'); }
+                if ($res_f_check_update->fetch_assoc()['role'] !== 'freelancer') { throw new Exception('Assigned user for update is not a freelancer.');}
+                $stmt_f_check_update->close();
+            }
+            $fields_to_update[] = "freelancer_id = ?"; $params[] = $assign_freelancer_id; $types .= "i";
+        }
+        if (isset($data['status'])) {
+            $valid_project_statuses_update = ['open', 'pending_approval', 'in_progress', 'completed', 'cancelled', 'archived'];
+            if (!in_array($data['status'], $valid_project_statuses_update)) {
+                throw new Exception('Invalid project status for update.');
+            }
+            $fields_to_update[] = "status = ?"; $params[] = $data['status']; $types .= "s";
+        }
+
+        $project_table_updated = false;
+        if (!empty($fields_to_update)) {
+            $fields_to_update[] = "updated_at = NOW()";
+            $sql_update_project_table = "UPDATE projects SET " . implode(", ", $fields_to_update) . " WHERE id = ?";
+            $current_params_for_project = $params;
+            $current_params_for_project[] = $project_id;
+            $current_types_for_project = $types . "i";
+
+            $stmt_update_project_table = $conn->prepare($sql_update_project_table);
+            if ($stmt_update_project_table === false) {
+                throw new Exception('Failed to prepare project table update statement: ' . $conn->error);
+            }
+            if (strlen($current_types_for_project) !== count($current_params_for_project)){
+                 throw new Exception('Param count mismatch for projects table update. Types: '.$current_types_for_project.' Params: '.count($current_params_for_project));
+            }
+             if (!empty($current_types_for_project)) { // Check if there are params to bind
+                $stmt_update_project_table->bind_param($current_types_for_project, ...$current_params_for_project);
+             }
+
+            if (!$stmt_update_project_table->execute()) {
+                throw new Exception('Failed to update project details in projects table: ' . $stmt_update_project_table->error);
+            }
+            if($stmt_update_project_table->affected_rows > 0) $project_table_updated = true;
+            $stmt_update_project_table->close();
+        }
+
+        $skills_table_updated = false;
+        if (isset($data['skill_ids']) && is_array($data['skill_ids'])) {
+            $skill_ids_for_project = array_map('intval', $data['skill_ids']);
+
+            $stmt_delete_proj_skills = $conn->prepare("DELETE FROM project_skills WHERE project_id = ?");
+            if (!$stmt_delete_proj_skills) { throw new Exception('Failed to prepare deleting project skills. ' . $conn->error); }
+            $stmt_delete_proj_skills->bind_param("i", $project_id);
+            if (!$stmt_delete_proj_skills->execute()) { throw new Exception('Failed to delete project skills. ' . $stmt_delete_proj_skills->error); }
+            // We consider skills updated if the key 'skill_ids' is present, even if it's empty (means remove all)
+            // or if rows were deleted or inserted.
+            if ($stmt_delete_proj_skills->affected_rows > 0 || !empty($skill_ids_for_project)) {
+                $skills_table_updated = true;
+            }
+            $stmt_delete_proj_skills->close();
+
+            if (!empty($skill_ids_for_project)) {
+                $proj_skill_placeholders = implode(',', array_fill(0, count($skill_ids_for_project), '?'));
+                $stmt_check_valid_proj_skills = $conn->prepare("SELECT id FROM skills WHERE id IN ($proj_skill_placeholders)");
+                if (!$stmt_check_valid_proj_skills) { throw new Exception('Failed to prepare project skill ID validation. ' . $conn->error); }
+                $proj_skill_types = str_repeat('i', count($skill_ids_for_project));
+                $stmt_check_valid_proj_skills->bind_param($proj_skill_types, ...$skill_ids_for_project);
+                if (!$stmt_check_valid_proj_skills->execute()) { throw new Exception('Failed to execute project skill ID validation. ' . $stmt_check_valid_proj_skills->error); }
+                $valid_proj_skill_result = $stmt_check_valid_proj_skills->get_result();
+                if ($valid_proj_skill_result->num_rows !== count($skill_ids_for_project)) {
+                    throw new Exception('One or more provided skill IDs for project are invalid.');
+                }
+                $stmt_check_valid_proj_skills->close();
+
+                $sql_insert_project_skill = "INSERT INTO project_skills (project_id, skill_id) VALUES (?, ?)";
+                $stmt_insert_proj_skill = $conn->prepare($sql_insert_project_skill);
+                if (!$stmt_insert_proj_skill) { throw new Exception('Failed to prepare adding project skill. ' . $conn->error); }
+
+                $inserted_skill_rows = 0;
+                foreach ($skill_ids_for_project as $skill_id_proj) {
+                    $stmt_insert_proj_skill->bind_param("ii", $project_id, $skill_id_proj);
+                    if (!$stmt_insert_proj_skill->execute()) {
+                        throw new Exception('Failed to add skill ID ' . $skill_id_proj . ' for project. ' . $stmt_insert_proj_skill->error);
+                    }
+                    if ($stmt_insert_proj_skill->affected_rows > 0) $inserted_skill_rows++;
+                }
+                $stmt_insert_proj_skill->close();
+                if ($inserted_skill_rows > 0) $skills_table_updated = true;
+            }
+        }
+
+        if (!$project_table_updated && !$skills_table_updated && !(isset($data['skill_ids']) && empty($data['skill_ids']))) {
+            // This condition means no project fields were in $data to update (so $fields_to_update was empty)
+            // AND skill_ids was not provided at all (so no attempt to clear/update skills)
+            // OR skill_ids was provided but was identical to existing skills (not easily checkable here without fetching old skills)
+            // For simplicity now, if fields_to_update is empty and skill_ids key wasn't even set, it's "no data".
+            // If skill_ids was set (even if empty, meaning "remove all"), it's an update.
+            if (empty($fields_to_update) && !isset($data['skill_ids'])) {
+                 $conn->rollback(); // Nothing to commit
+                 send_json_response(200, ['message' => 'No update data provided for project or skills.']);
+            }
+        }
+
+        $conn->commit();
+        send_json_response(200, ['message' => 'Project details and/or skills updated successfully.']);
+
+    } catch (Exception $e) {
+        $conn->rollback();
+        if (strpos($e->getMessage(), 'Duplicate entry') !== false || strpos($e->getMessage(), 'already exists') !== false) {
+            send_json_response(409, ['error' => $e->getMessage()]);
+        } elseif (strpos($e->getMessage(), 'not found') !== false) {
+            send_json_response(404, ['error' => $e->getMessage()]);
+        } else {
+            send_json_response(500, ['error' => 'Failed to update project: ' . $e->getMessage()]);
+        }
+    }
+}
+// END MODIFIED: update_project
+elseif ($action === 'delete_project' && $method === 'DELETE') {
+    $authenticated_user = require_authentication($conn); // 1. Require Authentication
+    $user_id = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $project_id = isset($_GET['id']) ? (int)$_GET['id'] : null;
+    if (!$project_id) {
+        send_json_response(400, ['error' => 'Project ID is required for deletion.']);
+    }
+
+    // 2. Authorize User: Fetch project's client_id first
+    $stmt_check_owner = $conn->prepare("SELECT client_id FROM projects WHERE id = ?");
+    if ($stmt_check_owner === false) {
+        send_json_response(500, ['error' => 'Server error: Failed to prepare ownership check for delete. ' . $conn->error]);
+    }
+    $stmt_check_owner->bind_param("i", $project_id);
+    if (!$stmt_check_owner->execute()) {
+        send_json_response(500, ['error' => 'Server error: Failed to execute ownership check for delete. ' . $stmt_check_owner->error]);
+    }
+    $result_owner_check = $stmt_check_owner->get_result();
+    if ($result_owner_check->num_rows === 0) {
+        send_json_response(404, ['error' => 'Project not found, cannot delete.']);
+    }
+    $project_data = $result_owner_check->fetch_assoc();
+    $project_client_id = (int)$project_data['client_id'];
+    $stmt_check_owner->close();
+
+    // Authorization check
+    if ($user_role !== 'admin' && $project_client_id !== $user_id) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to delete this project.']);
+    }
+
+    // Proceed with delete logic
+    // TODO: Consider what happens to related data (e.g., applications, job cards) when a project is deleted.
+    // For now, it's a direct delete. Future enhancements might involve soft deletes or cascading deletes/archiving.
+
+    $stmt = $conn->prepare("DELETE FROM projects WHERE id = ?");
+    if ($stmt === false) {
+        send_json_response(500, ['error' => 'Failed to prepare delete statement: ' . $conn->error]);
+    }
+
+    $stmt->bind_param("i", $project_id);
+
+    if ($stmt->execute()) {
+        if ($stmt->affected_rows > 0) {
+            send_json_response(200, ['message' => 'Project deleted successfully.']);
+        } else {
+            // This case should ideally not be reached if the ownership check found the project.
+            // If it is, it means the project was deleted between the check and this operation.
+            send_json_response(404, ['message' => 'Project not found or already deleted.']);
+        }
+    } else {
+        send_json_response(500, ['error' => 'Failed to delete project: ' . $stmt->error]);
+    }
+    $stmt->close();
+} else {
+    // No action or invalid action/method combination
+    send_json_response(404, ['error' => 'API endpoint not found or invalid request.']);
+}
+
+// Close the database connection
+$conn->close();
+?>
+
+// NEW: Log Time for a Job Card
+elseif ($action === 'log_time' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $user_id_logging_time = (int)$authenticated_user['id'];
+    $user_role = $authenticated_user['role'];
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $job_card_id = isset($data['job_card_id']) ? (int)$data['job_card_id'] : null;
+    $start_time_str = $data['start_time'] ?? null;
+    $end_time_str = $data['end_time'] ?? null;
+    $notes = $data['notes'] ?? null;
+
+    if (!$job_card_id || empty($start_time_str) || empty($end_time_str)) {
+        send_json_response(400, ['error' => 'Job Card ID, start time, and end time are required.']);
+    }
+
+    // Validate and parse timestamps
+    try {
+        $start_time_ts = new DateTime($start_time_str);
+        $end_time_ts = new DateTime($end_time_str);
+    } catch (Exception $e) {
+        send_json_response(400, ['error' => 'Invalid start or end time format. Please use ISO8601 format (e.g., YYYY-MM-DDTHH:MM:SSZ).']);
+    }
+
+    if ($start_time_ts >= $end_time_ts) {
+        send_json_response(400, ['error' => 'Start time must be before end time.']);
+    }
+
+    // Calculate duration in minutes
+    $duration_minutes = ($end_time_ts->getTimestamp() - $start_time_ts->getTimestamp()) / 60;
+    if ($duration_minutes <= 0) { // Should be caught by above, but as safety
+        send_json_response(400, ['error' => 'Duration must be positive. Ensure end time is after start time.']);
+    }
+
+
+    // Authorization: Check if user is allowed to log time for this job card
+    $stmt_auth_jc = $conn->prepare(
+        "SELECT jc.assigned_freelancer_id AS job_card_assignee,
+                p.client_id AS project_client_id,
+                p.freelancer_id AS project_main_freelancer_id,
+                jc_proj.status AS project_status
+         FROM job_cards jc
+         JOIN projects p ON jc.project_id = p.id
+         JOIN projects jc_proj ON jc.project_id = jc_proj.id
+         WHERE jc.id = ?"
+    );
+    if (!$stmt_auth_jc) { send_json_response(500, ['error' => 'Server error preparing time log authorization check. ' . $conn->error]); }
+    $stmt_auth_jc->bind_param("i", $job_card_id);
+    if (!$stmt_auth_jc->execute()) { send_json_response(500, ['error' => 'Server error executing time log authorization check. ' . $stmt_auth_jc->error]); }
+    $result_auth_jc = $stmt_auth_jc->get_result();
+    if ($result_auth_jc->num_rows === 0) {
+        send_json_response(404, ['error' => 'Job Card not found.']);
+    }
+    $jc_auth_details = $result_auth_jc->fetch_assoc();
+    $project_client_id = (int)$jc_auth_details['project_client_id'];
+    $job_card_assignee_id = $jc_auth_details['job_card_assignee'] ? (int)$jc_auth_details['job_card_assignee'] : null;
+    $project_main_freelancer_id = $jc_auth_details['project_main_freelancer_id'] ? (int)$jc_auth_details['project_main_freelancer_id'] : null;
+    $project_status = $jc_auth_details['project_status'];
+    $stmt_auth_jc->close();
+
+    // Project must be in progress to log time
+    if ($project_status !== 'in_progress' && $project_status !== 'assigned' && $project_status !== 'active') { // 'active' if used
+        send_json_response(403, ['error' => "Time cannot be logged for this job card as the project status is '{$project_status}'. Project must be active."]);
+    }
+
+    $is_authorized_to_log = false;
+    if ($user_role === 'admin') {
+        $is_authorized_to_log = true;
+    } elseif ($user_role === 'client' && $project_client_id === $user_id_logging_time) {
+        // Clients typically don't log time this way, but could be for record keeping if feature exists.
+        // For now, let's restrict clients from logging time directly unless specific requirements arise.
+        // send_json_response(403, ['error' => 'Clients cannot directly log time for job cards.']);
+        // OR, allow it: $is_authorized_to_log = true; (Let's assume not for now)
+    } elseif ($user_role === 'freelancer') {
+        if ($job_card_assignee_id === $user_id_logging_time || $project_main_freelancer_id === $user_id_logging_time) {
+            $is_authorized_to_log = true;
+        }
+    }
+
+    if (!$is_authorized_to_log) {
+        send_json_response(403, ['error' => 'Forbidden: You do not have permission to log time for this job card.']);
+    }
+
+    // Insert new time log
+    $sql_insert_log = "INSERT INTO time_logs (job_card_id, user_id, start_time, end_time, duration_minutes, notes)
+                       VALUES (?, ?, ?, ?, ?, ?)";
+    $stmt_insert_log = $conn->prepare($sql_insert_log);
+    if (!$stmt_insert_log) {
+        send_json_response(500, ['error' => 'Server error preparing time log creation

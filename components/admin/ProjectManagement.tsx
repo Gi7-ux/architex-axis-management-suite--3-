@@ -1,49 +1,51 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { ProjectStatus, UserRole, Application } from '../../types'; // Removed Project, JobCardStatus
-import { 
-    fetchProjectsAPI,
-    fetchProjectDetailsAPI,
-    fetchApplicationsForProjectAPI,
-    createProjectAPI,
-    updateApplicationStatusAPI,
-    deleteProjectAPI,
-    adminFetchAllUsersAPI,
-    updateProjectAPI,
-    AdminUserView,
-    CreateProjectPHPData,
-    ProjectPHPResponse,
-    Skill,
-    fetchAllSkillsAPI,
-    ApiError as ApiErrorType // Import ApiErrorType
+import { useToast } from '../shared/toast/useToast';
+import {
+  fetchProjectsAPI,
+  fetchProjectDetailsAPI,
+  fetchApplicationsForProjectAPI,
+  createProjectAPI,
+  updateApplicationStatusAPI,
+  deleteProjectAPI,
+  adminFetchAllUsersAPI,
+  updateProjectAPI,
+  AdminUserView,
+  CreateProjectPHPData,
+  UpdateProjectPHPData,
+  ProjectPHPResponse, // Import new type
+  Skill, // Import Skill
+  fetchAllSkillsAPI // Import fetchAllSkillsAPI
+  // ProjectApplicationPHPResponse is also available if needed for projectApplications state
 } from '../../apiService';
 import { NAV_LINKS } from '../../constants';
 import Button from '../shared/Button';
-import { PencilIcon, TrashIcon, EyeIcon, PlusCircleIcon, CheckCircleIcon, UserCheckIcon } from '../shared/IconComponents'; 
+import { PencilIcon, TrashIcon, EyeIcon, PlusCircleIcon, CheckCircleIcon, UserCheckIcon } from '../shared/IconComponents';
 import Modal from '../shared/Modal';
-import ErrorMessage from '../shared/ErrorMessage'; // Import ErrorMessage
-import { useAuth } from '../AuthContext';
+import { useAuth } from '../../contexts/AuthContext'; // Corrected path
 import { useNavigate, useLocation } from 'react-router-dom';
 import LoadingSpinner from '../shared/LoadingSpinner';
 
 // Helper to calculate project spend (basic version, assumes rates are available on user objects)
 // This calculation remains inaccurate as AdminUserView does not have hourlyRate.
 const calculateProjectSpend = (project: ProjectPHPResponse, users: AdminUserView[]): number => {
-    if (!project.freelancer_id) return 0;
-    const freelancer = users.find(u => u.id === project.freelancer_id && u.role === UserRole.FREELANCER);
-    if (!freelancer) {
-        console.warn(`Freelancer ${project.freelancer_id} not found in AdminUserView list. Spend calculation might be inaccurate.`);
-        return 0;
-    }
-    // TimeLogs are not part of ProjectPHPResponse, so this part of calculation would fail or need adjustment
-    // For now, returning 0 as detailed time logs aren't directly on the project object for spend calculation here.
-    // const totalMinutes = project.jobCards?.reduce((sum, jc) =>
-    //     sum + (jc.timeLogs?.reduce((logSum, log) => logSum + log.durationMinutes, 0) || 0), 0) || 0;
-    // return (totalMinutes / 60) * (freelancer.hourlyRate || 0); // hourlyRate not on AdminUserView
+  if (!project.freelancer_id) return 0;
+  const freelancer = users.find(u => u.id === project.freelancer_id && u.role === UserRole.FREELANCER);
+  if (!freelancer) {
+    console.warn(`Freelancer ${project.freelancer_id} not found in AdminUserView list. Spend calculation might be inaccurate.`);
     return 0;
+  }
+  // TimeLogs are not part of ProjectPHPResponse, so this part of calculation would fail or need adjustment
+  // For now, returning 0 as detailed time logs aren't directly on the project object for spend calculation here.
+  // const totalMinutes = project.jobCards?.reduce((sum, jc) =>
+  //     sum + (jc.timeLogs?.reduce((logSum, log) => logSum + log.durationMinutes, 0) || 0), 0) || 0;
+  // return (totalMinutes / 60) * (freelancer.hourlyRate || 0); // hourlyRate not on AdminUserView
+  return 0;
 };
 
 const ProjectManagement: React.FC = () => {
   const { user: adminUser } = useAuth();
+  const { addToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
   const [projects, setProjects] = useState<ProjectPHPResponse[]>([]); // Use ProjectPHPResponse
@@ -60,7 +62,7 @@ const ProjectManagement: React.FC = () => {
   const [projectApplications, setProjectApplications] = useState<Application[]>([]); // Or ProjectApplicationPHPResponse
   const [isDetailModalOpen, setIsDetailModalOpen] = useState(false);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  
+
   // Form state for Create Project Modal
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
@@ -83,31 +85,29 @@ const ProjectManagement: React.FC = () => {
   const [sortConfig, setSortConfig] = useState<{ key: keyof ProjectPHPResponse | 'spend' | null, direction: 'ascending' | 'descending' }>({ key: 'created_at', direction: 'descending' });
 
   const loadInitialData = useCallback(async () => {
-      setIsLoading(true);
-      setPageActionError(null); // Use pageActionError
-      try {
-          const [fetchedProjects, fetchedAdminUsersView, fetchedSkills] = await Promise.all([
-            fetchProjectsAPI({ status: 'all' }),
-            adminFetchAllUsersAPI(),
-            fetchAllSkillsAPI()
-          ]);
+    setIsLoading(true);
+    setFormError(null);
+    try {
+      const [fetchedProjects, fetchedAdminUsersView, fetchedSkills] = await Promise.all([
+        fetchProjectsAPI({ status: 'all' }),
+        adminFetchAllUsersAPI(),
+        fetchAllSkillsAPI() // Fetch skills
+      ]);
 
-          setProjects(fetchedProjects);
-          setAllUsers(fetchedAdminUsersView);
-          setClients(fetchedAdminUsersView.filter(u => u.role === UserRole.CLIENT));
-          setFreelancers(fetchedAdminUsersView.filter(u => u.role === UserRole.FREELANCER));
-          setAllGlobalSkills(fetchedSkills.sort((a,b) => a.name.localeCompare(b.name)));
+      setProjects(fetchedProjects); // Directly use ProjectPHPResponse
+      setAllUsers(fetchedAdminUsersView);
+      setClients(fetchedAdminUsersView.filter(u => u.role === UserRole.CLIENT));
+      setFreelancers(fetchedAdminUsersView.filter(u => u.role === UserRole.FREELANCER));
+      setAllGlobalSkills(fetchedSkills.sort((a, b) => a.name.localeCompare(b.name)));
 
-          if (location.pathname.endsWith(NAV_LINKS.ADMIN_CREATE_PROJECT)) {
-              handleOpenCreateModal();
-          }
-      } catch (err) {
-          console.error("Failed to load initial project management data:", err);
-          if (err instanceof ApiErrorType) setPageActionError(err);
-          else if (err instanceof Error) setPageActionError(err.message);
-          else setPageActionError("Failed to load necessary data. Please try refreshing.");
-      } finally { setIsLoading(false); }
-  }, [location.pathname]);
+
+    } catch (error: any) {
+      console.error("Failed to load initial project management data:", error);
+      addToast(error.message || 'Failed to load initial project management data.', 'error');
+      // setFormError might still be useful if there's a dedicated error display area on the main page, not just toasts
+      setFormError(error.message || "Failed to load necessary data. Please try refreshing.");
+    } finally { setIsLoading(false); }
+  }, [location.pathname, addToast]);
 
   useEffect(() => { loadInitialData(); }, [loadInitialData]);
 
@@ -115,25 +115,24 @@ const ProjectManagement: React.FC = () => {
     setIsSubmitting(true);
     setDetailModalError(null); // Use detailModalError
     try {
-        const details = await fetchProjectDetailsAPI(project.id);
-        setSelectedProject(details); 
-        setEditFormData(details);
-        setSelectedProjectSkillIds(new Set(details.skills_required?.map(s => s.id) || []));
+      const details = await fetchProjectDetailsAPI(project.id); // This should include skills_required
+      setSelectedProject(details);
+      setEditFormData(details); // Initialize edit form data with project details
+      setSelectedProjectSkillIds(new Set(details.skills_required?.map(s => s.id) || []));
 
-        if (details && (details.status === ProjectStatus.OPEN || details.status === ProjectStatus.PENDING_APPROVAL) && !details.freelancer_id) {
-            const apps = await fetchApplicationsForProjectAPI(String(details.id));
-            setProjectApplications(apps as Application[]);
-        } else {
-            setProjectApplications([]);
-        }
-        setIsDetailModalOpen(true);
-    } catch (err) {
-        console.error("Error fetching project details:", err);
-        if (err instanceof ApiErrorType) setDetailModalError(err);
-        else if (err instanceof Error) setDetailModalError(err.message);
-        else setDetailModalError("Could not load project details.");
+      if (details && (details.status === ProjectStatus.OPEN || details.status === ProjectStatus.PENDING_APPROVAL) && !details.freelancer_id) {
+        const apps = await fetchApplicationsForProjectAPI(String(details.id));
+        setProjectApplications(apps as Application[]);
+      } else {
+        setProjectApplications([]);
+      }
+      setIsDetailModalOpen(true);
+    } catch (error: any) {
+      console.error("Error fetching project details:", error);
+      addToast(error.message || 'Could not load project details.', 'error');
+      setFormError(error.message || "Could not load project details."); // Keep for modal error display
     } finally {
-        setIsSubmitting(false);
+      setIsSubmitting(false); // Stop loading indicator
     }
   };
 
@@ -164,12 +163,12 @@ const ProjectManagement: React.FC = () => {
     setTitle(''); setDescription(''); setProjectStatus(ProjectStatus.PENDING_APPROVAL);
     setAssignedClientId(''); setAssignedFreelancerIdModal(''); setCreateModalError(null); // Use createModalError
   };
-  
+
   const handleOpenCreateModal = () => {
     resetCreateForm(); // This will clear createModalError
     setIsCreateModalOpen(true);
     if (location.pathname !== `${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`) {
-        navigate(`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`, { replace: true });
+      navigate(`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`, { replace: true });
     }
   };
 
@@ -177,14 +176,14 @@ const ProjectManagement: React.FC = () => {
     setIsCreateModalOpen(false);
     resetCreateForm();
     if (location.pathname.endsWith(NAV_LINKS.ADMIN_CREATE_PROJECT)) {
-        navigate(`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`);
+      navigate(`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}`);
     }
   };
 
   const handleCreateProject = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!adminUser ) {
-        setCreateModalError("Authentication error."); return;
+    if (!adminUser) { // Admin role check is implicit as only admin sees this form section usually
+      setFormError("Authentication error."); return;
     }
     if (!title || !description) {
       setCreateModalError("Project title and description are required.");
@@ -207,37 +206,33 @@ const ProjectManagement: React.FC = () => {
       }
 
       await createProjectAPI(projectPayload);
-      alert("Project created successfully."); // Keep alert for direct feedback
-      await loadInitialData(); 
+      addToast('Project created successfully.', 'success');
+      await loadInitialData();
       handleCloseCreateModal();
     } catch (err) {
       console.error("Failed to create project", err);
-      if (err instanceof ApiErrorType) setCreateModalError(err);
-      else if (err instanceof Error) setCreateModalError(err.message);
-      else setCreateModalError("Failed to create project. Please try again.");
+      addToast(err.message || 'Failed to create project. Please try again.', 'error');
+      // setFormError(err.message || "Failed to create project. Please try again."); // Keep for modal error display if needed
     } finally {
       setIsSubmitting(false);
     }
   };
-  
+
   const handleApproveProjectStatus = async (projectId: number) => {
     setIsSubmitting(true); setPageActionError(null); // Use pageActionError
     try {
-        await updateProjectAPI(String(projectId), { status: ProjectStatus.OPEN });
-        alert("Project approved and is now open for applications."); // Keep alert
-        await loadInitialData();
-        if (selectedProject?.id === projectId && isDetailModalOpen) { // Refresh modal if open
-            const details = await fetchProjectDetailsAPI(projectId);
-            setSelectedProject(details || null);
-            setEditFormData(details || {}); // Keep edit form in sync
-        }
-    } catch (err) {
-        // alert(err.message || "Failed to approve project."); // Alerting is one way, or use pageActionError
-        if (err instanceof ApiErrorType) setPageActionError(err);
-        else if (err instanceof Error) setPageActionError(err.message);
-        else setPageActionError("Failed to approve project.");
+      await updateProjectAPI(String(projectId), { status: ProjectStatus.OPEN });
+      addToast('Project approved and is now open for applications.', 'success');
+      await loadInitialData();
+      if (selectedProject?.id === projectId) {
+        const details = await fetchProjectDetailsAPI(projectId);
+        setSelectedProject(details || null);
+      }
+    } catch (err: any) {
+      addToast(err.message || 'Failed to approve project.', 'error');
+      // setFormError(err.message || "Failed to approve project."); // Removed as toast is primary
     } finally {
-        setIsSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -245,29 +240,26 @@ const ProjectManagement: React.FC = () => {
     if (!adminUser) return;
     setIsSubmitting(true); setDetailModalError(null); // Error in detail modal context
     try {
-        await updateApplicationStatusAPI(applicationId, { status: 'accepted' });
-        alert("Application accepted. Freelancer assigned and project is In Progress."); // Keep alert
-        await loadInitialData(); // Refresh main list
-        // Refresh details in the modal if it's for the current project
-        if (selectedProject?.id === projectIdToRefresh && isDetailModalOpen) {
-            const details = await fetchProjectDetailsAPI(projectIdToRefresh);
-            setSelectedProject(details || null);
-            setEditFormData(details || {});
-            setSelectedProjectSkillIds(new Set(details?.skills_required?.map(s => s.id) || []));
-            // Re-fetch applications for the modal as they would have changed
-            const apps = await fetchApplicationsForProjectAPI(String(details?.id));
-            setProjectApplications(apps as Application[]);
-        } else {
-            // If not the current modal's project, or modal not open, just close (if it were open for another project)
-            handleCloseDetailModal();
+      await updateApplicationStatusAPI(applicationId, { status: 'accepted' });
+      addToast('Application accepted. Freelancer assigned and project is In Progress.', 'success');
+      await loadInitialData();
+      if (selectedProject?.id === projectIdToRefresh) {
+        const details = await fetchProjectDetailsAPI(projectIdToRefresh);
+        setSelectedProject(details || null);
+        if (details) {
+          // If the modal is being enhanced for editing, re-populate skills
+          setSelectedProjectSkillIds(new Set(details.skills_required?.map(s => s.id) || []));
+          const apps = await fetchApplicationsForProjectAPI(String(details.id));
+          setProjectApplications(apps as Application[]);
         }
-    } catch (err) {
-        console.error("Failed to accept application:", err);
-        if (err instanceof ApiErrorType) setDetailModalError(err); // Show error in modal
-        else if (err instanceof Error) setDetailModalError(err.message);
-        else setDetailModalError("Failed to accept application.");
+      } else {
+        handleCloseDetailModal();
+      }
+    } catch (err: any) {
+      addToast(err.message || 'Failed to accept application.', 'error');
+      // setFormError(err.message || "Failed to accept application."); // Removed as toast is primary
     } finally {
-        setIsSubmitting(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -285,13 +277,13 @@ const ProjectManagement: React.FC = () => {
         skill_ids: Array.from(selectedProjectSkillIds) // Use the state for selected skills
       };
       await updateProjectAPI(String(selectedProject.id), payload);
-      await loadInitialData();
-      handleCloseDetailModal(); // Close modal on success
-    } catch (err) {
+      addToast('Project details updated successfully.', 'success');
+      await loadInitialData(); // Refresh list
+      handleCloseDetailModal();
+    } catch (err: any) {
       console.error("Failed to update project details", err);
-      if (err instanceof ApiErrorType) setDetailModalError(err);
-      else if (err instanceof Error) setDetailModalError(err.message);
-      else setDetailModalError("Failed to update project details. Please check inputs or try again.");
+      addToast(err.message || 'Failed to update project details. Please check inputs or try again.', 'error');
+      // setFormError(err.message || "Failed to update project details. Please check inputs or try again."); // Keep for modal error display
     } finally {
       setIsSubmitting(false);
     }
@@ -302,41 +294,39 @@ const ProjectManagement: React.FC = () => {
     handleCloseDetailModal();
   };
 
-  const handleDeleteProject = async (projectId: number) => {
-    if(window.confirm("Are you sure you want to delete this project? This cannot be undone.")) {
-        setIsSubmitting(true);
-        setPageActionError(null); // Use pageActionError
-        try {
-            await deleteProjectAPI(String(projectId));
-            await loadInitialData();
-        } catch (err) {
-            // alert(err.message || "Failed to delete project."); // Alerting is one way
-            if (err instanceof ApiErrorType) setPageActionError(err);
-            else if (err instanceof Error) setPageActionError(err.message);
-            else setPageActionError("Failed to delete project.");
-        } finally {
-            setIsSubmitting(false);
-        }
+  const handleDeleteProject = async (projectId: number) => { // Param is number
+    if (window.confirm("Are you sure you want to delete this project? This cannot be undone.")) {
+      setIsSubmitting(true);
+      setFormError(null);
+      try {
+        await deleteProjectAPI(String(projectId));
+        addToast('Project deleted successfully.', 'success');
+        await loadInitialData();
+      } catch (err: any) {
+        addToast(err.message || 'Failed to delete project.', 'error');
+        // setFormError(err.message || "Failed to delete project."); // Removed as toast is primary
+      } finally {
+        setIsSubmitting(false);
+      }
     }
   };
 
   const handleToggleArchive = async (project: ProjectPHPResponse) => {
     setIsSubmitting(true); setPageActionError(null); // Use pageActionError
     try {
-        const currentIsArchived = project.status === 'archived';
-        const newStatus = currentIsArchived ? ProjectStatus.OPEN : 'archived' as ProjectStatus;
-        await updateProjectAPI(String(project.id), { status: newStatus });
-        await loadInitialData(); 
-    } catch (err) {
-        // alert(err.message || "Failed to update archive status."); // Alerting is one way
-        if (err instanceof ApiErrorType) setPageActionError(err);
-        else if (err instanceof Error) setPageActionError(err.message);
-        else setPageActionError("Failed to update archive status.");
+      const currentIsArchived = project.status === 'archived'; // Determine if currently archived
+      const newStatus = currentIsArchived ? ProjectStatus.OPEN : 'archived' as ProjectStatus;
+      await updateProjectAPI(String(project.id), { status: newStatus });
+      addToast('Project archive status updated successfully.', 'success');
+      await loadInitialData();
+    } catch (err: any) {
+      addToast(err.message || 'Failed to update archive status.', 'error');
+      // setFormError(err.message || "Failed to update archive status."); // Removed as toast is primary
     } finally {
-        setIsSubmitting(false);
+      setIsSubmitting(false);
     }
   };
-  
+
   const getStatusClass = (status?: ProjectStatus | string) => {
     switch (status) {
       case ProjectStatus.PENDING_APPROVAL: return 'bg-orange-100 text-orange-700';
@@ -356,7 +346,7 @@ const ProjectManagement: React.FC = () => {
     }
     setSortConfig({ key, direction });
   };
-  
+
   const sortedAndFilteredProjects = React.useMemo(() => {
     let sortableProjects = [...projects];
 
@@ -365,9 +355,9 @@ const ProjectManagement: React.FC = () => {
       // Ensure client_id and freelancer_id are numbers for comparison if filters are numbers
       const matchesClient = filterClient === 'ALL' || project.client_id === parseInt(filterClient);
       const matchesFreelancer = filterFreelancer === 'ALL' || project.freelancer_id === parseInt(filterFreelancer);
-      const matchesSearch = searchTerm === '' || 
-                            project.title.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                            (project.description && project.description.toLowerCase().includes(searchTerm.toLowerCase()));
+      const matchesSearch = searchTerm === '' ||
+        project.title.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        (project.description && project.description.toLowerCase().includes(searchTerm.toLowerCase()));
       const isArchived = project.status === 'archived';
       const matchesArchived = showArchived ? true : !isArchived;
       return matchesStatus && matchesClient && matchesFreelancer && matchesSearch && matchesArchived;
@@ -377,11 +367,11 @@ const ProjectManagement: React.FC = () => {
       sortableProjects.sort((a, b) => {
         let aValue, bValue;
         if (sortConfig.key === 'spend') {
-            aValue = calculateProjectSpend(a, allUsers); // Pass ProjectPHPResponse
-            bValue = calculateProjectSpend(b, allUsers); // Pass ProjectPHPResponse
+          aValue = calculateProjectSpend(a, allUsers); // Pass ProjectPHPResponse
+          bValue = calculateProjectSpend(b, allUsers); // Pass ProjectPHPResponse
         } else {
-            aValue = a[sortConfig.key as keyof ProjectPHPResponse];
-            bValue = b[sortConfig.key as keyof ProjectPHPResponse];
+          aValue = a[sortConfig.key as keyof ProjectPHPResponse];
+          bValue = b[sortConfig.key as keyof ProjectPHPResponse];
         }
 
         if (typeof aValue === 'number' && typeof bValue === 'number') {
@@ -392,9 +382,9 @@ const ProjectManagement: React.FC = () => {
         }
         // Assuming created_at and deadline are strings
         if (sortConfig.key === 'deadline' || sortConfig.key === 'created_at') {
-            const dateA = new Date(aValue as string).getTime();
-            const dateB = new Date(bValue as string).getTime();
-            return sortConfig.direction === 'ascending' ? dateA - dateB : dateB - dateA;
+          const dateA = new Date(aValue as string).getTime();
+          const dateB = new Date(bValue as string).getTime();
+          return sortConfig.direction === 'ascending' ? dateA - dateB : dateB - dateA;
         }
         return 0;
       });
@@ -418,17 +408,16 @@ const ProjectManagement: React.FC = () => {
     <div className="p-4 md:p-6 bg-white shadow-xl rounded-lg">
       <div className="flex justify-between items-center mb-6 pb-4 border-b border-gray-200">
         <h2 className="text-2xl font-semibold text-primary">Project Management</h2>
-         <Button onClick={handleOpenCreateModal} leftIcon={<PlusCircleIcon className="w-5 h-5"/>} variant="primary">
+        <Button onClick={handleOpenCreateModal} leftIcon={<PlusCircleIcon className="w-5 h-5" />} variant="primary">
           Create Project
         </Button>
       </div>
-      <ErrorMessage error={pageActionError} /> {/* Display page-level errors */}
+      {formError && !isDetailModalOpen && !isCreateModalOpen && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
+      {/* Note: formError for modals is handled inside the modal now. The above is for page-level form errors if any. */}
       <div className="mb-6 p-4 bg-gray-50 rounded-lg border border-gray-200 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
         <div>
           <label className="block text-xs font-medium text-gray-700">Search</label>
-          <input type="text" placeholder="Title, description..." value={searchTerm}
-                 onChange={(e) => {setSearchTerm(e.target.value); if(pageActionError) setPageActionError(null);}}
-                 className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm focus:ring-primary focus:border-primary"/>
+          <input type="text" placeholder="Title, description..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm" />
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-700">Status</label>
@@ -437,7 +426,7 @@ const ProjectManagement: React.FC = () => {
                   className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm focus:ring-primary focus:border-primary">
             <option value="ALL">All Statuses</option>
             {Object.values(ProjectStatus).map(s => <option key={s} value={s}>{s}</option>)}
-             <option value="archived">Archived</option> {/* Add archived to filter */}
+            <option value="archived">Archived</option> {/* Add archived to filter */}
           </select>
         </div>
         <div>
@@ -455,15 +444,15 @@ const ProjectManagement: React.FC = () => {
           </select>
         </div>
         <div className="md:col-span-2 lg:col-span-4 flex items-center">
-            <input type="checkbox" id="showArchived" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} className="h-4 w-4 text-primary border-gray-300 rounded focus:ring-primary"/>
-            <label htmlFor="showArchived" className="ml-2 text-sm text-gray-700">Show Archived Projects</label>
+          <input type="checkbox" id="showArchived" checked={showArchived} onChange={e => setShowArchived(e.target.checked)} className="h-4 w-4 text-primary border-gray-300 rounded focus:ring-primary" />
+          <label htmlFor="showArchived" className="ml-2 text-sm text-gray-700">Show Archived Projects</label>
         </div>
       </div>
 
       {!isLoading && projects.length === 0 && !formError && (
-         <div className="text-center py-10">
-            <p className="text-gray-500 text-lg">No projects found in the system.</p>
-            <p className="text-gray-400 text-sm mt-2">You can start by creating a new project.</p>
+        <div className="text-center py-10">
+          <p className="text-gray-500 text-lg">No projects found in the system.</p>
+          <p className="text-gray-400 text-sm mt-2">You can start by creating a new project.</p>
         </div>
       )}
 
@@ -487,32 +476,33 @@ const ProjectManagement: React.FC = () => {
                 // const projectSpend = calculateProjectSpend(project, allUsers); // Spend calculation is inaccurate
                 // const isOverdue = project.deadline && new Date(project.deadline) < new Date() && project.status !== ProjectStatus.COMPLETED && project.status !== ProjectStatus.CANCELLED;
                 return (
-                <tr key={project.id} className={`hover:bg-primary-extralight transition-colors duration-150 ${isArchived ? 'opacity-60 bg-gray-100' : ''}`}>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{project.title}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.client_username || 'N/A'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.freelancer_username || 'Not Assigned'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(project.status)}`}>
-                      {project.status}
-                    </span>
-                  </td>
-                  {/* Budget and Spend Columns Removed */}
-                  <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-500`}>{project.created_at ? new Date(project.created_at).toLocaleDateString() : 'N/A'}</td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-1">
-                    <Button variant="ghost" size="sm" onClick={() => handleViewDetails(project)} aria-label="View Details" className="text-primary hover:text-primary-hover p-1" disabled={isSubmitting}><EyeIcon className="w-4 h-4" /></Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleNavigateToEditProjectTasks(project)} aria-label="Manage Project Tasks" className="text-primary hover:text-primary-hover p-1" disabled={isSubmitting}><PencilIcon className="w-4 h-4" /></Button>
-                    {project.status === ProjectStatus.PENDING_APPROVAL && (
-                       <Button variant="ghost" size="sm" onClick={() => handleApproveProjectStatus(project.id)} aria-label="Approve Project" className="text-green-600 hover:text-green-700 p-1" disabled={isSubmitting}><CheckCircleIcon className="w-4 h-4" /></Button>
-                    )}
-                    <Button variant="ghost" size="sm" onClick={() => handleToggleArchive(project)} aria-label={isArchived ? "Unarchive" : "Archive"} className="text-gray-500 hover:text-gray-700 p-1" disabled={isSubmitting}>
-                       {isArchived ? '📤' : '📥'}
-                    </Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleDeleteProject(project.id)} aria-label="Delete" className="text-red-500 hover:text-red-700 p-1" disabled={isSubmitting}><TrashIcon className="w-4 h-4" /></Button>
-                  </td>
-                </tr>
-              )})}
+                  <tr key={project.id} className={`hover:bg-primary-extralight transition-colors duration-150 ${isArchived ? 'opacity-60 bg-gray-100' : ''}`}>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{project.title}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.client_username || 'N/A'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{project.freelancer_username || 'Not Assigned'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                      <span className={`px-2.5 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusClass(project.status)}`}>
+                        {project.status}
+                      </span>
+                    </td>
+                    {/* Budget and Spend Columns Removed */}
+                    <td className={`px-6 py-4 whitespace-nowrap text-sm text-gray-500`}>{project.created_at ? new Date(project.created_at).toLocaleDateString() : 'N/A'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium space-x-1">
+                      <Button variant="ghost" size="sm" onClick={() => handleViewDetails(project)} aria-label="View Details" className="text-primary hover:text-primary-hover p-1" disabled={isSubmitting}><EyeIcon className="w-4 h-4" /></Button>
+                      <Button variant="ghost" size="sm" onClick={() => handleNavigateToEditProjectTasks(project)} aria-label="Manage Project Tasks" className="text-primary hover:text-primary-hover p-1" disabled={isSubmitting}><PencilIcon className="w-4 h-4" /></Button>
+                      {project.status === ProjectStatus.PENDING_APPROVAL && (
+                        <Button variant="ghost" size="sm" onClick={() => handleApproveProjectStatus(project.id)} aria-label="Approve Project" className="text-green-600 hover:text-green-700 p-1" disabled={isSubmitting}><CheckCircleIcon className="w-4 h-4" /></Button>
+                      )}
+                      <Button variant="ghost" size="sm" onClick={() => handleToggleArchive(project)} aria-label={isArchived ? "Unarchive" : "Archive"} className="text-gray-500 hover:text-gray-700 p-1" disabled={isSubmitting}>
+                        {isArchived ? '📤' : '📥'}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => handleDeleteProject(project.id)} aria-label="Delete" className="text-red-500 hover:text-red-700 p-1" disabled={isSubmitting}><TrashIcon className="w-4 h-4" /></Button>
+                    </td>
+                  </tr>
+                )
+              })}
               {sortedAndFilteredProjects.length === 0 && (
-                  <tr><td colSpan={6} className="text-center py-4 text-gray-500">No projects match the current filters.</td></tr>
+                <tr><td colSpan={6} className="text-center py-4 text-gray-500">No projects match the current filters.</td></tr>
               )}
             </tbody>
           </table>
@@ -520,25 +510,26 @@ const ProjectManagement: React.FC = () => {
       )}
 
       {selectedProject && isDetailModalOpen && ( // Ensure modal only renders if selectedProject and isDetailModalOpen are true
-        <Modal isOpen={isDetailModalOpen} onClose={handleCloseDetailModal} title={`Edit Project: ${editFormData?.title || selectedProject.title}`} size="2xl">
+        <Modal isOpen={isDetailModalOpen} onClose={handleCloseDetailModal} title={`Edit Project: ${editFormData?.title || selectedProject.title}`} size="2xl" testId="edit-project-modal">
           <form onSubmit={(e) => { e.preventDefault(); handleUpdateProjectDetails(); }} className="space-y-4 max-h-[75vh] overflow-y-auto p-1">
-            <ErrorMessage error={detailModalError} />
+            {/* Modal-specific formError display */}
+            {formError && isDetailModalOpen && <div className="mb-3 p-2 bg-red-100 text-red-600 rounded-md text-sm">{formError}</div>}
 
             <div>
               <label htmlFor="edit_proj_title" className="block text-sm font-medium text-gray-700">Title*</label>
               <input type="text" name="title" id="edit_proj_title" value={editFormData?.title || ''} onChange={handleEditFormChange} required
-                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary"/>
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" />
             </div>
             <div>
               <label htmlFor="edit_proj_desc" className="block text-sm font-medium text-gray-700">Description*</label>
               <textarea name="description" id="edit_proj_desc" rows={3} value={editFormData?.description || ''} onChange={handleEditFormChange} required
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary"/>
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
                 <label htmlFor="edit_proj_status" className="block text-sm font-medium text-gray-700">Status</label>
                 <select name="status" id="edit_proj_status" value={editFormData?.status || ''} onChange={handleEditFormChange}
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
                   {Object.values(ProjectStatus).map(s => <option key={s} value={s}>{s}</option>)}
                   <option value="archived">Archived</option>
                 </select>
@@ -546,7 +537,7 @@ const ProjectManagement: React.FC = () => {
               <div>
                 <label htmlFor="edit_proj_client" className="block text-sm font-medium text-gray-700">Client</label>
                 <select name="client_id" id="edit_proj_client" value={editFormData?.client_id || ''} onChange={handleEditFormChange}
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
+                  className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
                   <option value="">None (Admin is Client)</option>
                   {clients.map(c => <option key={c.id} value={c.id}>{c.username} (ID: {c.id})</option>)}
                 </select>
@@ -555,7 +546,7 @@ const ProjectManagement: React.FC = () => {
             <div>
               <label htmlFor="edit_proj_freelancer" className="block text-sm font-medium text-gray-700">Assigned Freelancer</label>
               <select name="freelancer_id" id="edit_proj_freelancer" value={editFormData?.freelancer_id || ''} onChange={handleEditFormChange}
-                      className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm bg-white focus:outline-none focus:ring-primary focus:border-primary">
                 <option value="">Not Assigned</option>
                 {freelancers.map(f => <option key={f.id} value={f.id}>{f.username} (ID: {f.id})</option>)}
               </select>
@@ -581,55 +572,55 @@ const ProjectManagement: React.FC = () => {
               </div>
             </div>
 
-            { (editFormData?.status === ProjectStatus.OPEN || editFormData?.status === ProjectStatus.PENDING_APPROVAL) &&
+            {/* Display Applications if relevant (read-only part of the form) */}
+            {(editFormData?.status === ProjectStatus.OPEN || editFormData?.status === ProjectStatus.PENDING_APPROVAL) &&
               projectApplications.length > 0 && !editFormData?.freelancer_id && (
                 <div className="pt-4 border-t mt-4">
-                    <h4 className="text-md font-semibold text-gray-700 mb-2">
-                        Pending Applications ({projectApplications.filter(app => app.status === 'pending').length})
-                    </h4>
-                    {projectApplications.filter(app => app.status === 'pending').length > 0 ? (
-                        <div className="space-y-3 max-h-60 overflow-y-auto">
-                            {projectApplications.filter(app => app.status === 'pending').map(app => (
-                                <div key={app.id}
-                                     className="p-3 bg-gray-50 rounded-md border hover:shadow-sm">
-                                    <p className="font-semibold text-gray-800">{ (app as any).freelancer_username /* Assuming type cast for now */} <span className="text-xs text-gray-500">({app.freelancer_id})</span></p>
-                                    <p className="text-sm text-gray-600">Bid: R {app.bid_amount ? app.bid_amount.toLocaleString() : 'N/A'}</p>
-                                    <p className="text-sm text-gray-600 mt-1 italic whitespace-pre-wrap">"{app.proposal_text}"</p>
-                                    <Button 
-                                        onClick={() => handleAcceptApplication(String(app.id), selectedProject.id)}
-                                        variant="primary" size="sm" className="mt-2" 
-                                        leftIcon={<UserCheckIcon className="w-4 h-4"/>}
-                                        isLoading={isSubmitting}>
-                                        Accept Application
-                                    </Button>
-                                </div>
-                            ))}
+                  <h4 className="text-md font-semibold text-gray-700 mb-2">
+                    Pending Applications ({projectApplications.filter(app => app.status === 'pending').length})
+                  </h4>
+                  {projectApplications.filter(app => app.status === 'pending').length > 0 ? (
+                    <div className="space-y-3 max-h-60 overflow-y-auto">
+                      {projectApplications.filter(app => app.status === 'pending').map(app => (
+                        <div key={app.id}
+                          className="p-3 bg-gray-50 rounded-md border hover:shadow-sm">
+                          <p className="font-semibold text-gray-800">{(app as any).freelancer_username /* Assuming type cast for now */} <span className="text-xs text-gray-500">({app.freelancerId})</span></p>
+                          <p className="text-sm text-gray-600">Bid: R {app.bidAmount ? app.bidAmount.toLocaleString() : 'N/A'}</p>
+                          <p className="text-sm text-gray-600 mt-1 italic whitespace-pre-wrap">"{app.proposalText}"</p>
+                          <Button
+                            onClick={() => handleAcceptApplication(String(app.id), selectedProject.id)}
+                            variant="primary" size="sm" className="mt-2"
+                            leftIcon={<UserCheckIcon className="w-4 h-4" />}
+                            isLoading={isSubmitting}>
+                            Accept Application
+                          </Button>
                         </div>
-                    ) : (
-                        <p className="text-sm text-gray-500">No applications currently pending for this project.</p>
-                    )}
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-gray-500">No applications currently pending for this project.</p>
+                  )}
                 </div>
-            )}
+              )}
             {selectedProject.status === ProjectStatus.OPEN && projectApplications.filter(app => app.status === 'pending').length === 0 && !selectedProject.freelancer_id && (
-                 <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open but has no pending applications yet.</p>
+              <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open but has no pending applications yet.</p>
             )}
             {editFormData?.status === ProjectStatus.OPEN && projectApplications.filter(app => app.status === 'pending').length === 0 && !editFormData?.freelancer_id && (
-                 <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open but has no pending applications yet.</p>
+              <p className="text-sm text-gray-500 pt-4 border-t mt-4">This project is open but has no pending applications yet.</p>
             )}
 
 
-            <div className="mt-6 flex justify-end space-x-3 pt-4 border-t border-gray-200">
-                <Button type="button" variant="ghost" size="md" onClick={handleCloseDetailModal} disabled={isSubmitting}>Cancel</Button>
-                <Button type="submit" variant="primary" size="md" isLoading={isSubmitting} disabled={isSubmitting}>Save Changes</Button>
+            <div className="mt-6 flex justify-end space-x-3 pt-4 border-t">
+              <Button type="button" variant="secondary" onClick={handleCloseDetailModal} disabled={isSubmitting}>Cancel</Button>
+              <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting}>Save Changes</Button>
             </div>
           </form>
         </Modal>
       )}
 
       {isCreateModalOpen && (
-        <Modal isOpen={isCreateModalOpen} onClose={handleCloseCreateModal} title="Create New Project (Admin)" size="xl">
-           <form onSubmit={handleCreateProject} className="space-y-4 p-1">
-            <ErrorMessage error={createModalError} />
+        <Modal isOpen={isCreateModalOpen} onClose={handleCloseCreateModal} title="Create New Project (Admin)" size="xl" testId="create-project-modal">
+          <form onSubmit={handleCreateProject} className="space-y-4 p-1">
             <div>
               <label htmlFor="proj_title_create" className="block text-sm font-medium text-gray-700">Project Title*</label>
               <input type="text" id="proj_title_create" value={title}
@@ -643,13 +634,12 @@ const ProjectManagement: React.FC = () => {
                         className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm" required />
             </div>
             <div>
-                <label htmlFor="proj_status_create" className="block text-sm font-medium text-gray-700">Initial Status</label>
-                <select id="proj_status_create" value={projectStatus}
-                        onChange={(e) => {setProjectStatus(e.target.value as ProjectStatus); if(createModalError) setCreateModalError(null);}}
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-white sm:text-sm">
-                    <option value={ProjectStatus.PENDING_APPROVAL}>Pending Approval</option>
-                    <option value={ProjectStatus.OPEN}>Open</option>
-                </select>
+              <label htmlFor="proj_status_create" className="block text-sm font-medium text-gray-700">Initial Status</label>
+              <select id="proj_status_create" value={projectStatus} onChange={e => setProjectStatus(e.target.value as ProjectStatus)}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-white">
+                <option value={ProjectStatus.PENDING_APPROVAL}>Pending Approval</option>
+                <option value={ProjectStatus.OPEN}>Open</option>
+              </select>
             </div>
             {adminUser?.role === UserRole.ADMIN && (
               <div>
@@ -662,18 +652,19 @@ const ProjectManagement: React.FC = () => {
                 </select>
               </div>
             )}
-             <div>
-                <label htmlFor="assignFreelancerModal" className="block text-sm font-medium text-gray-700">Assign Freelancer (Optional)</label>
-                <select id="assignFreelancerModal" value={assignedFreelancerIdModal}
-                        onChange={(e) => {setAssignedFreelancerIdModal(e.target.value); if(createModalError) setCreateModalError(null);}}
-                        className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm">
-                  <option value="">No Freelancer Assigned</option>
-                  {freelancers.map(freelancer => <option key={freelancer.id} value={freelancer.id}>{freelancer.username} (ID: {freelancer.id})</option>)}
-                </select>
-              </div>
-            <div className="pt-4 flex justify-end space-x-3 border-t mt-4 border-gray-200">
-                <Button type="button" variant="ghost" size="md" onClick={handleCloseCreateModal} disabled={isSubmitting}>Cancel</Button>
-                <Button type="submit" variant="primary" size="md" isLoading={isSubmitting} disabled={isSubmitting}>Create Project</Button>
+            <div>
+              <label htmlFor="assignFreelancerModal" className="block text-sm font-medium text-gray-700">Assign Freelancer (Optional)</label>
+              <select id="assignFreelancerModal" value={assignedFreelancerIdModal} onChange={(e) => setAssignedFreelancerIdModal(e.target.value)}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
+                <option value="">No Freelancer Assigned</option>
+                {freelancers.map(freelancer => <option key={freelancer.id} value={freelancer.id}>{freelancer.username} (ID: {freelancer.id})</option>)}
+              </select>
+            </div>
+            {/* Modal-specific formError display for create modal */}
+            {formError && isCreateModalOpen && <p className="text-sm text-red-600 bg-red-100 p-3 rounded-lg">{formError}</p>}
+            <div className="pt-4 flex justify-end space-x-3 border-t mt-4">
+              <Button type="button" variant="secondary" onClick={handleCloseCreateModal} disabled={isSubmitting}>Cancel</Button>
+              <Button type="submit" variant="primary" isLoading={isSubmitting} disabled={isSubmitting}>Create Project</Button>
             </div>
           </form>
         </Modal>

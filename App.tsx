@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { HashRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
 import Navbar from './components/shared/Navbar';
@@ -13,6 +12,10 @@ import ProjectDetailsPage from './components/ProjectDetailsPage';
 import { NAV_LINKS, APP_NAME } from './constants';
 import LoadingSpinner from './components/shared/LoadingSpinner'; // Ensured path is relative
 import GlobalTimerDisplay from './components/shared/GlobalTimerDisplay';
+
+// Import ToastProvider and ToastContainer
+import { ToastProvider } from './components/shared/toast/ToastContext';
+import { ToastContainer } from './components/shared/toast/ToastContainer';
 
 // Component to handle root path redirection
 const RootRedirect: React.FC = () => {
@@ -59,44 +62,55 @@ const AppLayout: React.FC = () => {
   );
 };
 
+// New component to include ToastContainer within the ToastProvider's scope
+// and alongside AppLayout
+const AppLayoutWithToastContainer: React.FC = () => {
+  return (
+    <>
+      <AppLayout />
+      <ToastContainer />
+    </>
+  );
+};
 
 const App: React.FC = () => {
   return (
     <HashRouter>
-      <Routes>
-        {/* Routes without Navbar/Footer */}
-        <Route path={NAV_LINKS.LOGIN} element={<LoginPage />} />
-        <Route path={NAV_LINKS.ADMIN_LOGIN} element={<AdminLoginPage />} />
-        
-        {/* Routes with Navbar/Footer (AppLayout) */}
-        <Route element={<AppLayout />}>
-          <Route path={NAV_LINKS.HOME} element={<RootRedirect />} /> 
-          <Route path={NAV_LINKS.PUBLIC_PROJECT_BROWSE} element={<ProjectBrowser />} />
+      <ToastProvider> {/* Wrap with ToastProvider */}
+        <Routes>
+          {/* Routes without Navbar/Footer - these won't have toasts unless ToastProvider is higher or they are also wrapped */}
+          <Route path={NAV_LINKS.LOGIN} element={<LoginPage />} />
+          <Route path={NAV_LINKS.ADMIN_LOGIN} element={<AdminLoginPage />} />
 
-          <Route 
-            path={`${NAV_LINKS.DASHBOARD}/*`} 
-            element={
-              <ProtectedView>
-                <Dashboard />
-              </ProtectedView>
-            } 
-          />
-           <Route 
-            path={NAV_LINKS.PROJECT_DETAILS.replace(':id', ':id')} 
-            element={
-              <ProtectedView> 
-                <div className="bg-white shadow-lg my-0 rounded-lg">
-                    <ProjectDetailsPage />
-                </div>
-              </ProtectedView>
-            } 
-          />
-          {/* Catch-all inside AppLayout, typically redirects to NAV_LINKS.HOME which then handles auth redirection */}
+          {/* Routes with Navbar/Footer (AppLayout) wrapped by AppLayoutWithToastContainer */}
+          <Route element={<AppLayoutWithToastContainer />}>
+            <Route path={NAV_LINKS.HOME} element={<RootRedirect />} />
+            <Route path={NAV_LINKS.PUBLIC_PROJECT_BROWSE} element={<ProjectBrowser />} />
+            <Route
+              path={`${NAV_LINKS.DASHBOARD}/*`}
+              element={
+                <ProtectedView>
+                  <Dashboard />
+                </ProtectedView>
+              }
+            />
+            <Route
+              path={NAV_LINKS.PROJECT_DETAILS.replace(':id', ':id')}
+              element={
+                <ProtectedView>
+                  <div className="bg-white shadow-lg my-0 rounded-lg">
+                      <ProjectDetailsPage />
+                  </div>
+                </ProtectedView>
+              }
+            />
+            {/* Catch-all inside AppLayoutWithToastContainer, typically redirects to NAV_LINKS.HOME which then handles auth redirection */}
+            <Route path="*" element={<Navigate to={NAV_LINKS.HOME} replace />} />
+          </Route>
+          {/* A more general catch-all if no other top-level route matches */}
           <Route path="*" element={<Navigate to={NAV_LINKS.HOME} replace />} />
-        </Route>
-         {/* A more general catch-all if no other top-level route matches */}
-         <Route path="*" element={<Navigate to={NAV_LINKS.HOME} replace />} />
-      </Routes>
+        </Routes>
+      </ToastProvider>
     </HashRouter>
   );
 };

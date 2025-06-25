@@ -1,17 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Project, UserRole, ProjectStatus, Application } from '../../types'; // Keep Application
 import {
-    fetchClientProjectsAPI,
-    deleteProjectAPI,
-    updateProjectAPI,
-    UpdateProjectPHPData,
-    fetchApplicationsForProjectAPI, // New import
-    updateApplicationStatusAPI,     // New import
-    ProjectApplicationPHPResponse   // New import
+  fetchClientProjectsAPI,
+  deleteProjectAPI,
+  updateProjectAPI,
+  UpdateProjectPHPData,
+  fetchApplicationsForProjectAPI, // New import
+  updateApplicationStatusAPI,     // New import
+  ProjectApplicationPHPResponse   // New import
 } from '../../apiService';
 import { NAV_LINKS } from '../../constants';
 import ProjectCard from '../shared/ProjectCard';
-import { useAuth } from '../AuthContext';
+import { useAuth } from '../../contexts/AuthContext'; // Corrected path
 import LoadingSpinner from '../shared/LoadingSpinner';
 import Button from '../shared/Button'; // Import Button
 import Modal from '../shared/Modal';   // Import Modal for editing and applications
@@ -65,7 +65,7 @@ const MyProjects: React.FC = () => {
         isArchived: p.isArchived || false,
         assignedFreelancerName: p.assignedFreelancerName
       }));
-      setProjects(mappedProjects.sort((a,b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      setProjects(mappedProjects.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
     } catch (err: any) {
       console.error("Failed to load client projects:", err);
       setError(err.message || "Could not load your projects. Please try again later.");
@@ -169,17 +169,17 @@ const MyProjects: React.FC = () => {
         <h2 className="text-3xl font-bold text-gray-800">My Projects</h2>
         {/* Optional: Link to create project page if that's desired from here */}
       </div>
-       {error && (isEditModalOpen || isAppsModalOpen) && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{error}</p>}
+      {error && (isEditModalOpen || isAppsModalOpen) && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{error}</p>}
 
       {projects.length === 0 && !isLoading && (
-         <div className="p-6 text-center text-gray-500">
-            <BriefcaseIcon className="w-16 h-16 mx-auto mb-4 text-gray-300"/>
-            <h3 className="text-xl font-semibold">No Projects Yet</h3>
-            <p className="mt-1">You haven't created any projects.</p>
-            <p className="text-sm mt-1">Get started by <a href={NAV_LINKS.CREATE_PROJECT} className="text-primary hover:underline">creating your first project</a>.</p>
+        <div className="p-6 text-center text-gray-500">
+          <BriefcaseIcon className="w-16 h-16 mx-auto mb-4 text-gray-300" />
+          <h3 className="text-xl font-semibold">No Projects Yet</h3>
+          <p className="mt-1">You haven't created any projects.</p>
+          <p className="text-sm mt-1">Get started by <a href="/create-project" className="text-primary hover:underline">creating your first project</a>.</p>
         </div>
       )}
-      
+
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
         {projects.map((project) => (
           <div key={project.id} className="bg-white rounded-lg shadow-lg overflow-hidden flex flex-col">
@@ -187,13 +187,13 @@ const MyProjects: React.FC = () => {
             <div className="p-4 border-t border-gray-200 mt-auto bg-gray-50">
               <div className="flex justify-around items-center gap-2">
                 <Button size="sm" variant="outline" onClick={() => openEditModal(project)} title="Edit Project">
-                  <PencilIcon className="w-4 h-4 mr-1"/> Edit
+                  <PencilIcon className="w-4 h-4 mr-1" /> Edit
                 </Button>
-                <Button size="sm" variant="dangerOutline" onClick={() => handleDelete(project.id)} title="Delete Project">
-                  <TrashIcon className="w-4 h-4 mr-1"/> Delete
+                <Button size="sm" variant="outline" className="border-red-600 text-red-600 hover:bg-red-50" onClick={() => handleDelete(project.id)} title="Delete Project">
+                  <TrashIcon className="w-4 h-4 mr-1" /> Delete
                 </Button>
-                <Button size="sm" variant="infoOutline" onClick={() => openApplicationsModal(project)} title="View Applications">
-                  <EyeIcon className="w-4 h-4 mr-1"/> Apps ({project.applicationCount || 0}) {/* Assuming applicationCount might be added to Project type */}
+                <Button size="sm" variant="outline" className="border-blue-600 text-blue-600 hover:bg-blue-50" onClick={() => openApplicationsModal(project)} title="View Applications">
+                  <EyeIcon className="w-4 h-4 mr-1" /> Apps
                 </Button>
               </div>
             </div>
@@ -207,11 +207,11 @@ const MyProjects: React.FC = () => {
           <form onSubmit={handleUpdateProject} className="space-y-4">
             <div>
               <label htmlFor="editTitle" className="block text-sm font-medium">Title</label>
-              <input type="text" id="editTitle" name="title" value={editFormData.title || ''} onChange={handleEditFormChange} className="mt-1 w-full border p-2 rounded"/>
+              <input type="text" id="editTitle" name="title" value={editFormData.title || ''} onChange={handleEditFormChange} className="mt-1 w-full border p-2 rounded" />
             </div>
             <div>
               <label htmlFor="editDescription" className="block text-sm font-medium">Description</label>
-              <textarea id="editDescription" name="description" value={editFormData.description || ''} onChange={handleEditFormChange} rows={3} className="mt-1 w-full border p-2 rounded"/>
+              <textarea id="editDescription" name="description" value={editFormData.description || ''} onChange={handleEditFormChange} rows={3} className="mt-1 w-full border p-2 rounded" />
             </div>
             <div>
               <label htmlFor="editStatus" className="block text-sm font-medium">Status</label>
@@ -219,10 +219,10 @@ const MyProjects: React.FC = () => {
                 {Object.values(ProjectStatus).map(s => <option key={s} value={s}>{s}</option>)}
               </select>
             </div>
-             <div>
-                <label htmlFor="editFreelancerId" className="block text-sm font-medium text-gray-700">Assigned Freelancer ID (Optional)</label>
-                <input type="number" id="editFreelancerId" name="freelancer_id" value={editFormData.freelancer_id === undefined ? '' : editFormData.freelancer_id} onChange={handleEditFreelancerIdChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm"/>
-             </div>
+            <div>
+              <label htmlFor="editFreelancerId" className="block text-sm font-medium text-gray-700">Assigned Freelancer ID (Optional)</label>
+              <input type="number" id="editFreelancerId" name="freelancer_id" value={editFormData.freelancer_id === undefined ? '' : editFormData.freelancer_id} onChange={handleEditFreelancerIdChange} className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm" />
+            </div>
             <div className="flex justify-end space-x-2">
               <Button type="button" variant="secondary" onClick={() => setIsEditModalOpen(false)}>Cancel</Button>
               <Button type="submit" variant="primary">Save Changes</Button>
@@ -234,7 +234,7 @@ const MyProjects: React.FC = () => {
       {/* View Applications Modal */}
       {isAppsModalOpen && selectedProjectForApps && (
         <Modal isOpen={isAppsModalOpen} onClose={() => setIsAppsModalOpen(false)} title={`Applications for: ${selectedProjectForApps.title}`} size="lg">
-          {isLoadingApps && <LoadingSpinner text="Loading applications..."/>}
+          {isLoadingApps && <LoadingSpinner text="Loading applications..." />}
           {!isLoadingApps && applications.length === 0 && <p className="text-gray-500 text-center py-4">No applications found for this project.</p>}
           {!isLoadingApps && applications.length > 0 && (
             <ul className="space-y-3 max-h-96 overflow-y-auto">
@@ -242,16 +242,16 @@ const MyProjects: React.FC = () => {
                 <li key={app.id} className="p-3 border rounded-md bg-gray-50 hover:shadow-md">
                   <p className="font-semibold text-primary">{app.freelancer_username} ({app.freelancer_email})</p>
                   <p className="text-sm text-gray-600 my-1">Bid: R {app.bidAmount?.toLocaleString() || 'N/A'}</p>
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap bg-white p-2 rounded border border-gray-200">Proposal: {app.proposal_text}</p>
-                  <p className="text-xs text-gray-500 mt-1">Applied: {new Date(app.applied_at).toLocaleDateString()}</p>
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap bg-white p-2 rounded border border-gray-200">Proposal: {app.proposalText}</p>
+                  <p className="text-xs text-gray-500 mt-1">Applied: {new Date(app.appliedAt).toLocaleDateString()}</p>
                   <p className="text-sm font-medium">Status: <span className={`px-2 py-0.5 rounded-full text-xs ${app.status === 'accepted' ? 'bg-green-100 text-green-700' : app.status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>{app.status}</span></p>
                   {app.status === 'pending' && (
                     <div className="mt-2 space-x-2">
-                      <Button size="xs" variant="success" onClick={() => handleUpdateApplicationStatus(String(app.id), 'accepted')} title="Accept Application">
-                        <CheckCircleIcon className="w-4 h-4 mr-1"/> Accept
+                      <Button size="sm" variant="primary" className="bg-green-600 hover:bg-green-700 focus:ring-green-500" onClick={() => handleUpdateApplicationStatus(String(app.id), 'accepted')} title="Accept Application">
+                        <CheckCircleIcon className="w-4 h-4 mr-1" /> Accept
                       </Button>
-                      <Button size="xs" variant="danger" onClick={() => handleUpdateApplicationStatus(String(app.id), 'rejected')} title="Reject Application">
-                        <XCircleIcon className="w-4 h-4 mr-1"/> Reject
+                      <Button size="sm" variant="danger" onClick={() => handleUpdateApplicationStatus(String(app.id), 'rejected')} title="Reject Application">
+                        <XCircleIcon className="w-4 h-4 mr-1" /> Reject
                       </Button>
                     </div>
                   )}

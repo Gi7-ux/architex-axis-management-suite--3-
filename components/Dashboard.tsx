@@ -1,23 +1,25 @@
-
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom'; // Removed Outlet as it's not used directly here
-import { useAuth } from './AuthContext';
+import { useAuth } from '../contexts/AuthContext'; // Corrected path
 import { UserRole } from '../types';
 import LoadingSpinner from './shared/LoadingSpinner'; // Ensured relative path
-import Sidebar, { SidebarNavItem } from './shared/Sidebar'; 
+import Sidebar, { SidebarNavItem } from './shared/Sidebar';
 
 // Page Components
-import DashboardOverview from './DashboardOverview'; 
+import DashboardOverview from './DashboardOverview';
 import UserManagement from './admin/UserManagement';
 import ProjectManagement from './admin/ProjectManagement';
+import AdminProjectMessagingPage from './admin/AdminProjectMessagingPage'; // Import the new Admin Messaging Page
 import AdminBillingPlaceholder from './admin/AdminBillingPlaceholder'; 
 import AdminTimeLogReportPage from './admin/AdminTimeLogReportPage'; 
 import ProjectBrowser from './freelancer/ProjectBrowser';
 import MyApplications from './freelancer/MyApplications';
 import MyJobCards from './freelancer/MyJobCards';
-import MyProjects from './client/MyProjects'; 
-import MessagingPage from './MessagingPage'; 
-import UserProfilePage from './UserProfilePage'; 
+import FreelancerTimeTrackingPage from './freelancer/FreelancerTimeTrackingPage';
+import MyProjects from './client/MyProjects';
+import ClientProjectTimeLogPage from './client/ClientProjectTimeLogPage'; // Import the new page
+import MessagingPage from './MessagingPage';
+import UserProfilePage from './UserProfilePage';
 import { NAV_LINKS } from '../constants';
 import { HomeIcon, UsersIcon, BriefcaseIcon, PlusCircleIcon, CurrencyDollarIcon, ClockIcon, DocumentTextIcon, ListBulletIcon, UserCircleIcon, ChatBubbleLeftRightIcon } from './shared/IconComponents';
 
@@ -30,6 +32,7 @@ const getSidebarNavItems = (role: UserRole): SidebarNavItem[] => {
         { label: 'Overview', to: NAV_LINKS.DASHBOARD_OVERVIEW, icon: <HomeIcon /> },
         { label: 'User Management', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_USERS}`, icon: <UsersIcon /> },
         { label: 'Projects', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_PROJECTS}`, icon: <BriefcaseIcon /> },
+        { label: 'Project Messaging', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_PROJECT_MESSAGING}`, icon: <ChatBubbleLeftRightIcon /> }, // New Link for Admin
         // Create Project link removed as it's handled via modal in ProjectManagement
         // { label: 'New Project', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`, icon: <PlusCircleIcon /> },
         { label: 'Billing', to: `${baseDashboardPath}/${NAV_LINKS.ADMIN_BILLING}`, icon: <CurrencyDollarIcon /> },
@@ -41,11 +44,13 @@ const getSidebarNavItems = (role: UserRole): SidebarNavItem[] => {
         { label: 'Browse Projects', to: `${baseDashboardPath}/${NAV_LINKS.FREELANCER_BROWSE}`, icon: <BriefcaseIcon /> },
         { label: 'My Applications', to: `${baseDashboardPath}/${NAV_LINKS.FREELANCER_APPLICATIONS}`, icon: <DocumentTextIcon /> },
         { label: 'My Job Cards', to: `${baseDashboardPath}/${NAV_LINKS.FREELANCER_JOB_CARDS}`, icon: <ListBulletIcon /> },
+        { label: 'Time Tracking', to: `${baseDashboardPath}/${NAV_LINKS.FREELANCER_TIME_TRACKING}`, icon: <ClockIcon /> },
       ];
     case UserRole.CLIENT:
       return [
         { label: 'Overview', to: NAV_LINKS.DASHBOARD_OVERVIEW, icon: <HomeIcon /> },
         { label: 'My Projects', to: `${baseDashboardPath}/${NAV_LINKS.CLIENT_MY_PROJECTS}`, icon: <BriefcaseIcon /> },
+        { label: 'Project Time Logs', to: `${baseDashboardPath}/${NAV_LINKS.CLIENT_PROJECT_TIME_LOGS}`, icon: <ClockIcon /> },
       ];
     default:
       return [{ label: 'Overview', to: NAV_LINKS.DASHBOARD_OVERVIEW, icon: <HomeIcon /> }];
@@ -72,8 +77,8 @@ const Dashboard: React.FC = () => {
   const sidebarNavItems = getSidebarNavItems(user.role);
   // Add common links to all roles' sidebars. These NAV_LINKS are already full paths.
   sidebarNavItems.push(
-      { label: 'My Profile', to: NAV_LINKS.PROFILE, icon: <UserCircleIcon /> },
-      { label: 'Messages', to: NAV_LINKS.MESSAGES, icon: <ChatBubbleLeftRightIcon /> }
+    { label: 'My Profile', to: NAV_LINKS.PROFILE, icon: <UserCircleIcon /> },
+    { label: 'Messages', to: NAV_LINKS.MESSAGES, icon: <ChatBubbleLeftRightIcon /> }
   );
 
   return (
@@ -83,7 +88,7 @@ const Dashboard: React.FC = () => {
         <Routes>
           {/* Explicitly render DashboardOverview for the '/dashboard/overview' path */}
           <Route path="overview" element={<DashboardOverview />} />
-          
+
           {/* Index route for '/dashboard' itself - also show overview */}
           <Route index element={<DashboardOverview />} />
 
@@ -93,6 +98,7 @@ const Dashboard: React.FC = () => {
             <>
               <Route path={NAV_LINKS.ADMIN_USERS} element={<UserManagement />} />
               <Route path={NAV_LINKS.ADMIN_PROJECTS} element={<ProjectManagement />} />
+              <Route path={NAV_LINKS.ADMIN_PROJECT_MESSAGING} element={<AdminProjectMessagingPage />} /> {/* New Route for Admin */}
               {/* ADMIN_CREATE_PROJECT route logic is now handled within ProjectManagement via modal */}
               {/* <Route path={NAV_LINKS.ADMIN_CREATE_PROJECT} element={<ProjectManagement />} />  */}
               <Route path={NAV_LINKS.ADMIN_BILLING} element={<AdminBillingPlaceholder />} />
@@ -106,6 +112,7 @@ const Dashboard: React.FC = () => {
               <Route path={NAV_LINKS.FREELANCER_BROWSE} element={<ProjectBrowser />} />
               <Route path={NAV_LINKS.FREELANCER_APPLICATIONS} element={<MyApplications />} />
               <Route path={NAV_LINKS.FREELANCER_JOB_CARDS} element={<MyJobCards />} />
+              <Route path={NAV_LINKS.FREELANCER_TIME_TRACKING} element={<FreelancerTimeTrackingPage />} />
             </>
           )}
 
@@ -113,15 +120,16 @@ const Dashboard: React.FC = () => {
           {user.role === UserRole.CLIENT && (
             <>
               <Route path={NAV_LINKS.CLIENT_MY_PROJECTS} element={<MyProjects />} />
+              <Route path={NAV_LINKS.CLIENT_PROJECT_TIME_LOGS} element={<ClientProjectTimeLogPage />} />
             </>
           )}
-          
+
           {/* Common Routes - need to use the relative part of the path */}
-          <Route path={NAV_LINKS.PROFILE.substring(NAV_LINKS.DASHBOARD.length +1)} element={<UserProfilePage />} />
-          <Route path={NAV_LINKS.MESSAGES.substring(NAV_LINKS.DASHBOARD.length+1)} element={<MessagingPage />} />
-          
+          <Route path={NAV_LINKS.PROFILE.substring(NAV_LINKS.DASHBOARD.length + 1)} element={<UserProfilePage />} />
+          <Route path={NAV_LINKS.MESSAGES.substring(NAV_LINKS.DASHBOARD.length + 1)} element={<MessagingPage />} />
+
           {/* Default catch-all for any other unmatched sub-route under /dashboard */}
-           <Route path="*" element={<Navigate to="overview" replace />} />
+          <Route path="*" element={<Navigate to="overview" replace />} />
         </Routes>
       </div>
     </div>

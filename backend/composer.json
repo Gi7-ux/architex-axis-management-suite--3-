@@ -1,0 +1,31 @@
+{
+    "name": "architex/axis-suite-backend",
+    "description": "Backend API for Architex Axis Management Suite.",
+    "type": "project",
+    "require": {
+        "php": "^7.4 || ^8.0",
+        "firebase/php-jwt": "6.10.*"
+    },
+    "require-dev": {
+        "pestphp/pest": "^2.0",
+        "phpunit/phpunit": "^10.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Architex\\AxisSuite\\Backend\\": "src/",
+            "Tests\\": "tests/"
+        }
+    },
+    "authors": [
+        {
+            "name": "Architex Development Team",
+            "email": "dev@example.com"
+        }
+    ],
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable"
+}

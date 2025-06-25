@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { useAuth } from './AuthContext';
+import { useAuth } from '../contexts/AuthContext'; // Corrected path
 import Button from './shared/Button';
 import { UserRole } from '../types';
 import { APP_NAME, NAV_LINKS } from '../constants';
@@ -134,38 +134,28 @@ const resetRecaptcha = () => {
       setError("Please complete the CAPTCHA verification.");
       return;
     }
-
-    const loginPayload: UserLoginData = {
-      email,
-      password,
-      recaptcha_token: recaptchaToken
-    };
-
     try {
-       const user = await login(loginPayload);
-       if (user) {
-         if (user.role === UserRole.ADMIN) {
-           setError('Administrators must use the Admin Portal login.');
-           resetRecaptcha();
-           return;
-          }
-          navigate(from, { replace: true });
-        } else {
-          // This case might be redundant if login function throws ApiError on failure
-          setError('Login failed. Please check your credentials.');
-          resetRecaptcha();
+      // The login function from useAuth now expects UserLoginData: {email, password}
+      const user = await login({ email, password }); // Pass as an object
+      if (user) {
+        // User object here is AuthUser
+        if (user.role === UserRole.ADMIN) {
+          setError('Administrators must use the Admin Portal login.');
+          // navigate(NAV_LINKS.ADMIN_LOGIN); // Keep if admin login is separate
+          return;
         }
+        navigate(from, { replace: true });
+      } else {
+        // This case might not be reached if login throws ApiError for failed attempts
+        setError('Login failed. Please check your credentials.');
+      }
     } catch (err) {
-        // Ensure err is either an ApiErrorType or a string for the ErrorMessage component
-        if (err instanceof ApiErrorType) {
-            setError(err);
-        } else if (err instanceof Error) {
-            setError(err.message);
-        } else {
-            setError('An unexpected error occurred. Please try again.');
-        }
-        resetRecaptcha();
-        console.error("Login page error:", err);
+      if (err instanceof ApiError) {
+        setError(err.message || 'Login failed. Please check your credentials.');
+      } else {
+        setError('An unexpected error occurred. Please try again.');
+      }
+      console.error("Login page error:", err);
     }
   };
 
@@ -180,10 +170,10 @@ const resetRecaptcha = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-cover bg-center" style={{ backgroundImage: "linear-gradient(to bottom right, var(--color-primary-extralight), var(--color-accent)), url('data:image/svg+xml;charset=UTF-8,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'blueprint\' patternUnits=\'userSpaceOnUse\' width=\'100\' height=\'100\' fill=\'rgba(74,131,121,0.05)\'%3E%3Cpath d=\'M0 50h100M50 0v100\' stroke-width=\'1\' stroke=\'rgba(74,131,121,0.1)\'/%3E%3Cpath d=\'M0 10h100M10 0v100M0 20h100M20 0v100M0 30h100M30 0v100M0 40h100M40 0v100M0 60h100M60 0v100M0 70h100M70 0v100M0 80h100M80 0v100M0 90h100M90 0v100\' stroke-width=\'0.5\' stroke=\'rgba(74,131,121,0.08)\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100%25\' height=\'100%25\' fill=\'url(%23blueprint)\'/%3E%3C/svg%3E')"}}>
+    <div className="min-h-screen flex items-center justify-center p-4 bg-cover bg-center" style={{ backgroundImage: "linear-gradient(to bottom right, var(--color-primary-extralight), var(--color-accent)), url('data:image/svg+xml;charset=UTF-8,%3Csvg width=\'100\' height=\'100\' xmlns=\'http://www.w3.org/2000/svg\'%3E%3Cdefs%3E%3Cpattern id=\'blueprint\' patternUnits=\'userSpaceOnUse\' width=\'100\' height=\'100\' fill=\'rgba(74,131,121,0.05)\'%3E%3Cpath d=\'M0 50h100M50 0v100\' stroke-width=\'1\' stroke=\'rgba(74,131,121,0.1)\'/%3E%3Cpath d=\'M0 10h100M10 0v100M0 20h100M20 0v100M0 30h100M30 0v100M0 40h100M40 0v100M0 60h100M60 0v100M0 70h100M70 0v100M0 80h100M80 0v100M0 90h100M90 0v100\' stroke-width=\'0.5\' stroke=\'rgba(74,131,121,0.08)\'/%3E%3C/pattern%3E%3C/defs%3E%3Crect width=\'100%25\' height=\'100%25\' fill=\'url(%23blueprint)\'/%3E%3C/svg%3E')" }}>
       <div className="bg-white p-8 md:p-12 rounded-xl shadow-2xl w-full max-w-md transform transition-all duration-500 hover:shadow-2xl">
         <div className="text-center mb-8">
-          <img src="/logo-silhouette.png" alt="Architex Axis Logo Silhouette" className="w-24 h-auto mx-auto mb-4"/>
+          <img src="/logo-silhouette.png" alt="Architex Axis Logo Silhouette" className="w-24 h-auto mx-auto mb-4" />
           <h1 className="text-3xl font-bold text-primary font-logo">{APP_NAME}</h1>
           <p className="text-gray-500 mt-1">Access your architectural project hub.</p>
         </div>
@@ -235,7 +225,7 @@ const resetRecaptcha = () => {
             </Button>
           </div>
         </form>
-        
+
         <p className="mt-8 text-center text-sm text-gray-500">
           Administrator? <Link to={NAV_LINKS.ADMIN_LOGIN} className="font-medium text-primary hover:text-primary-hover">Admin Login</Link>
         </p>

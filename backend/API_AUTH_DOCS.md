@@ -76,190 +76,113 @@ Requests are typically made by appending a `?action=some_action` query parameter
   }
   ```
 
-## Job Card Messaging Endpoints
+## Project File Management Endpoints
 
-These endpoints facilitate communication specifically tied to Job Cards. Messages sent via these endpoints are linked to a Job Card and have specific visibility rules.
+These endpoints manage files associated with projects. A new table `project_files` is assumed.
 
-### 1. Send Job Card Message
-- **Action**: `send_job_card_message`
-- **Method**: `POST`
-- **URL**: `/backend/api.php?action=send_job_card_message`
-- **Authentication**: **Required**. User must be authorized for the job card (admin, client, project freelancer, or job card assigned freelancer).
-- **Request Body (JSON)**:
-  ```json
-  {
-    "job_card_id": 123, // Required: ID of the job card
-    "content": "This is a message about the task.", // Required if no attachments
-    "attachment_ids": [1, 2] // Optional: Array of pre-uploaded attachment IDs
-  }
-  ```
-- **Description**:
-  - Sends a message linked to a specific job card.
-  - Creates or uses an existing conversation tied to the `job_card_id`.
-  - Participants (client, project freelancer, job card freelancer) are automatically managed for new conversations.
-  - **Visibility Rules**:
-    - If sender is 'freelancer': `moderation_status` is 'pending_approval', `is_visible_to_client` is `FALSE`.
-    - Otherwise (client/admin): `moderation_status` is 'approved', `is_visible_to_client` is `TRUE`.
-  - If `attachment_ids` are provided, they are linked to the newly created message. Attachments must be uploaded first via `upload_message_attachment` and their `message_id` must be `NULL`.
-- **Response (Success - 201 Created)**: The newly created message object, including any linked attachments.
-  ```json
-  {
-    "id": 105,
-    "conversation_id": 15,
-    "sender_id": 789,
-    "content": "This is a message about the task.",
-    "created_at": "YYYY-MM-DD HH:MM:SS",
-    "moderation_status": "pending_approval", // Example if sent by freelancer
-    "is_visible_to_client": false,        // Example if sent by freelancer
-    "attachments": [
-      {
-        "id": 1,
-        "original_file_name": "brief.pdf",
-        "file_path": "message_attachments/unique_id_brief.pdf",
-        "file_type": "application/pdf",
-        "file_size_bytes": 102400,
-        "created_at": "YYYY-MM-DD HH:MM:SS"
-      }
-      // ... other attachments
-    ]
-  }
-  ```
-- **Response (Error - 4xx/5xx)**:
-  ```json
-  {
-    "error": "Error message (e.g., Job Card ID and content/attachments are required, Forbidden, Job Card not found, One or more attachments could not be linked)."
-  }
-  ```
+**`project_files` Table Schema (Example)**
+- `id` (INT, PK, AI)
+- `project_id` (INT, FK to `projects.id`, ON DELETE CASCADE)
+- `uploader_id` (INT, FK to `users.id`)
+- `file_name` (VARCHAR(255)) - Original client-side filename.
+- `file_path` (VARCHAR(512), UNIQUE) - Path on server where file is stored.
+- `file_type` (VARCHAR(100)) - MIME type.
+- `file_size` (INT) - Size in bytes.
+- `uploaded_at` (DATETIME, DEFAULT CURRENT_TIMESTAMP)
 
-### 2. Get Job Card Messages
-- **Action**: `get_job_card_messages`
+### 1. Get Project Files
+- **Action**: `get_project_files`
 - **Method**: `GET`
-- **URL**: `/backend/api.php?action=get_job_card_messages&job_card_id=<id>&limit=50&offset=0`
-- **Authentication**: **Required**. User must be authorized for the job card.
-- **Query Parameters**:
-  - `job_card_id`: Required.
-  - `limit`: Optional, number of messages (default 50).
-  - `offset`: Optional, for pagination (default 0).
-- **Description**:
-  - Fetches messages for a conversation linked to a `job_card_id`.
-  - **Role-based Visibility**:
-    - Admins: See all messages.
-    - Clients: See messages where `is_visible_to_client = TRUE`.
-    - Freelancers: See their own messages OR messages where `is_visible_to_client = TRUE`.
-  - Messages are ordered by `created_at ASC`.
-  - Each message includes sender details (`sender_username`, `sender_avatar_url`) and an `attachments` array.
-  - `moderation_status` and `is_visible_to_client` fields are included for relevant users (admins, or sender for their own messages).
-- **Response (Success - 200 OK)**: Array of message objects.
+- **URL**: `/backend/api.php?action=get_project_files&project_id=<project_id>`
+- **Authentication**: **Required**. User must be admin, project client, or assigned freelancer.
+- **Response (Success - 200 OK)**: Array of file metadata objects.
   ```json
   [
     {
-      "id": 101,
-      "conversation_id": 15,
-      "sender_id": 456, // Client ID
-      "sender_username": "clientUser",
-      "sender_avatar_url": "path/to/avatar.png",
-      "content": "Please check the attached design file.",
-      "created_at": "YYYY-MM-DD HH:MM:SS",
-      "moderation_status": "approved",
-      "is_visible_to_client": true,
-      "attachments": [
-        {
-          "id": 1,
-          "original_file_name": "design_v1.pdf",
-          "file_path": "message_attachments/unique_design.pdf",
-          "file_type": "application/pdf",
-          "file_size_bytes": 123456,
-          "created_at": "YYYY-MM-DD HH:MM:SS"
-        }
-      ]
-    },
-    {
-      "id": 102,
-      "sender_id": 789, // Freelancer ID
-      "sender_username": "freelancerUser",
-      "sender_avatar_url": "path/to/f_avatar.png",
-      "content": "Thanks, reviewing it now. My feedback is attached.",
-      "created_at": "YYYY-MM-DD HH:MM:SS",
-      "moderation_status": "pending_approval", // If viewed by admin or this freelancer
-      "is_visible_to_client": false,         // If viewed by admin or this freelancer
-      "attachments": [
-         {
-          "id": 2,
-          "original_file_name": "feedback.txt",
-          "file_path": "message_attachments/unique_feedback.txt",
-          "file_type": "text/plain",
-          "file_size_bytes": 1024,
-          "created_at": "YYYY-MM-DD HH:MM:SS"
-        }
-      ]
+      "id": 1,
+      "project_id": 123,
+      "uploader_id": 456,
+      "file_name": "project_brief.pdf",
+      "file_path": "uploads/project_files/123/unique_id_project_brief.pdf", // Example server path
+      "file_type": "application/pdf",
+      "file_size": 102400, // In bytes
+      "uploaded_at": "YYYY-MM-DD HH:MM:SS",
+      "uploader_username": "client_user"
     }
-    // ... more messages
+    // ... more files
   ]
   ```
 - **Response (Error - 4xx/5xx)**:
   ```json
   {
-    "error": "Error message (e.g., Job Card ID required, Forbidden, Job Card not found)."
+    "error": "Error message (e.g., Project ID required, Project not found, Forbidden)."
   }
   ```
 
-### 3. Upload Message Attachment
-- **Action**: `upload_message_attachment`
-- **Method**: `POST`
-- **URL**: `/backend/api.php?action=upload_message_attachment`
-- **Authentication**: **Required**. User must be authorized for the job card.
-- **Request Body**: `multipart/form-data`
-  - `job_card_id`: (Integer) ID of the job card for context and permission checking.
-  - `attachment_file`: (File) The file to upload.
-- **Description**:
-  - Uploads a file intended to be an attachment for a job card message.
-  - Validates file type (common images, PDF, text, Office documents) and size (e.g., up to 10MB).
-  - Stores the file with a unique name in `uploads/message_attachments/`.
-  - Creates a record in `message_attachments` with `message_id` initially `NULL`.
-- **Response (Success - 201 Created)**: Details of the temporarily stored attachment.
+### 3. Get Freelancer's Time Logs
+- **Action**: `get_freelancer_time_logs`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_freelancer_time_logs`
+- **Authentication**: **Required** (User role must be 'freelancer').
+- **Query Parameters (Optional)**:
+  - `project_id` (int): Filter time logs by a specific project ID.
+  - `job_card_id` (int): Filter time logs by a specific job card ID.
+  - `date_from` (string, YYYY-MM-DD): Filter logs starting from this date (inclusive).
+  - `date_to` (string, YYYY-MM-DD): Filter logs up to this date (inclusive).
+- **Response (Success - 200 OK)**: Array of time log objects, including job card and project titles.
   ```json
-  {
-    "id": 3, // ID of the entry in message_attachments table
-    "original_file_name": "brief.docx",
-    "file_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-    "file_size_bytes": 25600,
-    "file_path": "message_attachments/attachment_uniqueid.docx",
-    "message": "File uploaded successfully and pending association with a message."
-  }
+  [
+    {
+      "id": 5,
+      "job_card_id": 101,
+      "user_id": 789, // Authenticated freelancer's ID
+      "start_time": "YYYY-MM-DD HH:MM:SS",
+      "end_time": "YYYY-MM-DD HH:MM:SS",
+      "duration_minutes": 120,
+      "notes": "Worked on API integration.",
+      "time_log_created_at": "YYYY-MM-DD HH:MM:SS",
+      "time_log_updated_at": "YYYY-MM-DD HH:MM:SS",
+      "job_card_title": "Develop User Authentication Module",
+      "project_id": 123,
+      "project_title": "E-commerce Platform Phase 1"
+    }
+    // ... more time logs
+  ]
   ```
-- **Response (Error - 4xx/5xx)**:
+- **Response (Error - 403 Forbidden / 5xx Server Error)**:
   ```json
   {
-    "error": "Error message (e.g., Job Card ID required, No file uploaded, File too large, Unsupported file type, Failed to move file, Server error)."
+    "error": "Error message (e.g., Forbidden: Only freelancers can view their time logs.)."
   }
   ```
 
-### 4. Admin Moderate Message
-- **Action**: `admin_moderate_message`
-- **Method**: `POST` (or `PUT`)
-- **URL**: `/backend/api.php?action=admin_moderate_message`
-- **Authentication**: **Required** (User role must be 'admin').
-- **Request Body (JSON)**:
+### 2. Get Freelancer's Job Cards
+- **Action**: `get_freelancer_job_cards`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_freelancer_job_cards`
+- **Authentication**: **Required** (User role must be 'freelancer').
+- **Response (Success - 200 OK)**: Array of job card objects assigned to the freelancer, including project title.
   ```json
-  {
-    "message_id": 102,
-    "new_moderation_status": "approved" // or "rejected"
-  }
+  [
+    {
+      "id": 101,
+      "project_id": 123,
+      "title": "Develop User Authentication Module",
+      "description": "Implement registration and login functionality.",
+      "status": "in_progress",
+      "assigned_freelancer_id": 789, // Matches authenticated freelancer's ID
+      "estimated_hours": 16.0,
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "updated_at": "YYYY-MM-DD HH:MM:SS",
+      "project_title": "E-commerce Platform Phase 1"
+    }
+    // ... more job cards
+  ]
   ```
-- **Description**:
-  - Allows an admin to change the moderation status of a message.
-  - If `new_moderation_status` is 'approved', `is_visible_to_client` is set to `TRUE`.
-  - If `new_moderation_status` is 'rejected', `is_visible_to_client` is set to `FALSE`.
-- **Response (Success - 200 OK)**:
+- **Response (Error - 403 Forbidden / 5xx Server Error)**:
   ```json
   {
-    "message": "Message moderation status updated successfully."
-  }
-  ```
-- **Response (Error - 4xx/5xx)**:
-  ```json
-  {
-    "error": "Error message (e.g., Message ID and status required, Invalid status, Message not found, Forbidden)."
+    "error": "Error message (e.g., Forbidden: Only freelancers can view their job cards.)."
   }
   ```
 
@@ -288,104 +211,36 @@ These endpoints facilitate communication specifically tied to Job Cards. Message
   }
   ```
 
-## User Profile Management
-
-Endpoints for any authenticated user to manage their own profile.
-
-### 1. Get My Profile Details
-- **Action**: `get_my_profile_details`
-- **Method**: `GET`
-- **URL**: `/backend/api.php?action=get_my_profile_details`
-- **Authentication**: **Required** (Bearer Token).
-- **Description**: Fetches the detailed profile information for the currently authenticated user, including their associated skills.
-- **Response (Success - 200 OK)**:
-  ```json
-  {
-    "id": 123,
-    "username": "testuser",
-    "email": "test@example.com",
-    "role": "freelancer",
-    "name": "Test User Full Name",
-    "phone_number": "555-1234",
-    "company": "Test Inc.",
-    "experience": "5 years in web development focusing on PHP and React.",
-    "hourly_rate": 60.50, // Null if not applicable (e.g., for clients)
-    "avatar_url": "https://example.com/avatars/testuser.png",
-    "is_active": true,
-    "created_at": "YYYY-MM-DD HH:MM:SS",
-    "updated_at": "YYYY-MM-DD HH:MM:SS",
-    "skills": [
-      {"id": 1, "name": "PHP"},
-      {"id": 2, "name": "React"}
-      // ... other skills
-    ]
-  }
-  ```
-- **Response (Error - 401 Unauthorized / 403 Forbidden)**:
-  ```json
-  {
-    "error": "Authorization header missing or malformed. Usage: Bearer <token>"
-    // or "Invalid or expired session token. Please log in again."
-  }
-  ```
-- **Response (Error - 404 Not Found)**:
-  ```json
-  {
-    "error": "User profile not found." // Should be rare if user is authenticated
-  }
-  ```
-- **Response (Error - 500 Server Error)**:
-  ```json
-  {
-    "error": "Failed to prepare/execute statement for user details/skills."
-  }
-  ```
-
-### 2. Update My Profile
-- **Action**: `update_my_profile`
+### 4. Update Own User Profile
+- **Action**: `update_own_profile`
 - **Method**: `POST` (or `PUT`)
-- **URL**: `/backend/api.php?action=update_my_profile`
-- **Authentication**: **Required** (Bearer Token).
-- **Description**: Allows the authenticated user to update their own profile information.
+- **URL**: `/backend/api.php?action=update_own_profile`
+- **Authentication**: **Required**.
 - **Request Body (JSON) - Include only fields to update**:
   ```json
   {
-    "name": "Updated Full Name", // Optional
-    "phone_number": "555-5678", // Optional
-    "company": "Updated Company LLC", // Optional
-    "experience": "Updated bio with new achievements.", // Optional
-    "avatar_url": "https://example.com/avatars/new_avatar.png", // Optional
-    "hourly_rate": 75.00, // Optional; only applicable if user is 'freelancer'. Must not be negative.
-    "skill_ids": [1, 3, 5] // Optional; replaces all existing skills with the new set. An empty array [] removes all skills.
+    "name": "My Full Name Updated",
+    "phone_number": "123-456-7890",
+    "company": "My Company Inc.",
+    "experience": "My updated bio and experience details.",
+    "avatar_url": "https://example.com/myavatar.png",
+    "hourly_rate": 55.75, // Only applicable if user role is 'freelancer'
+    "skill_ids": [1, 5, 10] // Array of skill IDs. Existing skills will be replaced.
   }
   ```
-  *Fields like `username`, `email`, `role`, `password`, `is_active` cannot be updated via this endpoint.*
+  *If `skill_ids` is provided, the user's existing skills will be replaced with this new set.*
+  *Username, email, and role cannot be changed via this endpoint.*
 - **Response (Success - 200 OK)**:
   ```json
   {
     "message": "Profile updated successfully."
-    // or "No profile data provided or no changes made."
+    // or "No update data provided for profile or skills."
   }
   ```
-- **Response (Error - 400 Bad Request)**:
+- **Response (Error - 4xx/5xx)**:
   ```json
   {
-    "error": "No update data provided or invalid JSON."
-    // or "Hourly rate cannot be negative."
-    // or "One or more provided skill IDs are invalid."
-  }
-  ```
-- **Response (Error - 401 Unauthorized / 403 Forbidden)**:
-  ```json
-  {
-    "error": "Authorization header missing or malformed. Usage: Bearer <token>"
-    // or "Invalid or expired session token. Please log in again."
-  }
-  ```
-- **Response (Error - 500 Server Error)**:
-  ```json
-  {
-    "error": "Failed to update profile: <specific DB error or preparation failure>"
+    "error": "Error message (e.g., No data provided, Hourly rate cannot be negative, Invalid skill IDs, Failed to update profile)."
   }
   ```
 
@@ -606,6 +461,29 @@ These endpoints are typically restricted to users with the 'admin' role.
   ```json
   {
     "error": "Error message."
+  }
+  ```
+
+## Freelancer Specific Endpoints (Beyond Project/Application Management)
+
+### 1. Get Freelancer Dashboard Stats
+- **Action**: `get_freelancer_dashboard_stats`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_freelancer_dashboard_stats`
+- **Authentication**: **Required** (User role must be 'freelancer').
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "pending_applications_count": 5,
+    "active_projects_count": 2,
+    "total_minutes_logged": 7200,
+    "completed_projects_count": 10
+  }
+  ```
+- **Response (Error - 403 Forbidden / 5xx Server Error)**:
+  ```json
+  {
+    "error": "Error message (e.g., Forbidden: Only freelancers can access these statistics.)."
   }
   ```
 
@@ -1418,7 +1296,175 @@ Endpoints for 1-on-1 user communication.
   {
     "error": "Error message (e.g., Conversation ID required, Forbidden)."
   }
+  ```json
+  {
+    "error": "Error message (e.g., Conversation ID required, Forbidden)."
+  }
   ```
+
+## Advanced Messaging Endpoints (Thread-Based)
+
+These endpoints support more complex, project-related, and permissioned messaging.
+
+### 1. Get Messageable Users (for initiating DMs)
+- **Action**: `get_messageable_users`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_messageable_users`
+- **Authentication**: **Required**.
+- **Response (Success - 200 OK)**: Array of user objects that the authenticated user is allowed to DM.
+  - If authenticated user is Admin: Returns all (or a relevant subset of) active users.
+  - If authenticated user is Freelancer/Client: Returns only Admin users.
+  ```json
+  [
+    {
+      "id": 1,
+      "username": "admin_user",
+      "email": "admin@example.com",
+      "role": "admin",
+      "avatar_url": "/avatars/admin.png" // Optional
+    }
+    // ... other users if admin is requesting, or only other admins if freelancer/client is requesting
+  ]
+  ```
+
+### 2. Get User's Message Threads
+- **Action**: `get_user_message_threads`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_user_message_threads`
+- **Authentication**: **Required**.
+- **Response (Success - 200 OK)**: Array of message thread objects.
+  ```json
+  [
+    {
+      "thread_id": 15,
+      "project_id": 123, // Nullable
+      "project_title": "Project Alpha", // Nullable
+      "title": "Project Alpha - Admin/Client Discussion", // Custom or generated title
+      "type": "project_admin_client", // e.g., 'direct', 'project_admin_freelancer', etc.
+      "last_message_at": "YYYY-MM-DD HH:MM:SS",
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "participants": [
+        { "id": 1, "username": "admin_user", "avatar_url": null },
+        { "id": 5, "username": "client_user", "avatar_url": "/avatars/client.png" }
+      ],
+      "last_message_snippet": "Yes, that sounds good.",
+      "last_message_sender_id": 5,
+      "last_message_sender_username": "client_user",
+      "unread_count": 0 // Specific to the authenticated user for this thread
+    }
+    // ... more threads. For Type A and Type C project threads, the 'participants' array
+    // will include all freelancers assigned to that project.
+  ]
+  ```
+
+### 3. Get Thread Messages
+- **Action**: `get_thread_messages`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_thread_messages&thread_id=<id>&limit=50&offset=0`
+  - `thread_id`: Required.
+  - `limit`: Optional, number of messages to fetch (default 50).
+  - `offset`: Optional, for pagination.
+- **Authentication**: **Required** (User must be a participant with appropriate visibility).
+- **Response (Success - 200 OK)**: Array of message objects, respecting user's visibility and message approval status.
+  ```json
+  [
+    {
+      "id": 201,
+      "thread_id": 15,
+      "sender_id": 1,
+      "sender_username": "admin_user",
+      "sender_avatar_url": null,
+      "content": "Please review the attached document.",
+      "sent_at": "YYYY-MM-DD HH:MM:SS",
+      "attachment_url": "/files/doc.pdf", // Nullable
+      "attachment_type": "application/pdf", // Nullable
+      "requires_approval": false,
+      "approval_status": null
+    },
+    {
+      "id": 202,
+      "thread_id": 15,
+      "sender_id": 10, // A freelancer in a project_freelancer_client thread
+      "sender_username": "freelancer_user",
+      "sender_avatar_url": "/avatars/freelancer.png",
+      "content": "Here is the update for the client.",
+      "sent_at": "YYYY-MM-DD HH:MM:SS",
+      "requires_approval": true,
+      "approval_status": "approved" // or "pending", "rejected"
+    }
+  ]
+  ```
+  *(Backend implicitly marks messages as read for the user up to the last fetched message in this thread)*
+
+### 3. Send Project/Thread Message
+- **Action**: `send_project_message`
+- **Method**: `POST`
+- **URL**: `/backend/api.php?action=send_project_message`
+- **Authentication**: **Required**.
+- **Request Body (JSON)**:
+  ```json
+  // To send to an existing thread:
+  {
+    "thread_id": 15,
+    "content": "This is a reply in an existing thread."
+  }
+  // To create a new project-specific thread and send a message:
+  {
+    "project_id": 123,
+    "thread_type_hint": "project_admin_client", // or "project_admin_freelancer", "project_freelancer_client"
+    "content": "Initial message for new project thread.",
+    // Optional for 'project_admin_client' type by admin sender:
+    "admin_client_message_freelancer_visibility": "non_sensitive_only" // "all", "non_sensitive_only", "none"
+  }
+  // To create a new direct message thread and send a message:
+  {
+    "target_user_ids": [456], // Array of recipient user IDs. For F/C senders, backend validates these are Admins.
+    "thread_type_hint": "direct", // Must be 'direct' for this structure
+    "content": "Hello, Admin!" // Optional: Can create an empty thread by omitting content if backend supports. Backend will use project_id from URL for project specific threads.
+  }
+  ```
+- **Response (Success - 201 Created)**:
+  ```json
+  {
+    "message": "Message sent successfully.", // Or "Thread created successfully" if content was empty and only thread was made.
+    "message_id": 205, // Nullable if only thread was created without an initial message.
+    "thread_id": 15, // ID of the thread (either existing or newly created)
+    "requires_approval": false, // True if the message sent requires approval (e.g. freelancer in Type A project_client_admin_freelancer thread)
+    "approval_status": null // 'pending' if requires_approval is true, else null
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Thread ID/Project ID/Target IDs required, Content required for message, Forbidden, Invalid thread type, Target users not admins for Freelancer/Client DMs, Project not found for project-specific threads)."
+  }
+  ```
+
+### 4. Moderate Project Message (Admin Action)
+- **Action**: `moderate_project_message`
+- **Method**: `POST`
+- **URL**: `/backend/api.php?action=moderate_project_message`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON)**:
+  ```json
+  {
+    "message_id": 202,
+    "approval_status": "approved" // or "rejected"
+  }
+  ```
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "Message approved successfully." // or "Message rejected successfully."
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Message ID and status required, Message not found, Message does not require approval, Forbidden)."
+  }
+  ```
+
 
 ### 4. Send Message
 - **Action**: `send_message`
@@ -1535,6 +1581,61 @@ Endpoints for managing and retrieving skills.
   ```json
   {
     "error": "Error message (e.g., Skill name is required, Skill already exists)."
+  }
+  ```
+
+### 3. Admin Update Skill
+- **Action**: `admin_update_skill`
+- **Method**: `POST` (or `PUT`)
+- **URL**: `/backend/api.php?action=admin_update_skill`
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON)**:
+  ```json
+  {
+    "skill_id": 1,
+    "name": "Updated Skill Name"
+  }
+  ```
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "Skill updated successfully.",
+    "skill": {
+      "id": 1,
+      "name": "Updated Skill Name",
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "updated_at": "YYYY-MM-DD HH:MM:SS"
+    }
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Skill ID and name required, Skill not found, Name conflict)."
+  }
+  ```
+
+### 4. Admin Delete Skill
+- **Action**: `admin_delete_skill`
+- **Method**: `DELETE` (or `POST`)
+- **URL**: `/backend/api.php?action=admin_delete_skill&skill_id=<skill_id>` (if DELETE)
+- **Authentication**: **Required** (User role must be 'admin').
+- **Request Body (JSON, if POST)**:
+  ```json
+  {
+    "skill_id": 1
+  }
+  ```
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "message": "Skill ID X deleted successfully. Associated user and project skills were also removed."
+  }
+  ```
+- **Response (Error - 4xx/5xx)**:
+  ```json
+  {
+    "error": "Error message (e.g., Skill ID required, Skill not found)."
   }
   ```
 
