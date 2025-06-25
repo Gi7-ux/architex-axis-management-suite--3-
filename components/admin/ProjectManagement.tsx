@@ -73,7 +73,9 @@ const ProjectManagement: React.FC = () => {
   // State for the Edit Project Modal form
   const [editFormData, setEditFormData] = useState<Partial<ProjectPHPResponse>>({});
 
-  const [formError, setFormError] = useState<string | null>(null);
+  const [pageActionError, setPageActionError] = useState<ApiErrorType | string | null>(null);
+  const [createModalError, setCreateModalError] = useState<ApiErrorType | string | null>(null);
+  const [detailModalError, setDetailModalError] = useState<ApiErrorType | string | null>(null);
 
   const [filterStatus, setFilterStatus] = useState<ProjectStatus | 'ALL'>('ALL');
   const [filterClient, setFilterClient] = useState<string>('ALL');
@@ -109,9 +111,9 @@ const ProjectManagement: React.FC = () => {
 
   useEffect(() => { loadInitialData(); }, [loadInitialData]);
 
-  const handleViewDetails = async (project: ProjectPHPResponse) => { // Param is ProjectPHPResponse
-    setIsSubmitting(true); // Use for loading indicator in modal trigger button or initial modal load
-    setFormError(null);
+  const handleViewDetails = async (project: ProjectPHPResponse) => {
+    setIsSubmitting(true);
+    setDetailModalError(null); // Use detailModalError
     try {
       const details = await fetchProjectDetailsAPI(project.id); // This should include skills_required
       setSelectedProject(details);
@@ -139,22 +141,31 @@ const ProjectManagement: React.FC = () => {
     setSelectedProject(null);
     setProjectApplications([]);
     setSelectedProjectSkillIds(new Set());
-    setEditFormData({}); // Clear edit form data
-    setFormError(null); // Clear modal-specific errors
+    setEditFormData({});
+    setDetailModalError(null);
   };
 
   const handleEditFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) => {
     const { name, value } = e.target;
     setEditFormData(prev => ({ ...prev, [name]: value }));
+    if (detailModalError) setDetailModalError(null); // Clear error on input change
+  };
+
+  const handleEditSkillsChange = (skillId: number, checked: boolean) => {
+    const newSet = new Set(selectedProjectSkillIds);
+    if (checked) newSet.add(skillId);
+    else newSet.delete(skillId);
+    setSelectedProjectSkillIds(newSet);
+    if (detailModalError) setDetailModalError(null); // Clear error on skill change
   };
 
   const resetCreateForm = () => {
     setTitle(''); setDescription(''); setProjectStatus(ProjectStatus.PENDING_APPROVAL);
-    setAssignedClientId(''); setAssignedFreelancerIdModal(''); setFormError(null);
+    setAssignedClientId(''); setAssignedFreelancerIdModal(''); setCreateModalError(null); // Use createModalError
   };
 
   const handleOpenCreateModal = () => {
-    resetCreateForm();
+    resetCreateForm(); // This will clear createModalError
     setIsCreateModalOpen(true);
     if (location.pathname !== `${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`) {
       navigate(`${NAV_LINKS.DASHBOARD}/${NAV_LINKS.ADMIN_PROJECTS}/${NAV_LINKS.ADMIN_CREATE_PROJECT}`, { replace: true });
@@ -175,11 +186,11 @@ const ProjectManagement: React.FC = () => {
       setFormError("Authentication error."); return;
     }
     if (!title || !description) {
-      setFormError("Project title and description are required.");
+      setCreateModalError("Project title and description are required.");
       return;
     }
 
-    setIsSubmitting(true); setFormError(null);
+    setIsSubmitting(true); setCreateModalError(null); // Use createModalError
     try {
       const projectPayload: CreateProjectPHPData = {
         title,
@@ -198,7 +209,7 @@ const ProjectManagement: React.FC = () => {
       addToast('Project created successfully.', 'success');
       await loadInitialData();
       handleCloseCreateModal();
-    } catch (err: any) {
+    } catch (err) {
       console.error("Failed to create project", err);
       addToast(err.message || 'Failed to create project. Please try again.', 'error');
       // setFormError(err.message || "Failed to create project. Please try again."); // Keep for modal error display if needed
@@ -208,7 +219,7 @@ const ProjectManagement: React.FC = () => {
   };
 
   const handleApproveProjectStatus = async (projectId: number) => {
-    setIsSubmitting(true); setFormError(null);
+    setIsSubmitting(true); setPageActionError(null); // Use pageActionError
     try {
       await updateProjectAPI(String(projectId), { status: ProjectStatus.OPEN });
       addToast('Project approved and is now open for applications.', 'success');
@@ -227,7 +238,7 @@ const ProjectManagement: React.FC = () => {
 
   const handleAcceptApplication = async (applicationId: string, projectIdToRefresh: number) => {
     if (!adminUser) return;
-    setIsSubmitting(true); setFormError(null);
+    setIsSubmitting(true); setDetailModalError(null); // Error in detail modal context
     try {
       await updateApplicationStatusAPI(applicationId, { status: 'accepted' });
       addToast('Application accepted. Freelancer assigned and project is In Progress.', 'success');
@@ -252,11 +263,10 @@ const ProjectManagement: React.FC = () => {
     }
   };
 
-  // This function will be for saving changes from the enhanced "Edit Details" modal
-  const handleUpdateProjectDetails = async () => { // No direct formData param, reads from editFormData and selectedProjectSkillIds
+  const handleUpdateProjectDetails = async () => {
     if (!selectedProject || !editFormData) return;
 
-    setIsSubmitting(true); setFormError(null);
+    setIsSubmitting(true); setDetailModalError(null); // Use detailModalError
     try {
       const payload: UpdateProjectPHPData = {
         title: editFormData.title,
@@ -279,8 +289,7 @@ const ProjectManagement: React.FC = () => {
     }
   };
 
-
-  const handleNavigateToEditProjectTasks = (project: ProjectPHPResponse) => { // Param is ProjectPHPResponse
+  const handleNavigateToEditProjectTasks = (project: ProjectPHPResponse) => {
     navigate(NAV_LINKS.PROJECT_DETAILS.replace(':id', String(project.id)));
     handleCloseDetailModal();
   };
@@ -302,8 +311,8 @@ const ProjectManagement: React.FC = () => {
     }
   };
 
-  const handleToggleArchive = async (project: ProjectPHPResponse) => { // Param is ProjectPHPResponse
-    setIsSubmitting(true); setFormError(null);
+  const handleToggleArchive = async (project: ProjectPHPResponse) => {
+    setIsSubmitting(true); setPageActionError(null); // Use pageActionError
     try {
       const currentIsArchived = project.status === 'archived'; // Determine if currently archived
       const newStatus = currentIsArchived ? ProjectStatus.OPEN : 'archived' as ProjectStatus;
@@ -412,7 +421,9 @@ const ProjectManagement: React.FC = () => {
         </div>
         <div>
           <label className="block text-xs font-medium text-gray-700">Status</label>
-          <select value={filterStatus} onChange={e => setFilterStatus(e.target.value as ProjectStatus | 'ALL')} className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm">
+          <select value={filterStatus}
+                  onChange={(e) => {setFilterStatus(e.target.value as ProjectStatus | 'ALL'); if(pageActionError) setPageActionError(null);}}
+                  className="mt-1 p-2 w-full border-gray-300 rounded-md shadow-sm text-sm focus:ring-primary focus:border-primary">
             <option value="ALL">All Statuses</option>
             {Object.values(ProjectStatus).map(s => <option key={s} value={s}>{s}</option>)}
             <option value="archived">Archived</option> {/* Add archived to filter */}
@@ -544,20 +555,15 @@ const ProjectManagement: React.FC = () => {
             {/* Skills Selection UI */}
             <div className="pt-3">
               <label className="block text-sm font-medium text-gray-700">Required Skills</label>
-              <div className="mt-1 max-h-40 overflow-y-auto border rounded p-2 space-y-1 bg-gray-50">
+              <div className="mt-1 max-h-40 overflow-y-auto border border-gray-200 rounded-md p-2 space-y-1 bg-gray-50">
                 {allGlobalSkills.map(skill => (
                   <div key={skill.id} className="flex items-center">
                     <input
                       type="checkbox"
                       id={`edit-proj-skill-${skill.id}`}
                       checked={selectedProjectSkillIds.has(skill.id)}
-                      onChange={(e) => {
-                        const newSet = new Set(selectedProjectSkillIds);
-                        if (e.target.checked) newSet.add(skill.id);
-                        else newSet.delete(skill.id);
-                        setSelectedProjectSkillIds(newSet);
-                      }}
-                      className="h-4 w-4 text-primary border-gray-300 rounded mr-2 focus:ring-primary-focus"
+                      onChange={(e) => handleEditSkillsChange(skill.id, e.target.checked)}
+                      className="h-4 w-4 text-primary border-gray-300 rounded-md mr-2 focus:ring-primary"
                     />
                     <label htmlFor={`edit-proj-skill-${skill.id}`} className="text-sm text-gray-700">{skill.name}</label>
                   </div>
@@ -612,19 +618,20 @@ const ProjectManagement: React.FC = () => {
         </Modal>
       )}
 
-      {/* Create Project Modal - Skills are deferred for creation */}
       {isCreateModalOpen && (
         <Modal isOpen={isCreateModalOpen} onClose={handleCloseCreateModal} title="Create New Project (Admin)" size="xl" testId="create-project-modal">
           <form onSubmit={handleCreateProject} className="space-y-4 p-1">
             <div>
               <label htmlFor="proj_title_create" className="block text-sm font-medium text-gray-700">Project Title*</label>
-              <input type="text" id="proj_title_create" value={title} onChange={(e) => setTitle(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" required />
+              <input type="text" id="proj_title_create" value={title}
+                     onChange={(e) => {setTitle(e.target.value); if(createModalError) setCreateModalError(null);}}
+                     className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm" required />
             </div>
             <div>
               <label htmlFor="proj_desc_create" className="block text-sm font-medium text-gray-700">Project Description*</label>
-              <textarea id="proj_desc_create" rows={3} value={description} onChange={(e) => setDescription(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary" required />
+              <textarea id="proj_desc_create" rows={3} value={description}
+                        onChange={(e) => {setDescription(e.target.value); if(createModalError) setCreateModalError(null);}}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm" required />
             </div>
             <div>
               <label htmlFor="proj_status_create" className="block text-sm font-medium text-gray-700">Initial Status</label>
@@ -637,8 +644,9 @@ const ProjectManagement: React.FC = () => {
             {adminUser?.role === UserRole.ADMIN && (
               <div>
                 <label htmlFor="assignClient" className="block text-sm font-medium text-gray-700">Assign to Client (Optional)</label>
-                <select id="assignClient" value={assignedClientId} onChange={(e) => setAssignedClientId(e.target.value)}
-                  className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary">
+                <select id="assignClient" value={assignedClientId}
+                        onChange={(e) => {setAssignedClientId(e.target.value); if(createModalError) setCreateModalError(null);}}
+                        className="mt-1 block w-full px-3 py-2 border border-gray-300 bg-white rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm">
                   <option value="">Admin becomes client (Self-assigned)</option>
                   {clients.map(client => <option key={client.id} value={client.id}>{client.username} (ID: {client.id})</option>)}
                 </select>

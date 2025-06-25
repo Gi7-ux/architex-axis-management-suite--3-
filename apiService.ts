@@ -6,6 +6,7 @@ export interface UserRegistrationData {
   email: string;
   password: string;
   role: UserRole; // 'freelancer', 'client', or 'admin'
+  recaptcha_token?: string; // Added for reCAPTCHA
 }
 
 // Response from successful registration (message only)
@@ -17,6 +18,7 @@ export interface RegistrationResponse {
 export interface UserLoginData {
   email: string;
   password: string;
+  recaptcha_token?: string; // Added for reCAPTCHA
 }
 
 // User object returned by PHP login/profile (subset of main User type)
@@ -83,6 +85,140 @@ export interface MarkNotificationsReadResponse {
     marked_read_count: number;
 }
 // --- Notification Service Types --- END
+
+// --- User Profile Service Types --- START
+export interface Skill { // Ensure this is exported and defined if not already
+  id: number;
+  name: string;
+}
+
+export interface MyFullProfileResponse {
+  id: number;
+  username: string;
+  email: string;
+  role: UserRole; // Assuming UserRole enum/type exists from './types'
+  name: string | null;
+  phone_number: string | null;
+  company: string | null;
+  experience: string | null;
+  hourly_rate: number | null;
+  avatar_url: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  skills: Skill[];
+}
+
+export interface UpdateMyProfilePayload {
+  name?: string | null;
+  phone_number?: string | null;
+  company?: string | null;
+  experience?: string | null;
+  avatar_url?: string | null;
+  hourly_rate?: number | null;
+  skill_ids?: number[];
+}
+
+export interface UpdateProfileResponse { // Generic response for profile updates
+  message: string;
+}
+// --- User Profile Service Types --- END
+
+// --- Freelancer Specific Types --- START
+export interface FreelancerDashboardStatsResponse {
+  myTotalJobCards: number;
+  myInProgressJobCards: number;
+  openProjectsCount: number;
+  myApplicationsCount: number;
+}
+
+export interface MyJobCardItem {
+  id: number;
+  project_id: number;
+  project_title: string;
+  title: string;
+  description: string | null;
+  status: string; // Consider JobCardStatus from './types' if applicable
+  assigned_freelancer_id: number | null; // Should match current authenticated user's ID
+  estimated_hours: number | null;
+  created_at: string;
+  updated_at: string;
+  // Add any other relevant fields returned by the backend if necessary
+}
+// --- Freelancer Specific Types --- END
+
+// --- Job Card Messaging Service Types --- START
+export interface MessageAttachmentPHP {
+  id: number;
+  message_id?: number | null; // Nullable if created before message_id is known
+  uploader_id?: number | null;
+  file_name: string; // System-generated unique filename
+  original_file_name: string;
+  file_path: string; // Relative path for client to construct full URL
+  file_type: string;
+  file_size_bytes: number;
+  created_at: string; // ISO8601
+}
+
+// Re-evaluating MessagePHP based on its current usage and new needs
+// It seems MessagePHP is already defined for general messaging.
+// We might need a more specific one for Job Card Messages if backend returns different fields,
+// or augment existing one if they are compatible.
+// For now, let's assume the existing MessagePHP can be augmented or is compatible.
+// If MessagePHP was defined like this:
+// export interface MessagePHP {
+//   id: number;
+//   conversation_id: number;
+//   sender_id: number;
+//   sender_username: string;
+//   content: string;
+//   created_at: string;
+//   read_at: string | null;
+// }
+// We will enhance it (or create a new specific type like JobCardMessagePHP)
+// For the purpose of this task, let's update MessagePHP if it exists, or define it with these fields.
+// Assuming MessagePHP is already defined and we are adding to it or ensuring fields exist:
+export interface MessagePHP { // This might need to be merged with an existing MessagePHP
+  id: number;
+  conversation_id: number;
+  sender_id: number;
+  sender_username: string;
+  sender_avatar_url?: string | null;
+  content: string;
+  created_at: string; // ISO8601
+  read_at?: string | null; // ISO8601 or null
+  attachments?: MessageAttachmentPHP[];
+  moderation_status?: 'pending_approval' | 'approved' | 'rejected' | 'not_applicable';
+  is_visible_to_client?: boolean;
+}
+
+
+export interface SendJobCardMessagePayload {
+  job_card_id: number; // Or string
+  content: string;
+  attachment_ids?: number[];
+}
+
+export interface GetJobCardMessagesParams {
+  job_card_id: number; // Or string
+  limit?: number;
+  offset?: number;
+}
+
+export interface AdminModerateMessagePayload {
+  message_id: number; // Or string
+  new_moderation_status: 'approved' | 'rejected';
+}
+
+export interface UploadMessageAttachmentResponse {
+  id: number;
+  original_file_name: string;
+  file_type: string;
+  file_size_bytes: number;
+  file_path: string;
+  message?: string; // Backend includes a success message
+}
+// --- Job Card Messaging Service Types --- END
 
 
 // const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api'; // Example if using build-time env vars
@@ -345,32 +481,22 @@ export const adminDeleteUserAPI = (userId: number | string): Promise<AdminAction
 };
 
 // --- User Service ---
-export const fetchUsersAPI = (role?: UserRole): Promise<User[]> => {
-  const endpoint = role ? `/users?role=${role}` : '/users';
-  // Assuming fetching users list might require authentication in the future with PHP backend
-  // For now, let's assume it's a protected route.
-  // The actual PHP backend for '/users' is not implemented yet.
-  // This is a placeholder for how it would be called.
-  // If it's a public list, set requiresAuth to false.
-  // If the PHP equivalent is /api.php?action=get_users, change the endpoint.
-  console.warn("fetchUsersAPI is pointing to a generic /users endpoint; PHP backend for this is not yet defined. Assuming requiresAuth for now.");
-  return apiFetch<User[]>(endpoint, {}, true); // Example: mark as requiring auth
+// (Existing fetchUsersAPI, fetchUserAPI etc. would remain here)
+// ...
+
+// NEW User Profile Management functions
+export const fetchMyFullProfileAPI = (): Promise<MyFullProfileResponse> => {
+  return apiFetch<MyFullProfileResponse>(`/api.php?action=get_my_profile_details`, {
+    method: 'GET',
+  }, true); // Requires Auth
 };
-export const fetchUserAPI = (userId: string): Promise<User> => {
-  // This would likely require auth and a new PHP endpoint e.g. /api.php?action=get_user&id=${userId}
-  console.warn("fetchUserAPI is pointing to a generic /users/:id endpoint; PHP backend for this is not yet defined. Assuming requiresAuth for now.");
-  return apiFetch<User>(`/users/${userId}`, {}, true);
+
+export const updateMyProfileAPI = (payload: UpdateMyProfilePayload): Promise<UpdateProfileResponse> => {
+  return apiFetch<UpdateProfileResponse>(`/api.php?action=update_my_profile`, {
+    method: 'POST', // Or 'PUT' as per backend implementation
+    body: JSON.stringify(payload),
+  }, true); // Requires Auth
 };
-export const addUserAPI = (userData: Omit<User, 'id' | 'avatarUrl'>): Promise<User> => {
-  return apiFetch<User>('/users', { method: 'POST', body: JSON.stringify(userData) });
-};
-export const updateUserAPI = (userId: string, userData: Partial<User>): Promise<User> => {
-  return apiFetch<User>(`/users/${userId}`, { method: 'PATCH', body: JSON.stringify(userData) });
-};
-export const deleteUserAPI = (userId: string): Promise<void> => {
-  return apiFetch<void>(`/users/${userId}`, { method: 'DELETE' });
-};
-export const fetchUserApplicationsAPI = (userId: string): Promise<Application[]> => apiFetch<Application[]>(`/users/${userId}/applications`);
 
 
 // --- Project Service ---

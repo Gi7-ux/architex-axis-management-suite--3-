@@ -1,16 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { Project, ProjectStatus, UserRole } from '../../types';
 import {
-  fetchProjectsAPI,
-  submitApplicationAPI,
-  fetchAllSkillsAPI,
-  fetchFreelancerApplicationsAPI,
-  FreelancerApplicationResponseItem,
-  SubmitApplicationPayload,
-  ApiError
+    fetchProjectsAPI,
+    submitApplicationAPI,
+    fetchAllSkillsAPI,
+    fetchFreelancerApplicationsAPI, // Use this instead of fetchUserApplicationsAPI
+    FreelancerApplicationResponseItem, // Type for the response
+    SubmitApplicationPayload, // Type for submitting application
+    ApiError // Ensure ApiError is imported if used in catch blocks
 } from '../../apiService';
 import ProjectCard from '../shared/ProjectCard';
 import Modal from '../shared/Modal';
+import ErrorMessage from '../shared/ErrorMessage'; // Import ErrorMessage
 import Button from '../shared/Button';
 import LoadingSpinner from '../shared/LoadingSpinner';
 import { useAuth } from '../AuthContext';
@@ -28,7 +29,8 @@ const ProjectBrowser: React.FC = () => {
   const [appliedProjectIds, setAppliedProjectIds] = useState<Set<string>>(new Set());
   const [searchTerm, setSearchTerm] = useState('');
   const [filterSkills, setFilterSkills] = useState<string[]>([]);
-  const [error, setError] = useState<string | null>(null);
+  const [pageError, setPageError] = useState<ApiErrorType | string | null>(null); // Renamed for clarity
+  const [applyModalError, setApplyModalError] = useState<ApiErrorType | string | null>(null); // New state for modal
 
 useEffect(() => {
     // interface RawPhpProject { // Removed, use ProjectPHPResponse from apiService
@@ -45,10 +47,14 @@ useEffect(() => {
     const loadInitialData = async () => {
       setIsLoading(true);
       setError(null);
+      let errorMessages: string[] = [];
 
       // Fetch projects
       try {
-        const rawProjects = await fetchProjectsAPI(); // Type is ProjectPHPResponse[] from apiService.ts
+        // Fetch projects - no status filter for now, new API doesn't support it yet
+        const rawProjects: RawPhpProject[] = await fetchProjectsAPI();
+
+        // Map rawProjects to the frontend Project type
         const mappedProjects: Project[] = rawProjects.map((rawProject): Project => ({
           id: String(rawProject.id), // ProjectPHPResponse has id as number
           title: rawProject.title,
@@ -95,15 +101,22 @@ useEffect(() => {
         }
       }
 
-      // if (errorMessages.length > 0) { // Removed
-      //   setError(errorMessages.join(' '));
-      // }
-      setIsLoading(false); // Moved here, will run after all attempts
+      if (errorMessages.length > 0) {
+        setError(errorMessages.join(' '));
+      }
+
+    } catch (err: any) { // Catch any unexpected errors from the overall process
+        console.error("Unexpected error in loadInitialData:", err);
+        setError(err.message || "An unexpected error occurred.");
+    } finally {
+      setIsLoading(false);
+    }
     };
     loadInitialData();
   }, [user]);
 
   const handleApplyClick = (project: Project) => {
+    setApplyModalError(null); // Clear modal error on open
     setSelectedProjectForApplication(project);
     setBidAmount(project.budget * 0.9);
     setProposal('');
@@ -115,13 +128,14 @@ useEffect(() => {
     setSelectedProjectForApplication(null);
     setProposal('');
     setBidAmount('');
+    setApplyModalError(null); // Clear error on close
   };
 
   const handleSubmitApplication = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedProjectForApplication || !user || !proposal || bidAmount === '') return;
+    if (!selectedProjectForApplication || !user || !proposal || bidAmount === '') return; // Check bidAmount for empty string too
     setApplying(true);
-    setError(null);
+    setError(null); // Clear previous modal errors
     try {
       const payload: SubmitApplicationPayload = {
         project_id: parseInt(selectedProjectForApplication.id, 10),
@@ -130,14 +144,16 @@ useEffect(() => {
       };
       await submitApplicationAPI(payload);
       setAppliedProjectIds(prev => new Set(prev).add(selectedProjectForApplication.id));
-      alert(`Application submitted for ${selectedProjectForApplication.title}`);
+      alert(`Application submitted for ${selectedProjectForApplication.title}`); // Keep alert for immediate user feedback
       handleCloseApplyModal();
-    } catch (error: any) {
-      console.error("Failed to submit application", error);
-      if (error instanceof ApiError) {
-        setError(error.message || "Failed to submit application. Please try again.");
+    } catch (err) {
+      console.error("Failed to submit application", err);
+      if (err instanceof ApiErrorType) {
+        setApplyModalError(err);
+      } else if (err instanceof Error) {
+        setApplyModalError(err.message);
       } else {
-        setError("An unexpected error occurred. Please try again.");
+        setApplyModalError("An unexpected error occurred. Please try again.");
       }
     } finally {
       setApplying(false);
@@ -164,7 +180,7 @@ useEffect(() => {
   return (
     <div className="p-4 md:p-6">
       <h2 className="text-3xl font-bold text-gray-800 mb-6">Browse Projects</h2>
-
+      
       {error && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{error}</p>}
 
       <div className="mb-6 p-4 bg-white shadow rounded-lg">
@@ -197,7 +213,7 @@ useEffect(() => {
         </div>
       </div>
 
-      {!isLoading && filteredProjects.length === 0 && !error && (
+      {!isLoading && filteredProjects.length === 0 && !error &&(
         <p className="text-center text-gray-500 py-10">No projects match your criteria or no open projects available at the moment.</p>
       )}
 
@@ -215,14 +231,15 @@ useEffect(() => {
       {selectedProjectForApplication && (
         <Modal isOpen={isApplyModalOpen} onClose={handleCloseApplyModal} title={`Apply for: ${selectedProjectForApplication.title}`} size="lg">
           <form onSubmit={handleSubmitApplication} className="space-y-4">
+            <ErrorMessage error={applyModalError} /> {/* Display modal-specific error */}
             <div>
               <label htmlFor="proposal" className="block text-sm font-medium text-gray-700">Your Proposal</label>
               <textarea
                 id="proposal"
                 rows={5}
                 value={proposal}
-                onChange={(e) => setProposal(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                onChange={(e) => {setProposal(e.target.value); if(applyModalError) setApplyModalError(null);}}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"
                 placeholder="Explain why you are a good fit for this project..."
                 required
               />
@@ -233,17 +250,17 @@ useEffect(() => {
                 type="number"
                 id="bidAmount"
                 value={bidAmount}
-                onChange={(e) => setBidAmount(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                onChange={(e) => {setBidAmount(e.target.value); if(applyModalError) setApplyModalError(null);}}
+                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-primary focus:border-primary sm:text-sm"
                 placeholder={`Project budget is R ${selectedProjectForApplication.budget.toLocaleString()}`}
                 required
                 min="1"
               />
             </div>
-            {error && <p className="text-sm text-red-500">{error}</p>}
-            <div className="flex justify-end space-x-3 pt-4">
-              <Button type="button" variant="secondary" onClick={handleCloseApplyModal} disabled={applying}>Cancel</Button>
-              <Button type="submit" variant="primary" isLoading={applying} disabled={applying}>Submit Application</Button>
+            {/* Removed inline error, ErrorMessage component handles it */}
+            <div className="flex justify-end space-x-3 pt-4 border-t border-gray-200 mt-4">
+              <Button type="button" variant="ghost" onClick={handleCloseApplyModal} disabled={applying}>Cancel</Button>
+              <Button type="submit" variant="primary" size="md" isLoading={applying} disabled={applying}>Submit Application</Button>
             </div>
           </form>
         </Modal>

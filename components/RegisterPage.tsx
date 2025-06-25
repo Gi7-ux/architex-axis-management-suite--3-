@@ -1,9 +1,20 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef, FormEvent, ChangeEvent } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { registerAPI, UserRegistrationData, ApiError } from '../apiService';
+import { registerAPI, UserRegistrationData, ApiError as ApiErrorType } from '../apiService'; // Use ApiErrorType
 import { UserRole } from '../types';
 import Button from './shared/Button';
 import { APP_NAME, NAV_LINKS } from '../constants';
+import ErrorMessage from './shared/ErrorMessage'; // Import ErrorMessage
+
+const RECAPTCHA_SITE_KEY = "YOUR_RECAPTCHA_SITE_KEY"; // Placeholder
+
+declare global {
+  interface Window {
+    grecaptcha: any;
+    onRecaptchaLoadCallbackRegister: () => void;
+    onRecaptchaChangeRegister: (token: string | null) => void;
+  }
+}
 
 const RegisterPage: React.FC = () => {
   const [username, setUsername] = useState('');
@@ -11,10 +22,72 @@ const RegisterPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [role, setRole] = useState<UserRole>(UserRole.FREELANCER);
-  const [error, setError] = useState<string | null>(null);
+  const [recaptchaToken, setRecaptchaToken] = useState<string | null>(null);
+  const [error, setError] = useState<ApiErrorType | string | null>(null); // Updated error state type
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const navigate = useNavigate();
+  const recaptchaContainerRef = useRef<HTMLDivElement>(null);
+  const [isRecaptchaScriptLoaded, setIsRecaptchaScriptLoaded] = useState(false);
+
+  useEffect(() => {
+    window.onRecaptchaChangeRegister = (token: string | null) => {
+      setRecaptchaToken(token);
+      if (token) setError(null); // Clear CAPTCHA error if user completes it
+    };
+
+    const scriptId = "recaptcha-script"; // Use same ID to avoid multiple script loads
+    let script = document.getElementById(scriptId) as HTMLScriptElement | null;
+
+    if (!script) {
+      script = document.createElement("script");
+      script.id = scriptId;
+      script.src = "https://www.google.com/recaptcha/api.js?onload=onRecaptchaLoadCallbackRegister&render=explicit";
+      script.async = true;
+      script.defer = true;
+      document.head.appendChild(script);
+    } else if (window.grecaptcha && window.grecaptcha.render) { // If script already loaded by another page
+        setIsRecaptchaScriptLoaded(true);
+    }
+
+    window.onRecaptchaLoadCallbackRegister = () => {
+      setIsRecaptchaScriptLoaded(true);
+    };
+
+    return () => {
+      delete (window as any).onRecaptchaChangeRegister;
+      delete (window as any).onRecaptchaLoadCallbackRegister;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isRecaptchaScriptLoaded && recaptchaContainerRef.current && window.grecaptcha && window.grecaptcha.render && !recaptchaContainerRef.current.hasChildNodes()) {
+      try {
+        window.grecaptcha.render(recaptchaContainerRef.current, {
+          'sitekey': RECAPTCHA_SITE_KEY,
+          'callback': window.onRecaptchaChangeRegister,
+          'expired-callback': () => {
+            setRecaptchaToken(null);
+            setError("CAPTCHA expired. Please try again.");
+          }
+        });
+      } catch (e) {
+        console.error("Error rendering reCAPTCHA for Register:", e);
+        setError("Failed to load CAPTCHA. Please refresh the page.");
+      }
+    }
+  }, [isRecaptchaScriptLoaded]);
+
+  const resetRecaptcha = () => {
+    if (window.grecaptcha && recaptchaContainerRef.current?.firstChild) {
+       try {
+            window.grecaptcha.reset();
+        } catch(e) {
+            console.error("Error resetting reCAPTCHA:", e);
+        }
+    }
+    setRecaptchaToken(null);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -23,35 +96,64 @@ const RegisterPage: React.FC = () => {
 
     if (!username || !email || !password || !confirmPassword) {
       setError("Please fill in all fields.");
+      resetRecaptcha();
       return;
     }
     if (password !== confirmPassword) {
       setError("Passwords do not match.");
+      resetRecaptcha();
       return;
     }
     if (password.length < 8) {
       setError("Password must be at least 8 characters long.");
+      resetRecaptcha();
+      return;
+    }
+    if (!recaptchaToken) {
+      setError("Please complete the CAPTCHA verification.");
       return;
     }
 
     setIsLoading(true);
-    const registrationData: UserRegistrationData = { username, email, password, role };
+    const registrationData: UserRegistrationData = {
+      username,
+      email,
+      password,
+      role,
+      recaptcha_token: recaptchaToken
+    };
 
     try {
       const response = await registerAPI(registrationData);
       setSuccessMessage(response.message + " You can now log in.");
-      // Optionally redirect to login after a delay or clear form
-      setTimeout(() => navigate(NAV_LINKS.LOGIN), 2000);
+      // Clear form fields after successful registration
+      setUsername('');
+      setEmail('');
+      setPassword('');
+      setConfirmPassword('');
+      setRole(UserRole.FREELANCER);
+      resetRecaptcha(); // Reset recaptcha as well
+      setTimeout(() => navigate(NAV_LINKS.LOGIN), 3000);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.message || 'Registration failed. Please try again.');
+      if (err instanceof ApiErrorType) {
+        setError(err); // Pass the full error object
+      } else if (err instanceof Error) {
+        setError(err.message);
       } else {
         setError('An unexpected error occurred during registration.');
       }
+      resetRecaptcha();
       console.error("Registration page error:", err);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  // Handlers to clear error on input change
+  const handleInputChange = <T extends string | UserRole>(setter: React.Dispatch<React.SetStateAction<T>>) => (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    setter(e.target.value as T);
+    if (error) setError(null);
+    if (successMessage) setSuccessMessage(null);
   };
 
   return (
@@ -62,34 +164,38 @@ const RegisterPage: React.FC = () => {
           <p className="text-gray-500 mt-1">Create your account.</p>
         </div>
 
-        {successMessage && <p className="mb-4 text-sm text-green-600 bg-green-100 p-3 rounded-lg">{successMessage}</p>}
-        {error && <p className="mb-4 text-sm text-red-600 bg-red-100 p-3 rounded-lg">{error}</p>}
+        {successMessage && <p className="mb-4 text-sm text-green-600 bg-green-100 p-3 rounded-lg border border-green-200">{successMessage}</p>}
+        <ErrorMessage error={error} /> {/* Use ErrorMessage component */}
 
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
             <label htmlFor="username" className="block text-sm font-medium text-gray-700">Username</label>
-            <input id="username" type="text" value={username} onChange={(e) => setUsername(e.target.value)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary focus:border-primary"/>
+            <input id="username" type="text" value={username} onChange={handleInputChange(setUsername)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary focus:border-primary"/>
           </div>
           <div>
             <label htmlFor="email" className="block text-sm font-medium text-gray-700">Email address</label>
-            <input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary focus:border-primary"/>
+            <input id="email" type="email" value={email} onChange={handleInputChange(setEmail)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary focus:border-primary"/>
           </div>
           <div>
             <label htmlFor="password" className="block text-sm font-medium text-gray-700">Password</label>
-            <input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary focus:border-primary"/>
+            <input id="password" type="password" value={password} onChange={handleInputChange(setPassword)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary focus:border-primary"/>
           </div>
           <div>
             <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700">Confirm Password</label>
-            <input id="confirmPassword" type="password" value={confirmPassword} onChange={(e) => setConfirmPassword(e.target.value)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary focus:border-primary"/>
+            <input id="confirmPassword" type="password" value={confirmPassword} onChange={handleInputChange(setConfirmPassword)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm placeholder-gray-400 focus:outline-none focus:ring-primary focus:border-primary"/>
           </div>
           <div>
             <label htmlFor="role" className="block text-sm font-medium text-gray-700">Register as</label>
-            <select id="role" value={role} onChange={(e) => setRole(e.target.value as UserRole)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-white">
+            <select id="role" value={role} onChange={handleInputChange(setRole)} required className="mt-1 block w-full px-3 py-2.5 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-primary focus:border-primary bg-white">
               <option value={UserRole.FREELANCER}>Freelancer</option>
               <option value={UserRole.CLIENT}>Client</option>
-              {/* <option value={UserRole.ADMIN}>Admin</option> */} {/* Usually admin registration is handled separately */}
             </select>
           </div>
+
+          <div className="my-4"> {/* Added margin for spacing */}
+             <div ref={recaptchaContainerRef} id="recaptcha-container-register"></div>
+          </div>
+
           <div>
             <Button type="submit" className="w-full !py-2.5" isLoading={isLoading} variant="primary">Register</Button>
           </div>

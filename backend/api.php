@@ -912,6 +912,139 @@ elseif ($action === 'get_admin_dashboard_stats' && $method === 'GET') {
 
 } // END NEW: Admin - Get Dashboard Statistics
 
+// NEW: Admin - Get Project Financials Report
+elseif ($action === 'get_admin_project_financials_report' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'admin') {
+        send_json_response(403, ['error' => 'Forbidden: Only admins can access this report.']);
+    }
+
+    // Optional filters
+    $start_date_filter = $_GET['start_date'] ?? null;
+    $end_date_filter = $_GET['end_date'] ?? null;
+    $client_id_filter = isset($_GET['client_id']) ? (int)$_GET['client_id'] : null;
+    $freelancer_id_filter = isset($_GET['freelancer_id']) ? (int)$_GET['freelancer_id'] : null;
+    $project_status_filter = $_GET['project_status'] ?? null;
+
+    $sql = "SELECT
+                p.id AS project_id, p.title AS project_title, p.status AS project_status,
+                p.created_at AS project_created_at,
+                uc.username AS client_name,
+                uf.username AS freelancer_name,
+                pb.budget_amount, pb.currency AS budget_currency
+            FROM projects p
+            LEFT JOIN users uc ON p.client_id = uc.id
+            LEFT JOIN users uf ON p.freelancer_id = uf.id
+-            LEFT JOIN Project_Budgets pb ON p.id = pb.project_id";
++            LEFT JOIN project_budgets pb ON p.id = pb.project_id";
+
+    $where_conditions = [];
+    $bind_params_list = [];
+    $param_types = "";
+
+    if ($start_date_filter) {
+        if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $start_date_filter)) { send_json_response(400, ['error' => 'Invalid start_date format. Use YYYY-MM-DD.']); }
+        $where_conditions[] = "DATE(p.created_at) >= ?";
+        $bind_params_list[] = $start_date_filter;
+        $param_types .= "s";
+    }
+    if ($end_date_filter) {
+        if (!preg_match("/^\d{4}-\d{2}-\d{2}$/", $end_date_filter)) { send_json_response(400, ['error' => 'Invalid end_date format. Use YYYY-MM-DD.']); }
+        $where_conditions[] = "DATE(p.created_at) <= ?";
+        $bind_params_list[] = $end_date_filter;
+        $param_types .= "s";
+    }
+    if ($client_id_filter) {
+        $where_conditions[] = "p.client_id = ?";
+        $bind_params_list[] = $client_id_filter;
+        $param_types .= "i";
+    }
+    if ($freelancer_id_filter) {
+        $where_conditions[] = "p.freelancer_id = ?";
+        $bind_params_list[] = $freelancer_id_filter;
+        $param_types .= "i";
+    }
+    if ($project_status_filter) {
+        $where_conditions[] = "p.status = ?";
+        $bind_params_list[] = $project_status_filter;
+        $param_types .= "s";
+    }
+
+    if (!empty($where_conditions)) {
+        $sql .= " WHERE " . implode(" AND ", $where_conditions);
+    }
+    $sql .= " ORDER BY p.created_at DESC";
+
+    $stmt_projects = $conn->prepare($sql);
+    if ($stmt_projects === false) {
+        error_log("Prepare failed (admin_project_financials - projects): " . $conn->error);
+        send_json_response(500, ['error' => 'Failed to prepare statement for projects.']);
+    }
+    if (!empty($param_types)) {
+        $stmt_projects->bind_param($param_types, ...$bind_params_list);
+    }
+    if (!$stmt_projects->execute()) {
+        error_log("Execute failed (admin_project_financials - projects): " . $stmt_projects->error);
+        send_json_response(500, ['error' => 'Failed to execute statement for projects.']);
+    }
+    $result_projects = $stmt_projects->get_result();
+
+    $report_data = [];
+
+    $stmt_invoiced = $conn->prepare("SELECT SUM(total_amount) AS total_invoiced_paid_to_platform FROM Client_Invoices WHERE project_id = ? AND status = 'paid'");
+    if(!$stmt_invoiced) { error_log("Prepare failed (stmt_invoiced): ".$conn->error); send_json_response(500, ['error'=>'DB error preparing invoice sum.']); }
+
+    $stmt_paid_freelancer = $conn->prepare("SELECT SUM(amount_paid) AS total_paid_to_freelancer FROM Freelancer_Payments WHERE project_id = ?");
+    if(!$stmt_paid_freelancer) { error_log("Prepare failed (stmt_paid_freelancer): ".$conn->error); send_json_response(500, ['error'=>'DB error preparing payments sum.']); }
+
+    while ($project_row = $result_projects->fetch_assoc()) {
+        $project_id = (int)$project_row['project_id'];
+        $total_invoiced_paid = 0.00;
+        $total_paid_to_freelancer = 0.00;
+
+        $stmt_invoiced->bind_param("i", $project_id);
+        if (!$stmt_invoiced->execute()) {
+            error_log("Execute failed (stmt_invoiced for project {$project_id}): ".$stmt_invoiced->error);
+        } else {
+            $res_invoiced_sum = $stmt_invoiced->get_result()->fetch_assoc();
+            if ($res_invoiced_sum && $res_invoiced_sum['total_invoiced_paid_to_platform'] !== null) {
+                $total_invoiced_paid = (float)$res_invoiced_sum['total_invoiced_paid_to_platform'];
+            }
+        }
+
+        $stmt_paid_freelancer->bind_param("i", $project_id);
+        if (!$stmt_paid_freelancer->execute()) {
+            error_log("Execute failed (stmt_paid_freelancer for project {$project_id}): ".$stmt_paid_freelancer->error);
+        } else {
+            $res_paid_freelancer_sum = $stmt_paid_freelancer->get_result()->fetch_assoc();
+            if ($res_paid_freelancer_sum && $res_paid_freelancer_sum['total_paid_to_freelancer'] !== null) {
+                $total_paid_to_freelancer = (float)$res_paid_freelancer_sum['total_paid_to_freelancer'];
+            }
+        }
+
+        $platform_profit = $total_invoiced_paid - $total_paid_to_freelancer;
+
+        $report_data[] = [
+            "project_id" => $project_id,
+            "project_title" => $project_row['project_title'],
+            "client_name" => $project_row['client_name'],
+            "freelancer_name" => $project_row['freelancer_name'],
+            "project_status" => $project_row['project_status'],
+            "budget_amount" => $project_row['budget_amount'] ? (float)$project_row['budget_amount'] : null,
+            "budget_currency" => $project_row['budget_currency'],
+            "total_invoiced_paid_to_platform" => $total_invoiced_paid,
+            "total_paid_to_freelancer" => $total_paid_to_freelancer,
+            "platform_profit" => $platform_profit
+        ];
+    }
+    $stmt_projects->close();
+    $stmt_invoiced->close();
+    $stmt_paid_freelancer->close();
+
+    send_json_response(200, $report_data);
+
+} // END NEW: Admin - Get Project Financials Report
+
 // NEW: Admin - Get Own Notifications
 elseif ($action === 'get_admin_notifications' && $method === 'GET') {
     $authenticated_user = require_authentication($conn);
@@ -2569,6 +2702,69 @@ elseif ($action === 'get_project_time_logs' && $method === 'GET') {
     send_json_response(200, $project_time_logs_list);
 
 } // END NEW: Get All Time Logs for a Specific Project
+
+
+// NEW: Freelancer Dashboard - Get Stats
+elseif ($action === 'get_freelancer_dashboard_stats' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    if ($authenticated_user['role'] !== 'freelancer') {
+        send_json_response(403, ['error' => 'Forbidden: Only freelancers can access these statistics.']);
+    }
+    $freelancer_id = (int)$authenticated_user['id'];
+
+    $stats = [
+        'myTotalJobCards' => 0,
+        'myInProgressJobCards' => 0,
+        'openProjectsCount' => 0,
+        'myApplicationsCount' => 0
+    ];
+
+    // myTotalJobCards: Total count of job cards where assigned_freelancer_id is the freelancer's ID.
+    $stmt_total_jc = $conn->prepare("SELECT COUNT(*) AS count FROM job_cards WHERE assigned_freelancer_id = ?");
+    if ($stmt_total_jc) {
+        $stmt_total_jc->bind_param("i", $freelancer_id);
+        if ($stmt_total_jc->execute()) {
+            $result = $stmt_total_jc->get_result()->fetch_assoc();
+            $stats['myTotalJobCards'] = (int)$result['count'];
+        } else { error_log("Error executing myTotalJobCards: " . $stmt_total_jc->error); }
+        $stmt_total_jc->close();
+    } else { error_log("Error preparing myTotalJobCards: " . $conn->error); }
+
+    // myInProgressJobCards: Count of job cards assigned to the freelancer that have a status of 'in_progress'.
+    $stmt_inprogress_jc = $conn->prepare("SELECT COUNT(*) AS count FROM job_cards WHERE assigned_freelancer_id = ? AND status = 'in_progress'");
+    if ($stmt_inprogress_jc) {
+        $stmt_inprogress_jc->bind_param("i", $freelancer_id);
+        if ($stmt_inprogress_jc->execute()) {
+            $result = $stmt_inprogress_jc->get_result()->fetch_assoc();
+            $stats['myInProgressJobCards'] = (int)$result['count'];
+        } else { error_log("Error executing myInProgressJobCards: " . $stmt_inprogress_jc->error); }
+        $stmt_inprogress_jc->close();
+    } else { error_log("Error preparing myInProgressJobCards: " . $conn->error); }
+
+    // openProjectsCount: Total count of all projects in the system with a status of 'open'.
+    $stmt_open_proj = $conn->prepare("SELECT COUNT(*) AS count FROM projects WHERE status = 'open'");
+    if ($stmt_open_proj) {
+        if ($stmt_open_proj->execute()) {
+            $result = $stmt_open_proj->get_result()->fetch_assoc();
+            $stats['openProjectsCount'] = (int)$result['count'];
+        } else { error_log("Error executing openProjectsCount: " . $stmt_open_proj->error); }
+        $stmt_open_proj->close();
+    } else { error_log("Error preparing openProjectsCount: " . $conn->error); }
+
+    // myApplicationsCount: Total count of applications submitted by the freelancer from the applications table.
+    $stmt_my_apps = $conn->prepare("SELECT COUNT(*) AS count FROM applications WHERE freelancer_id = ?");
+    if ($stmt_my_apps) {
+        $stmt_my_apps->bind_param("i", $freelancer_id);
+        if ($stmt_my_apps->execute()) {
+            $result = $stmt_my_apps->get_result()->fetch_assoc();
+            $stats['myApplicationsCount'] = (int)$result['count'];
+        } else { error_log("Error executing myApplicationsCount: " . $stmt_my_apps->error); }
+        $stmt_my_apps->close();
+    } else { error_log("Error preparing myApplicationsCount: " . $conn->error); }
+
+    send_json_response(200, $stats);
+
+} // END NEW: Freelancer Dashboard - Get Stats
 
 // NEW: Update a Specific Time Log
 elseif ($action === 'update_time_log' && ($method === 'PUT' || $method === 'POST')) {

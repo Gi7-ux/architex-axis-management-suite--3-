@@ -680,6 +680,104 @@ These endpoints are typically restricted to users with the 'admin' role.
   }
   ```
 
+## Freelancer Dashboard Endpoints
+
+### 1. Get Freelancer Dashboard Stats
+- **Action**: `get_freelancer_dashboard_stats`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_freelancer_dashboard_stats`
+- **Authentication**: **Required** (Bearer Token), Role: `freelancer`.
+- **Description**: Retrieves key statistics for the authenticated freelancer's dashboard.
+  - `myTotalJobCards`: Total count of job cards where `assigned_freelancer_id` is the freelancer's ID.
+  - `myInProgressJobCards`: Count of job cards assigned to the freelancer that have a status of 'in_progress'.
+  - `openProjectsCount`: Total count of all projects in the system with a status of 'open'.
+  - `myApplicationsCount`: Total count of applications submitted by the freelancer from the `applications` table.
+- **Response (Success - 200 OK)**:
+  ```json
+  {
+    "myTotalJobCards": 5,
+    "myInProgressJobCards": 2,
+    "openProjectsCount": 10,
+    "myApplicationsCount": 7
+  }
+  ```
+- **Response (Error - 401 Unauthorized)**:
+  ```json
+  {
+    "error": "Authorization header missing or malformed. Usage: Bearer <token>"
+  }
+  ```
+- **Response (Error - 403 Forbidden)**:
+  ```json
+  {
+    "error": "Invalid or expired session token. Please log in again."
+    // or "Forbidden: Only freelancers can access these statistics."
+  }
+  ```
+- **Response (Error - 500 Server Error)**:
+  ```json
+  {
+    "error": "Server error message if database queries fail."
+  }
+  ```
+
+### 2. Get My Job Cards
+- **Action**: `get_my_job_cards`
+- **Method**: `GET`
+- **URL**: `/backend/api.php?action=get_my_job_cards`
+- **Authentication**: **Required** (Bearer Token), Role: `freelancer`.
+- **Description**: Fetches all job cards assigned to the authenticated freelancer. Each job card includes `project_id` and `project_title` for context. Results are ordered by the job card's last update time (descending).
+- **Response (Success - 200 OK)**:
+  ```json
+  [
+    {
+      "id": 101,
+      "project_id": 123,
+      "title": "Develop homepage banner",
+      "description": "Create a responsive banner for the homepage.",
+      "status": "in_progress",
+      "assigned_freelancer_id": 789,
+      "estimated_hours": 10.0,
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "updated_at": "YYYY-MM-DD HH:MM:SS",
+      "project_title": "E-commerce Website Redesign"
+    },
+    {
+      "id": 105,
+      "project_id": 124,
+      "title": "Setup database schema",
+      "description": null,
+      "status": "todo",
+      "assigned_freelancer_id": 789,
+      "estimated_hours": 5.5,
+      "created_at": "YYYY-MM-DD HH:MM:SS",
+      "updated_at": "YYYY-MM-DD HH:MM:SS",
+      "project_title": "Mobile App Development"
+    }
+    // ... more job cards
+  ]
+  ```
+- **Response (Error - 401 Unauthorized)**:
+  ```json
+  {
+    "error": "Authorization header missing or malformed. Usage: Bearer <token>"
+  }
+  ```
+- **Response (Error - 403 Forbidden)**:
+  ```json
+  {
+    "error": "Invalid or expired session token. Please log in again."
+    // or "Forbidden: Only freelancers can access their job cards."
+  }
+  ```
+- **Response (Error - 500 Server Error)**:
+  ```json
+  {
+    "error": "Failed to prepare statement for fetching job cards."
+    // or "Failed to execute statement for fetching job cards."
+  }
+  ```
+
 ## Application Endpoints
 
 Endpoints for managing project applications.
@@ -1694,11 +1792,13 @@ Stores time log entries against job cards.
 - `updated_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 
 ### `conversations` Table (New)
-Facilitates messaging between users.
+Facilitates messaging between users. Can be a general 1-on-1 conversation or linked to a specific `job_card_id`.
 - `id`: INT, PK, Auto Increment
+- `job_card_id`: INT, Nullable, FK to `job_cards.id` (ON DELETE SET NULL) - Links conversation to a job card.
 - `created_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP
 - `updated_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 - `last_message_at`: TIMESTAMP, NULLABLE (indexed, updated by trigger or backend logic on new message)
+- Index on `job_card_id`.
 
 ### `conversation_participants` Table (New)
 Links users to conversations, forming a many-to-many relationship.
@@ -1714,8 +1814,23 @@ Stores individual messages within conversations.
 - `conversation_id`: INT, FK to `conversations.id` (ON DELETE CASCADE), NOT NULL
 - `sender_id`: INT, FK to `users.id` (ON DELETE CASCADE), NOT NULL
 - `content`: TEXT, NOT NULL
+- `moderation_status`: VARCHAR(25), Not Null, Default 'not_applicable' (e.g., 'not_applicable', 'pending_approval', 'approved', 'rejected')
+- `is_visible_to_client`: BOOLEAN, Not Null, Default TRUE
 - `created_at`: TIMESTAMP, DEFAULT CURRENT_TIMESTAMP (indexed)
-- `read_at`: TIMESTAMP, NULLABLE (indicates when a recipient last read messages in this conversation up to this point, or individual message read receipts if more granular)
+- `read_at`: TIMESTAMP, NULLABLE
+
+### `message_attachments` Table (New)
+Stores files attached to messages.
+- `id`: INT, PK, Auto Increment
+- `message_id`: INT, Nullable, FK to `messages.id` (ON DELETE CASCADE) - Initially NULL, updated when message is sent.
+- `uploader_id`: INT, FK to `users.id` (ON DELETE SET NULL), Nullable
+- `file_name`: VARCHAR(255), Not Null (Stored system file name)
+- `original_file_name`: VARCHAR(255), Not Null (Original uploaded name)
+- `file_path`: VARCHAR(1024), Not Null
+- `file_type`: VARCHAR(100), Not Null
+- `file_size_bytes`: INT, Not Null
+- `created_at`: TIMESTAMP, Default CURRENT_TIMESTAMP
+- Index on `message_id`.
 
 ### `skills` Table (New)
 Stores a global list of definable skills.
