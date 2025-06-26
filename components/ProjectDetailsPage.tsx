@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { Project, ProjectStatus, Application, UserRole, JobCard, JobCardStatus, TimeLog, User, MessageStatus, ManagedFile, Conversation, Message } from '../types';
+import { useParams, useNavigate } from 'react-router-dom';
+import { Project, ProjectStatus, UserRole, JobCard, JobCardStatus, TimeLog, ManagedFile } from '../types';
 import { 
     fetchProjectDetailsAPI, fetchApplicationsForProjectAPI, fetchProjectFilesAPI, submitApplicationAPI,
     createJobCardAPI,
@@ -10,15 +10,12 @@ import {
     logTimeAPI,
     fetchTimeLogsForJobCardAPI,
     fetchTimeLogsForProjectAPI,
-    updateTimeLogAPI,
-    deleteTimeLogAPI,
     uploadFileAPI, deleteFileAPI, findOrCreateConversationAPI, sendMessageAPI,
     CreateJobCardPayload, UpdateJobCardPayload, JobCardPHPResponse,
     LogTimePayload,
-    TimeLogPHPResponse,
-    ProjectApplicationPHPResponse
+    TimeLogPHPResponse
 } from '../apiService';
-import { NAV_LINKS, getMockFileIconPath, formatDurationToHHMMSS } from '../constants';
+import { getMockFileIconPath, formatDurationToHHMMSS } from '../constants';
 import LoadingSpinner from './shared/LoadingSpinner';
 import Button from './shared/Button';
 import { useAuth } from '../contexts/AuthContext';
@@ -418,6 +415,8 @@ const ProjectDetailsPage: React.FC = () => {
             assignedFreelancerId: fetchedProjectCore.freelancer_id ? String(fetchedProjectCore.freelancer_id) : undefined,
             jobCards: mappedJobCards,
             skillsRequired: fetchedProjectCore.skills_required?.map(s => s.name) || [],
+            createdAt: fetchedProjectCore.created_at,
+            updatedAt: fetchedProjectCore.updated_at,
         };
         setProject(fullProjectData);
 
@@ -596,7 +595,7 @@ const ProjectDetailsPage: React.FC = () => {
         project.clientId,
         project.assignedFreelancerId,
         project.adminCreatorId
-    ].filter(Boolean)));
+    ].filter((id): id is string => typeof id === 'string' && id.length > 0)));
     
     try {
         const conversation = await findOrCreateConversationAPI(participantIds, project.id);
@@ -614,12 +613,12 @@ const ProjectDetailsPage: React.FC = () => {
         user.id,
         project.assignedFreelancerId,
         project.adminCreatorId
-    ].filter(Boolean);
+    ].filter((id): id is string => typeof id === 'string' && id.length > 0);
 
     try {
         const conversation = await findOrCreateConversationAPI(participantIds, project.id);
-        await sendMessageAPI({
-            conversation_id: conversation.id,
+        await sendMessageAPI(conversation.id, {
+            senderId: String(user.id),
             content: `Client ${user.name} requests a status update for project '${project.title}'`,
         });
         alert("Status update request sent via messages.");

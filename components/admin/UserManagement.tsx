@@ -24,7 +24,7 @@ import Button from '../shared/Button';
 import { PencilIcon, TrashIcon, PlusCircleIcon, CheckCircleIcon, XCircleIcon } from '../shared/IconComponents';
 import Modal from '../shared/Modal';
 import LoadingSpinner from '../shared/LoadingSpinner';
-import { useAuth } from '../AuthContext'; // Import useAuth to get current admin ID
+import { useAuth } from '../../contexts/AuthContext'; // Import useAuth to get current admin ID
 
 
 // Extend AdminUserListEntry to include is_active for the main list display

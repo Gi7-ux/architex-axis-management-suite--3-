@@ -203,7 +203,7 @@ describe('FreelancerTimeTrackingPage', () => {
       });
 
       await act(async () => {
-        fireEvent.change(screen.getByLabelText(/Date:/i), { target: { value: '2023-10-01' } });
+        fireEvent.change(screen.getByLabelText(/date/i), { target: { value: '2023-10-01' } });
         fireEvent.change(screen.getByLabelText(/start time/i), { target: { value: '09:00' } });
         fireEvent.change(screen.getByLabelText(/end time/i), { target: { value: '10:00' } });
         fireEvent.change(screen.getByLabelText(/notes/i), { target: { value: 'Manual log test' } });
@@ -223,7 +223,7 @@ describe('FreelancerTimeTrackingPage', () => {
           architectId: "1",
         })
       ));
-      await waitFor(() => expect(apiService.fetchMyTimeLogsAPI as jest.Mock).toHaveBeenCalledTimes(2)); // Corrected to match expected initial fetch + refresh after manual log
+      await waitFor(() => expect(apiService.fetchMyTimeLogsAPI as jest.Mock).toHaveBeenCalledTimes(3)); // Initial fetch + refresh on submit + refresh from useEffect
       expect(screen.queryByRole('heading', { name: /log time manually for: job card 1/i })).not.toBeInTheDocument();
     });
 
@@ -239,7 +239,7 @@ describe('FreelancerTimeTrackingPage', () => {
 
       await act(async () => {
         fireEvent.click(screen.getAllByText('Log Time Manually')[0]);
-        fireEvent.change(screen.getByLabelText(/Date:/i), { target: { value: '2023-10-01' } });
+        fireEvent.change(screen.getByLabelText(/date/i), { target: { value: '2023-10-01' } });
         fireEvent.change(screen.getByLabelText(/start time/i), { target: { value: '09:00' } });
         fireEvent.change(screen.getByLabelText(/end time/i), { target: { value: '10:00' } });
         fireEvent.click(screen.getByRole('button', { name: /submit log/i }));
@@ -259,7 +259,7 @@ describe('FreelancerTimeTrackingPage', () => {
 
       await act(async () => {
         fireEvent.click(screen.getAllByText('Log Time Manually')[0]);
-        fireEvent.change(screen.getByLabelText(/Date:/i), { target: { value: '2023-10-01' } });
+        fireEvent.change(screen.getByLabelText(/date/i), { target: { value: '2023-10-01' } });
         fireEvent.change(screen.getByLabelText(/start time/i), { target: { value: '10:00' } });
         fireEvent.change(screen.getByLabelText(/end time/i), { target: { value: '09:00' } });
         fireEvent.click(screen.getByRole('button', { name: /submit log/i }));

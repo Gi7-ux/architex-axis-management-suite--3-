@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.3.0] - 2025-06-26
+
+### Added
+
+- Created TROUBLESHOOTING.md guide for resolving common development issues.
+
+### Changed
+
+- Updated jest.setup.js to properly handle TextEncoder/TextDecoder and add window.matchMedia mocks.
+- Updated vite.config.ts to fix path resolution, particularly for contexts importing.
+- Updated package.json to add missing dependency identity-obj-proxy for CSS/asset imports in tests.
+- Updated memory bank to reflect current focus on development environment issues.
+
+### Fixed
+
+- Fixed Jest configuration to better handle CSS and asset imports during testing.
+- Fixed potential environment variable issues in vite.config.ts by providing default empty values.
+
+# Changelog
+
 ## [0.1.0] - 2025-06-22
 
 ### Added
@@ -82,3 +102,57 @@
 - **Merge Conflicts:** Resolved all outstanding merge conflicts in the codebase.
 - **TypeScript Errors:** Fixed all TypeScript errors that arose from the merge conflicts.
 - **Memory Bank Update:** Updated all memory bank files to reflect the current state of the project.
+
+## [0.6.0] - 2025-06-25
+
+### Added
+
+- Enhanced error handling patterns for TypeScript compilation issues
+- Standardized icon component usage patterns across admin interfaces
+
+### Changed
+
+- **AdminProjectMessagingPage.tsx:** Complete component overhaul to resolve compilation errors
+  - Updated import structure to eliminate duplicates and fix paths
+  - Replaced non-existent icons with available alternatives from IconComponents
+  - Updated Button component props to match interface specifications
+  - Corrected thread type definitions to match API specifications
+- **Import Path Standardization:** Corrected paths across components to use proper directory structure
+- **Component Prop Validation:** Updated all Button usages to use supported size and variant values
+
+### Fixed (0.6.0)
+
+- **Critical TypeScript Errors:** Resolved 8 compilation errors in AdminProjectMessagingPage.tsx
+  - JSX syntax malformation (`}));` → `};`)
+  - Duplicate and nested JSX fragment structure issues  
+  - Missing and incorrect icon imports (`HandThumbUpIcon`, `HandThumbDownIcon`, `BuildingStorefrontIcon`)
+  - Button component prop mismatches (size: "xs" → "sm", variant: "success" → "primary")
+  - Function call signature errors (missing third parameter in `renderChatInterface`)
+  - Invalid thread type references (`'project_client_admin_freelancer'`)
+  - Unused function definitions (`getThreadIcon`)
+- **Build Process:** Eliminated all TypeScript compilation errors preventing successful builds
+- **Code Quality:** Removed unused imports and functions to improve maintainability
+
+### Technical Debt Resolved
+
+- Cleaned up duplicate import statements across multiple components
+- Standardized icon usage patterns using available IconComponents
+- Validated all component prop interfaces for type safety
+- Removed references to non-existent API thread types
+
+## [0.4.0] - 2025-06-26
+
+### Added
+
+- Created comprehensive MCP (Model Context Protocol) debugging automation tool in `mcp-tools/debug-automation/`.
+- MCP tool includes three main functions:
+  - `setup_debug_environment`: Automatically configures VS Code debugging for PHP and React
+  - `create_debug_guide`: Generates comprehensive debugging documentation
+  - `validate_debug_setup`: Validates debugging configuration
+- Automated VS Code configuration creation (launch.json, tasks.json, settings.json).
+- Support for PHP Xdebug, React Chrome debugging, and Jest test debugging.
+- Comprehensive README and usage instructions for the MCP tool.
+
+### Changed
+
+- Enhanced memory bank documentation to reflect focus on debugging automation.

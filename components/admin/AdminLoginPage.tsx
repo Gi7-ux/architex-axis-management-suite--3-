@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
-import { useAuth } from '../AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import Button from '../shared/Button';
 import { UserRole } from '../../types';
 import { APP_NAME, NAV_LINKS } from '../../constants';

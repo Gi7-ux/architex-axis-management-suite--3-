@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import { UserRole } from '../../types';
 import LoadingSpinner from './LoadingSpinner';
 import { NAV_LINKS } from '../../constants';

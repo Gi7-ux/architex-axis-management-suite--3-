@@ -2,7 +2,6 @@ import React, { useState, useEffect, useContext } from 'react';
 import { User, Project, TimeLog, UserRole } from '../../types';
 import {
   fetchProjectsAPI,
-  fetchClientProjectsAPI,
   fetchClientProjectTimeLogsAPI,
   fetchUsersAPI // For fetching users to map architectId to name
 } from '../../apiService';
@@ -41,7 +40,7 @@ const ClientProjectTimeLogPage: React.FC = () => {
       setError(null);
       try {
         const [fetchedProjects, fetchedUsers] = await Promise.all([
-          fetchClientProjectsAPI(),
+          fetchProjectsAPI({ clientId: String(clientId) }),
           fetchUsersAPI(UserRole.FREELANCER) // Fetch only freelancers
         ]);
         setProjects(fetchedProjects);

@@ -1,4 +1,4 @@
-import { User, Project, Application, JobCard, TimeLog, ManagedFile, UserRole, ProjectStatus, FreelancerDashboardStats, AdminDashboardStatsResponse, ClientDashboardStats, RecentActivity } from './types';
+import { User, Project, Application, JobCard, TimeLog, ManagedFile, UserRole, ProjectStatus, FreelancerDashboardStats, AdminDashboardStatsResponse, ClientDashboardStats, RecentActivity, Message, MessageStatus, Conversation } from './types';
 
 // Payload for user registration
 export interface UserRegistrationData {
@@ -86,7 +86,9 @@ export interface MarkNotificationsReadResponse {
 
 
 // const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || '/api'; // Example if using build-time env vars
-const API_BASE_URL = process.env.NODE_ENV === 'test' ? 'http://localhost/backend' : '/backend'; // Using relative path for API calls
+export const API_BASE_URL = process.env.NODE_ENV === 'test'
+  ? 'http://localhost/backend'
+  : 'http://localhost:8000';
 
 interface ApiErrorData {
   message?: string;
@@ -114,7 +116,7 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}, requires
      token = localStorage.getItem('authToken');
      if (!token) {
          // Optionally, you could throw an error here or redirect to login
-         console.warn('Auth token not found for authenticated request to', endpoint);
+         // Auth token not found for authenticated request - backend will reject if required
          // For now, let it proceed; backend will reject if token is required and missing/invalid
      }
   }
@@ -143,7 +145,7 @@ async function apiFetch<T>(endpoint: string, options: RequestInit = {}, requires
         if (localStorage.getItem('authToken')) {
             localStorage.removeItem('authToken');
             // Optionally dispatch an event or call a callback to update auth state (e.g., logout user)
-            console.log('Auth token removed due to API error status:', response.status);
+            // Auth token removed due to API error status - consider redirecting to login page
             // Consider redirecting to login page here: window.location.href = '/login';
         }
     }
@@ -353,12 +355,12 @@ export const fetchUsersAPI = (role?: UserRole): Promise<User[]> => {
   // This is a placeholder for how it would be called.
   // If it's a public list, set requiresAuth to false.
   // If the PHP equivalent is /api.php?action=get_users, change the endpoint.
-  console.warn("fetchUsersAPI is pointing to a generic /users endpoint; PHP backend for this is not yet defined. Assuming requiresAuth for now.");
+  // NOTE: fetchUsersAPI is pointing to a generic /users endpoint; PHP backend for this is not yet defined. Assuming requiresAuth for now.
   return apiFetch<User[]>(endpoint, {}, true); // Example: mark as requiring auth
 };
 export const fetchUserAPI = (userId: string): Promise<User> => {
   // This would likely require auth and a new PHP endpoint e.g. /api.php?action=get_user&id=${userId}
-  console.warn("fetchUserAPI is pointing to a generic /users/:id endpoint; PHP backend for this is not yet defined. Assuming requiresAuth for now.");
+  // NOTE: fetchUserAPI is pointing to a generic /users/:id endpoint; PHP backend for this is not yet defined. Assuming requiresAuth for now.
   return apiFetch<User>(`/users/${userId}`, {}, true);
 };
 export const addUserAPI = (userData: Omit<User, 'id' | 'avatarUrl'>): Promise<User> => {
@@ -406,7 +408,7 @@ export const fetchProjectsAPI = (params?: { status?: ProjectStatus | 'all' }): P
 // Update fetchProjectDetailsAPI to use the get_projects?id=X backend logic
 // This will now return ProjectPHPResponse, which components will map to the full Project type
 export const fetchProjectDetailsAPI = (projectId: number | string): Promise<ProjectPHPResponse> => {
-  console.log("fetchProjectDetailsAPI now uses get_projects with ID for PHP backend.");
+  // NOTE: fetchProjectDetailsAPI now uses get_projects with ID for PHP backend.
   return apiFetch<ProjectPHPResponse>(`/api.php?action=get_projects&id=${projectId}`, {
       method: 'GET'
   }, false); // Assuming public access for now, or true if details need auth
@@ -699,8 +701,8 @@ export const deleteJobCardAPI = (jobCardId: number | string): Promise<DeleteJobC
 
 // Commenting out old/placeholder JobCard APIs:
 // Placeholder export to satisfy component import until proper PHP endpoint is made
-export const fetchFreelancerJobCardsAPI = async (freelancerId: string | number): Promise<JobCard[]> => {
-  console.warn(`fetchFreelancerJobCardsAPI called with ${freelancerId} - using placeholder in apiService.ts`);
+export const fetchFreelancerJobCardsAPI = async (_freelancerId: string | number): Promise<JobCard[]> => {
+  // NOTE: fetchFreelancerJobCardsAPI called - using placeholder in apiService.ts
   // This would typically call an endpoint like /api.php?action=get_freelancer_job_cards&freelancer_id=${freelancerId}
   // For now, returning an empty array or mock data if needed for basic compilation.
   return Promise.resolve([]);
@@ -821,8 +823,8 @@ export const addTimeLogAPI = (projectId: string, jobCardId: string, timeLogData:
 export const fetchProjectTimeLogsForAdminAPI = (projectId: string): Promise<TimeLog[]> => {
     return apiFetch<TimeLog[]>(`/admin/projects/${projectId}/timelogs`); // Example specific admin endpoint
 };
-export const fetchAllTimeLogsAPI = (filters?: any): Promise<TimeLog[]> => { // Filters for date range, client, etc.
-    const query = new URLSearchParams(filters as any).toString();
+export const fetchAllTimeLogsAPI = (filters?: Record<string, string>): Promise<TimeLog[]> => { // Filters for date range, client, etc.
+    const query = new URLSearchParams(filters).toString();
     return apiFetch<TimeLog[]>(`/admin/timelogs${query ? `?${query}` : ''}`);
 };
 
@@ -984,7 +986,7 @@ export const moderateMessageAPI = (payload: ModerateMessagePayload): Promise<Mod
 
 // New API to get users that the current user can message (for DM restrictions)
 // Response type can reuse AdminUserView or a simpler UserContact type
-export interface MessageableUser extends Pick<AdminUserView, 'id' | 'username' | 'email' | 'role' | 'avatar_url'> {}
+export interface MessageableUser extends Pick<AdminUserView, 'id' | 'username' | 'email' | 'role'> {}
 
 export const getMessageableUsersAPI = (): Promise<MessageableUser[]> => {
   return apiFetch<MessageableUser[]>(`/api.php?action=get_messageable_users`, {
@@ -994,22 +996,20 @@ export const getMessageableUsersAPI = (): Promise<MessageableUser[]> => {
 
 
 // Comment out or remove old messaging APIs from types.ts if they are fully superseded
-/*
- export const fetchConversationsAPI = (userId: string): Promise<Conversation[]> => apiFetch<Conversation[]>(`/users/${userId}/conversations`);
- export const fetchMessagesAPI = (conversationId: string): Promise<Message[]> => apiFetch<Message[]>(`/conversations/${conversationId}/messages`);
- export const findOrCreateConversationAPI = (participantIds: string[], projectId?: string): Promise<Conversation> => { // Old signature
-   return apiFetch<Conversation>('/conversations/find-or-create', { method: 'POST', body: JSON.stringify({ participantIds, projectId }) });
- };
- export const sendMessageAPI = (conversationId: string, messageData: Omit<Message, 'id' | 'timestamp' | 'conversationId' | 'status'> & {status?: MessageStatus}): Promise<Message> => { // Old signature
-   return apiFetch<Message>(`/conversations/${conversationId}/messages`, { method: 'POST', body: JSON.stringify(messageData) });
- };
- export const updateMessageStatusAPI = (messageId: string, status: MessageStatus): Promise<Message> => {
-   return apiFetch<Message>(`/messages/${messageId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
- };
- export const deleteMessageAPI = (messageId: string): Promise<void> => {
-   return apiFetch<void>(`/messages/${messageId}`, { method: 'DELETE' });
- };
-*/
+export const fetchConversationsAPI = (userId: string): Promise<Conversation[]> => apiFetch<Conversation[]>(`/users/${userId}/conversations`);
+export const fetchMessagesAPI = (conversationId: string): Promise<Message[]> => apiFetch<Message[]>(`/conversations/${conversationId}/messages`);
+export const findOrCreateConversationAPI = (participantIds: string[], projectId?: string): Promise<Conversation> => { // Old signature
+  return apiFetch<Conversation>('/conversations/find-or-create', { method: 'POST', body: JSON.stringify({ participantIds, projectId }) });
+};
+export const sendMessageAPI = (conversationId: string, messageData: Omit<Message, 'id' | 'timestamp' | 'conversationId' | 'status'> & {status?: MessageStatus}): Promise<Message> => { // Old signature
+  return apiFetch<Message>(`/conversations/${conversationId}/messages`, { method: 'POST', body: JSON.stringify(messageData) });
+};
+export const updateMessageStatusAPI = (messageId: string, status: MessageStatus): Promise<Message> => {
+  return apiFetch<Message>(`/messages/${messageId}/status`, { method: 'PATCH', body: JSON.stringify({ status }) });
+};
+export const deleteMessageAPI = (messageId: string): Promise<void> => {
+  return apiFetch<void>(`/messages/${messageId}`, { method: 'DELETE' });
+};
 
 // --- Misc/Utility Service --- or a new // --- Skills Service ---
 
@@ -1065,12 +1065,11 @@ export interface AdminDeleteSkillPayload { // Can be by skill_id in URL or paylo
 export interface AdminDeleteSkillResponse {
   message: string;
 }
-export const adminDeleteSkillAPI = (skillId: number, payload?: AdminDeleteSkillPayload): Promise<AdminDeleteSkillResponse> => {
-  // Assuming skillId in URL for DELETE, or in payload for POST
-  const effectivePayload = payload || { skill_id: skillId };
-  return apiFetch<AdminDeleteSkillResponse>(`/api.php?action=admin_delete_skill&skill_id=${skillId}`, { // Example with skill_id in query for DELETE method
+export const adminDeleteSkillAPI = (skillId: number, _payload?: AdminDeleteSkillPayload): Promise<AdminDeleteSkillResponse> => {
+  // Using skillId in URL for DELETE method
+  return apiFetch<AdminDeleteSkillResponse>(`/api.php?action=admin_delete_skill&skill_id=${skillId}`, {
     method: 'DELETE', // Or 'POST' if using payload for ID
-    // body: JSON.stringify(effectivePayload), // Uncomment if using POST and payload for ID
+    // body: JSON.stringify(payload), // Uncomment if using POST and payload for ID
   }, true); // Requires Admin Auth
 };
 
@@ -1105,7 +1104,6 @@ export const fetchAllProjectsWithTimeLogsAPI = (): Promise<Project[]> => apiFetc
 
 // --- NEW PHP Backend API Service ---
 
-const PHP_API_BASE_URL = '/backend/api.php'; // Base URL for the new PHP backend
 
 // Assuming the existing User type from './types' is largely compatible
 // If not, a specific interface for PHP-backed user data might be needed:
@@ -1130,7 +1128,7 @@ interface PhpApiResponse<T> {
  */
 export const getUsersFromPhp = async (): Promise<User[]> => {
   try {
-    const response = await fetch(`${PHP_API_BASE_URL}?action=getUsers`, {
+    const response = await fetch(`${API_BASE_URL}/api.php?action=getUsers`, {
       method: 'GET',
       headers: {
         'Content-Type': 'application/json',
@@ -1163,7 +1161,7 @@ export const getUsersFromPhp = async (): Promise<User[]> => {
       throw new Error(result.message || 'Failed to fetch users from PHP backend');
     }
   } catch (error) {
-    console.error('Error in getUsersFromPhp:', error);
+    // Error in getUsersFromPhp - rethrowing for caller to handle
     throw error;
   }
 };
@@ -1183,7 +1181,7 @@ interface CreateUserPhpPayload {
  */
 export const createUserInPhp = async (userData: CreateUserPhpPayload): Promise<User> => {
   try {
-    const response = await fetch(`${PHP_API_BASE_URL}?action=createUser`, { // Assuming createUser action
+    const response = await fetch(`${API_BASE_URL}/api.php?action=createUser`, { // Assuming createUser action
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1215,7 +1213,7 @@ export const createUserInPhp = async (userData: CreateUserPhpPayload): Promise<U
       throw new Error(result.message || 'Failed to create user in PHP backend');
     }
   } catch (error) {
-    console.error('Error in createUserInPhp:', error);
+    // Error in createUserInPhp - rethrowing for caller to handle
     throw error;
   }
 };

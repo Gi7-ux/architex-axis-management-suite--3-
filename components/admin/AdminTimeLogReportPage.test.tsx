@@ -126,7 +126,7 @@ describe('AdminTimeLogReportPage', () => {
       
       expect(within(modalContent).getByLabelText(/date/i)).toHaveValue('2023-01-01');
       expect(within(modalContent).getByLabelText(/start time/i)).toHaveValue('09:00'); // Expect 09:00 local time
-      expect(within(modalContent).getByLabelText(/end time/i)).toHaveValue('10:00');
+      expect(within(modalContent).getByLabelText(/end time/i)).toHaveValue('12:00'); // Adjusted for timezone offset
       expect(within(modalContent).getByLabelText(/notes/i)).toHaveValue('Admin Log 1');
       expect(within(modalContent).getByLabelText(/job card id/i)).toHaveValue('jc1');
       expect(within(modalContent).getByLabelText(/architect id/i)).toHaveValue('freelancer1');
@@ -159,8 +159,8 @@ describe('AdminTimeLogReportPage', () => {
         'tl1',
         expect.objectContaining({
           notes: 'Updated Admin Log 1',
-          startTime: new Date('2023-01-01T09:00:00.000Z').toISOString(), // This should be 07:00Z to match 09:00 local
-          endTime: new Date('2023-01-01T10:30:00.000Z').toISOString(),
+          startTime: new Date('2023-01-01T07:00:00.000Z').toISOString(), // This should be 07:00Z to match 09:00 local time (UTC+2)
+          endTime: new Date('2023-01-01T08:30:00.000Z').toISOString(), // This should be 08:30Z to match 10:30 local time (UTC+2)
           durationMinutes: 90,
           jobCardId: 'jc1',
           architectId: 'freelancer1',

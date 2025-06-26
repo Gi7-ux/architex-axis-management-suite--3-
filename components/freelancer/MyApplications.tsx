@@ -6,7 +6,7 @@ import {
     withdrawApplicationAPI,
     ApiError   // Import withdrawApplicationAPI and ApiError
 } from '../../apiService';
-import { useAuth } from '../AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import LoadingSpinner from '../shared/LoadingSpinner';
 import { Link } from 'react-router-dom';
 import { NAV_LINKS } from '../../constants';

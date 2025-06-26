@@ -3,7 +3,7 @@ import React from 'react';
 import { NavLink as RouterNavLink, useLocation } from 'react-router-dom'; // Using NavLink for active styling
 import { APP_NAME } from '../../constants'; // If needed for branding in sidebar
 import { LogoutIcon, IconProps } from './IconComponents'; // Import IconProps
-import { useAuth } from '../AuthContext'; // For logout
+import { useAuth } from '../../contexts/AuthContext'; // For logout
 
 export interface SidebarNavItem {
   label: string;

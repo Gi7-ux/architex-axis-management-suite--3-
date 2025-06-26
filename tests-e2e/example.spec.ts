@@ -10,24 +10,24 @@ test.describe('Landing Page Tests', () => {
   });
 
   test('should have navigation to key sections', async ({ page }) => {
-    // Check for main navigation elements
-    await expect(page.getByRole('link', { name: /login/i })).toBeVisible();
-    await expect(page.getByRole('link', { name: /register/i })).toBeVisible();
+    // Check for main navigation elements when not logged in
+    await expect(page.getByRole('button', { name: /login.*sign up/i })).toBeVisible();
+    await expect(page.getByRole('button', { name: /admin portal/i })).toBeVisible();
     
     // Verify logo presence
-    await expect(page.getByRole('img', { name: /architex logo/i })).toBeVisible();
+    await expect(page.getByRole('img', { name: /architex.*logo/i })).toBeVisible();
   });
 
   test('should navigate to login page', async ({ page }) => {
-    await page.getByRole('link', { name: /login/i }).click();
-    await expect(page).toHaveURL('/login');
+    await page.getByRole('button', { name: /login.*sign up/i }).click();
+    await expect(page).toHaveURL('/#/login');
     await expect(page.getByRole('heading', { name: /sign in/i })).toBeVisible();
   });
 
-  test('should navigate to registration page', async ({ page }) => {
-    await page.getByRole('link', { name: /register/i }).click();
-    await expect(page).toHaveURL('/register');
-    await expect(page.getByRole('heading', { name: /create account/i })).toBeVisible();
+  test('should navigate to admin login page', async ({ page }) => {
+    await page.getByRole('button', { name: /admin portal/i }).click();
+    await expect(page).toHaveURL('/#/admin-login');
+    await expect(page.getByRole('heading', { name: /admin.*sign in/i })).toBeVisible();
   });
 
   test('should have proper responsive layout', async ({ page }) => {

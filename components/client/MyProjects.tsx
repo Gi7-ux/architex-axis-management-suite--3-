@@ -176,7 +176,7 @@ const MyProjects: React.FC = () => {
           <BriefcaseIcon className="w-16 h-16 mx-auto mb-4 text-gray-300" />
           <h3 className="text-xl font-semibold">No Projects Yet</h3>
           <p className="mt-1">You haven't created any projects.</p>
-          <p className="text-sm mt-1">Get started by <a href="/create-project" className="text-primary hover:underline">creating your first project</a>.</p>
+          <p className="text-sm mt-1">Get started by <a href={NAV_LINKS.CREATE_PROJECT} className="text-primary hover:underline">creating your first project</a>.</p>
         </div>
       )}
 
@@ -193,7 +193,7 @@ const MyProjects: React.FC = () => {
                   <TrashIcon className="w-4 h-4 mr-1" /> Delete
                 </Button>
                 <Button size="sm" variant="outline" className="border-blue-600 text-blue-600 hover:bg-blue-50" onClick={() => openApplicationsModal(project)} title="View Applications">
-                  <EyeIcon className="w-4 h-4 mr-1" /> Apps
+                  <EyeIcon className="w-4 h-4 mr-1" /> Apps ({project.applicationCount || 0}) {/* Assuming applicationCount might be added to Project type */}
                 </Button>
               </div>
             </div>
@@ -242,8 +242,8 @@ const MyProjects: React.FC = () => {
                 <li key={app.id} className="p-3 border rounded-md bg-gray-50 hover:shadow-md">
                   <p className="font-semibold text-primary">{app.freelancer_username} ({app.freelancer_email})</p>
                   <p className="text-sm text-gray-600 my-1">Bid: R {app.bidAmount?.toLocaleString() || 'N/A'}</p>
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap bg-white p-2 rounded border border-gray-200">Proposal: {app.proposalText}</p>
-                  <p className="text-xs text-gray-500 mt-1">Applied: {new Date(app.appliedAt).toLocaleDateString()}</p>
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap bg-white p-2 rounded border border-gray-200">Proposal: {app.proposal_text}</p>
+                  <p className="text-xs text-gray-500 mt-1">Applied: {new Date(app.applied_at).toLocaleDateString()}</p>
                   <p className="text-sm font-medium">Status: <span className={`px-2 py-0.5 rounded-full text-xs ${app.status === 'accepted' ? 'bg-green-100 text-green-700' : app.status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'}`}>{app.status}</span></p>
                   {app.status === 'pending' && (
                     <div className="mt-2 space-x-2">

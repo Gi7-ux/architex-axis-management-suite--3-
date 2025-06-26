@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react'; // Added useEffect
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 import GlobalTimerDisplay from './GlobalTimerDisplay'; // Import the GlobalTimerDisplay
 import Button from './Button';
 import { SHORT_APP_NAME, NAV_LINKS } from '../../constants';

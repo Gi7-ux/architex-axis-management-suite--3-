@@ -1,5 +1,5 @@
 import React, { useEffect } from 'react'; // Removed useState as form is simplified
-import { useAuth } from './AuthContext';
+import { useAuth } from '../contexts/AuthContext';
 // import { UserRole } from '../types'; // UserRole might be needed if displaying role-specific info not in AuthUser
 // import Button from './shared/Button'; // Button not needed for simplified view
 

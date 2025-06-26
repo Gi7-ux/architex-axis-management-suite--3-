@@ -2,8 +2,8 @@ import { test, expect } from '@playwright/test';
 
 test.describe('Authentication Flows', () => {
   test.beforeEach(async ({ page }) => {
-    await page.goto('/login');
-    await expect(page).toHaveURL('/login');
+    await page.goto('/#/login');
+    await expect(page).toHaveURL('/#/login');
     await page.waitForSelector('input[name="email"]');
   });
 
@@ -18,8 +18,8 @@ test.describe('Authentication Flows', () => {
     await page.getByRole('button', { name: /Sign In/i }).click();
 
     try {
-      await page.waitForURL('/dashboard/overview', { timeout: 5000 });
-      await expect(page).toHaveURL('/dashboard/overview');
+      await page.waitForURL('/#/dashboard/overview', { timeout: 5000 });
+      await expect(page).toHaveURL('/#/dashboard/overview');
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
     } catch (e) {
       const errorElement = page.locator('p.text-red-600');
@@ -45,13 +45,13 @@ test.describe('Authentication Flows', () => {
     await page.locator('input[name="email"]').fill(TEST_USER.email);
     await page.locator('input[name="password"]').fill(TEST_USER.password);
     await page.getByRole('button', { name: /Sign In/i }).click();
-    await page.waitForURL('/dashboard/overview');
+    await page.waitForURL('/#/dashboard/overview');
 
     // Find and click logout button/link
     await page.getByRole('button', { name: /logout/i }).click();
 
     // Verify redirect to login page
-    await expect(page).toHaveURL('/login');
+    await expect(page).toHaveURL('/#/login');
     // Verify login form is visible again
     await expect(page.locator('input[name="email"]')).toBeVisible();
   });

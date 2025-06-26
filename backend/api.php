@@ -7909,520 +7909,277 @@ elseif ($action === 'delete_time_log' && ($method === 'DELETE' || $method === 'P
 
 } // END NEW: Delete a Specific Time Log
 
-// --- START NEW ADVANCED MESSAGING API ENDPOINTS ---
-
-// Get all message threads for the authenticated user (can be direct or project-related)
-elseif ($action === 'get_user_message_threads' && $method === 'GET') {
+// NEW: Find or Create 1-on-1 Conversation
+elseif ($action === 'find_or_create_conversation' && $method === 'POST') {
     $authenticated_user = require_authentication($conn);
     $current_user_id = (int)$authenticated_user['id'];
-
-    // Fetch threads where the user is a participant
-    // Also fetch participants for each thread to display names, and last message snippet
-    $sql = "SELECT
-                t.id AS thread_id,
-                t.project_id,
-                p_project.title as project_title, -- Added project title
-                t.title AS thread_title,
-                t.type AS thread_type,
-                t.last_message_at,
-                t.created_at AS thread_created_at,
-                GROUP_CONCAT(DISTINCT CONCAT(u.id, ':', u.username, ':', IFNULL(u.avatar_url, '')) SEPARATOR ';') AS participants_data,
-                (SELECT m.content FROM messages m WHERE m.thread_id = t.id ORDER BY m.sent_at DESC LIMIT 1) AS last_message_content,
-                (SELECT m.sender_id FROM messages m WHERE m.thread_id = t.id ORDER BY m.sent_at DESC LIMIT 1) AS last_message_sender_id,
-                (SELECT u_sender.username FROM messages m_sender JOIN users u_sender ON m_sender.sender_id = u_sender.id WHERE m_sender.thread_id = t.id ORDER BY m_sender.sent_at DESC LIMIT 1) AS last_message_sender_username,
-                tp.unread_count,
-                tp.last_read_message_id
-            FROM message_threads t
-            JOIN thread_participants tp ON t.id = tp.thread_id
-            LEFT JOIN projects p_project ON t.project_id = p_project.id -- Left join for project title
-            LEFT JOIN thread_participants tp_all ON t.id = tp_all.thread_id -- To get all participants for the thread
-            LEFT JOIN users u ON tp_all.user_id = u.id
-            WHERE tp.user_id = ? AND t.is_active = 1
-            GROUP BY t.id, p_project.title -- Added project_title to GROUP BY
-            ORDER BY t.last_message_at DESC, t.created_at DESC";
-
-    $stmt = $conn->prepare($sql);
-    if (!$stmt) {
-        send_json_response(500, ['error' => 'Failed to prepare statement for getting user threads: ' . $conn->error]);
-    }
-    $stmt->bind_param("i", $current_user_id);
-    if (!$stmt->execute()) {
-        send_json_response(500, ['error' => 'Failed to execute statement for getting user threads: ' . $stmt->error]);
-    }
-
-    $result = $stmt->get_result();
-    $threads_list = [];
-    while ($row = $result->fetch_assoc()) {
-        $participants = [];
-        if ($row['participants_data']) {
-            $participants_raw = explode(';', $row['participants_data']);
-            foreach ($participants_raw as $p_raw) {
-                list($p_id, $p_username, $p_avatar) = explode(':', $p_raw, 3);
-                $participants[] = [
-                    'id' => (int)$p_id,
-                    'username' => $p_username,
-                    'avatar_url' => $p_avatar ?: null // Handle potentially empty avatar part
-                ];
-            }
-        }
-        $threads_list[] = [
-            'thread_id' => (int)$row['thread_id'],
-            'project_id' => $row['project_id'] ? (int)$row['project_id'] : null,
-            'project_title' => $row['project_title'], // Added project title
-            'title' => $row['thread_title'],
-            'type' => $row['thread_type'],
-            'last_message_at' => $row['last_message_at'],
-            'created_at' => $row['thread_created_at'],
-            'participants' => $participants,
-            'last_message_snippet' => $row['last_message_content'],
-            'last_message_sender_id' => $row['last_message_sender_id'] ? (int)$row['last_message_sender_id'] : null,
-            'last_message_sender_username' => $row['last_message_sender_username'],
-            'unread_count' => (int)$row['unread_count'],
-        ];
-    }
-    $stmt->close();
-    send_json_response(200, $threads_list);
-}
-
-// Get messages for a specific thread, respecting permissions
-elseif ($action === 'get_thread_messages' && $method === 'GET') {
-    $authenticated_user = require_authentication($conn);
-    $current_user_id = (int)$authenticated_user['id'];
-
-    $thread_id = isset($_GET['thread_id']) ? (int)$_GET['thread_id'] : null;
-    if (!$thread_id) {
-        send_json_response(400, ['error' => 'Thread ID is required.']);
-    }
-
-    // Authorize: Check if current user is a participant of this thread and get their visibility level
-    $stmt_auth = $conn->prepare("SELECT tp.visibility_level, tp.role_in_thread, mt.type as thread_actual_type
-                                 FROM thread_participants tp
-                                 JOIN message_threads mt ON tp.thread_id = mt.id
-                                 WHERE tp.thread_id = ? AND tp.user_id = ?");
-    if (!$stmt_auth) { send_json_response(500, ['error' => 'Auth prep failed: ' . $conn->error]); }
-    $stmt_auth->bind_param("ii", $thread_id, $current_user_id);
-    if (!$stmt_auth->execute()) { send_json_response(500, ['error' => 'Auth exec failed: ' . $stmt_auth->error]); }
-    $result_auth = $stmt_auth->get_result();
-    if ($result_auth->num_rows === 0) {
-        send_json_response(403, ['error' => 'Forbidden: You are not a participant in this thread.']);
-    }
-    $participant_info = $result_auth->fetch_assoc();
-    $visibility_level = $participant_info['visibility_level']; // 'all', 'non_sensitive_only', 'none'
-    $user_role_in_thread = $participant_info['role_in_thread']; // 'participant', 'admin_observer'
-    $thread_actual_type = $participant_info['thread_actual_type'];
-    $stmt_auth->close();
-
-    if ($visibility_level === 'none') {
-        send_json_response(200, []); // User has no visibility, return empty messages
-    }
-
-    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
-    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0;
-
-    $sql = "SELECT
-                m.id, m.thread_id, m.sender_id, m.content, m.sent_at,
-                m.attachment_url, m.attachment_type,
-                m.requires_approval, m.approval_status,
-                u.username AS sender_username, u.avatar_url AS sender_avatar_url, u.role as sender_role
-            FROM messages m
-            JOIN users u ON m.sender_id = u.id
-            WHERE m.thread_id = ? ";
-
-    // Visibility and Approval Logic
-    // An admin sees all messages in any thread they are part of, regardless of approval status.
-    // A sender always sees their own messages, even if pending approval.
-    // Others see messages based on approval status and their visibility_level.
-    if ($authenticated_user['role'] !== 'admin' && $current_user_id !== 'm.sender_id') { // This sender_id check needs to be dynamic
-         $sql .= " AND (m.sender_id = {$current_user_id} OR (m.requires_approval = 0) OR (m.requires_approval = 1 AND m.approval_status = 'approved')) ";
-        if ($visibility_level === 'non_sensitive_only') {
-            // This condition might be redundant if approval model covers sensitivity,
-            // or it could mean hiding even approved messages if they are flagged sensitive by other means.
-            // For now, 'non_sensitive_only' for a non-admin means they only see approved messages if they required approval.
-            // This is largely covered by the line above.
-        }
-    }
-
-
-    $sql .= " ORDER BY m.sent_at ASC LIMIT ? OFFSET ?";
-
-    $stmt = $conn->prepare($sql);
-    if (!$stmt) { send_json_response(500, ['error' => 'Msg fetch prep failed: ' . $conn->error]); }
-    $stmt->bind_param("iii", $thread_id, $limit, $offset);
-    if (!$stmt->execute()) { send_json_response(500, ['error' => 'Msg fetch exec failed: ' . $stmt->error]); }
-
-    $result = $stmt->get_result();
-    $messages = [];
-    while ($row = $result->fetch_assoc()) {
-        $can_view_message = false;
-        if ($authenticated_user['role'] === 'admin') {
-            $can_view_message = true;
-        } elseif ((int)$row['sender_id'] === $current_user_id) {
-            $can_view_message = true; // Sender always sees their message
-        } elseif (!(bool)$row['requires_approval'] || $row['approval_status'] === 'approved') {
-            // If message doesn't require approval, or it's approved, check visibility level
-            if ($visibility_level === 'all') {
-                $can_view_message = true;
-            } elseif ($visibility_level === 'non_sensitive_only') {
-                // This assumes that if a message required approval and was approved, it's considered non-sensitive enough
-                // for those with 'non_sensitive_only' visibility.
-                // A more granular system might have an explicit `is_sensitive` flag on messages.
-                $can_view_message = true;
-            }
-        }
-        // If message requires approval and is pending/rejected, non-admin non-sender won't see it.
-
-        if($can_view_message){
-            $messages[] = [
-                'id' => (int)$row['id'],
-                'thread_id' => (int)$row['thread_id'],
-                'sender_id' => (int)$row['sender_id'],
-                'sender_username' => $row['sender_username'],
-                'sender_avatar_url' => $row['sender_avatar_url'],
-                'content' => $row['content'],
-                'sent_at' => $row['sent_at'],
-                'attachment_url' => $row['attachment_url'],
-                'attachment_type' => $row['attachment_type'],
-                'requires_approval' => (bool)$row['requires_approval'],
-                'approval_status' => $row['approval_status'],
-            ];
-        }
-    }
-    $stmt->close();
-
-    if (!empty($messages)) {
-        $last_message_id_fetched = end($messages)['id'];
-        $update_read_stmt = $conn->prepare("UPDATE thread_participants SET last_read_message_id = ?, unread_count = 0 WHERE thread_id = ? AND user_id = ? AND (last_read_message_id < ? OR last_read_message_id IS NULL)");
-        if($update_read_stmt){
-            $update_read_stmt->bind_param("iiii", $last_message_id_fetched, $thread_id, $current_user_id, $last_message_id_fetched);
-            $update_read_stmt->execute();
-            $update_read_stmt->close();
-        } else {
-            error_log("Failed to prepare statement to update read status: " . $conn->error);
-        }
-    }
-    send_json_response(200, $messages);
-}
-
-// Send a message (handles various thread types and permissions)
-elseif ($action === 'send_project_message' && $method === 'POST') {
-    $authenticated_user = require_authentication($conn);
-    $sender_id = (int)$authenticated_user['id'];
-    $sender_role = $authenticated_user['role']; // 'admin', 'client', 'freelancer'
 
     $data = json_decode(file_get_contents('php://input'), true);
-    $thread_id = isset($data['thread_id']) ? (int)$data['thread_id'] : null;
-    $project_id = isset($data['project_id']) ? (int)$data['project_id'] : null;
+    $recipient_user_id = isset($data['recipient_user_id']) ? (int)$data['recipient_user_id'] : null;
+
+    if (!$recipient_user_id) {
+        send_json_response(400, ['error' => 'Recipient user ID is required.']);
+    }
+
+    if ($recipient_user_id === $current_user_id) {
+        send_json_response(400, ['error' => 'Cannot create a conversation with yourself.']);
+    }
+
+    // Check if recipient user exists
+    $stmt_user_check = $conn->prepare("SELECT id FROM users WHERE id = ?");
+    if (!$stmt_user_check) { send_json_response(500, ['error' => 'Server error preparing recipient check.']); }
+    $stmt_user_check->bind_param("i", $recipient_user_id);
+    if (!$stmt_user_check->execute()) { send_json_response(500, ['error' => 'Server error executing recipient check.']); }
+    if ($stmt_user_check->get_result()->num_rows === 0) {
+        send_json_response(404, ['error' => 'Recipient user not found.']);
+    }
+    $stmt_user_check->close();
+
+    // Check for existing 1-on-1 conversation
+    // This query finds conversations involving BOTH users, and only those two users.
+    $sql_find_convo = "SELECT cp1.conversation_id
+                       FROM conversation_participants cp1
+                       JOIN conversation_participants cp2 ON cp1.conversation_id = cp2.conversation_id
+                       WHERE cp1.user_id = ? AND cp2.user_id = ?
+                       AND (SELECT COUNT(*) FROM conversation_participants cp_count WHERE cp_count.conversation_id = cp1.conversation_id) = 2";
+
+    $stmt_find = $conn->prepare($sql_find_convo);
+    if (!$stmt_find) { send_json_response(500, ['error' => 'Server error preparing conversation search. ' . $conn->error]); }
+    // Bind params carefully for the two user IDs
+    $stmt_find->bind_param("ii", $current_user_id, $recipient_user_id);
+
+
+    if (!$stmt_find->execute()) { send_json_response(500, ['error' => 'Server error executing conversation search. ' . $stmt_find->error]); }
+    $result_find = $stmt_find->get_result();
+
+    if ($existing_convo = $result_find->fetch_assoc()) {
+        $stmt_find->close();
+        send_json_response(200, ['conversation_id' => (int)$existing_convo['conversation_id'], 'existed' => true]);
+    } else {
+        $stmt_find->close();
+        // No existing 1-on-1 conversation found, create a new one
+        $conn->begin_transaction();
+        try {
+            // 1. Create conversation
+            // last_message_at can be set to NOW() or remain NULL initially
+            $stmt_create_convo = $conn->prepare("INSERT INTO conversations (last_message_at) VALUES (NOW())");
+            if (!$stmt_create_convo) { throw new Exception('Failed to prepare conversation creation. ' . $conn->error); }
+            if (!$stmt_create_convo->execute()) { throw new Exception('Failed to execute conversation creation. ' . $stmt_create_convo->error); }
+            $new_conversation_id = $conn->insert_id;
+            $stmt_create_convo->close();
+
+            if (!$new_conversation_id) { throw new Exception('Failed to get new conversation ID.'); }
+
+            // 2. Add participants
+            $stmt_add_participant = $conn->prepare("INSERT INTO conversation_participants (conversation_id, user_id) VALUES (?, ?)");
+            if (!$stmt_add_participant) { throw new Exception('Failed to prepare participant insertion. ' . $conn->error); }
+
+            // Add current user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $current_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add current user to conversation. ' . $stmt_add_participant->error); }
+
+            // Add recipient user
+            $stmt_add_participant->bind_param("ii", $new_conversation_id, $recipient_user_id);
+            if (!$stmt_add_participant->execute()) { throw new Exception('Failed to add recipient user to conversation. ' . $stmt_add_participant->error); }
+            $stmt_add_participant->close();
+
+            $conn->commit();
+            send_json_response(201, ['conversation_id' => $new_conversation_id, 'existed' => false]);
+
+        } catch (Exception $e) {
+            $conn->rollback();
+            send_json_response(500, ['error' => 'Failed to create conversation: ' . $e->getMessage()]);
+        }
+    }
+} // END NEW: Find or Create 1-on-1 Conversation
+
+// NEW: Get Messages for a Conversation
+elseif ($action === 'get_conversation_messages' && $method === 'GET') {
+    $authenticated_user = require_authentication($conn);
+    $current_user_id = (int)$authenticated_user['id'];
+
+    $conversation_id = isset($_GET['conversation_id']) ? (int)$_GET['conversation_id'] : null;
+    if (!$conversation_id) {
+        send_json_response(400, ['error' => 'Conversation ID is required.']);
+    }
+
+    // Authorize: Check if current user is part of this conversation
+    $stmt_auth_convo = $conn->prepare(
+        "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+         FROM conversations c
+         LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+         WHERE c.id = ?"
+    );
+    if (!$stmt_auth_convo) { send_json_response(500, ['error' => 'Server error preparing conversation participation check.']); }
+    $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+    if (!$stmt_auth_convo->execute()) { send_json_response(500, ['error' => 'Server error executing conversation participation check.']); }
+    $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+    $stmt_auth_convo->close();
+
+    if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+        send_json_response(404, ['error' => 'Conversation not found.']);
+    }
+    if (!$result_auth_convo['participant_exists']) {
+        send_json_response(403, ['error' => 'Forbidden: You are not a participant in this conversation.']);
+    }
+
+    // Pagination parameters
+    $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
+    $before_message_id = isset($_GET['before_message_id']) ? (int)$_GET['before_message_id'] : null;
+    $offset = isset($_GET['offset']) ? (int)$_GET['offset'] : 0; // Alternative: offset based pagination
+
+    $sql_messages = "SELECT
+                        m.id AS message_id, m.conversation_id, m.sender_id, m.content,
+                        m.created_at, m.read_at,
+                        u.username AS sender_username
+                     FROM messages m
+                     JOIN users u ON m.sender_id = u.id
+                     WHERE m.conversation_id = ?";
+
+    $params = [$conversation_id];
+    $types = "i";
+
+    if ($before_message_id) {
+        // Assumes IDs are auto-incrementing and somewhat time-ordered for this simple pagination
+        // A more robust cursor pagination would use created_at + id
+        $sql_messages .= " AND m.id < ?";
+        $params[] = $before_message_id;
+        $types .= "i";
+    }
+
+    $sql_messages .= " ORDER BY m.created_at DESC, m.id DESC"; // Get newest first
+    $sql_messages .= " LIMIT ?";
+    $params[] = $limit;
+    $types .= "i";
+
+    // If using offset pagination instead of cursor (before_message_id):
+    // $sql_messages .= " LIMIT ? OFFSET ?";
+    // $params[] = $limit; $params[] = $offset; $types .= "ii";
+
+
+    $stmt_messages = $conn->prepare($sql_messages);
+    if (!$stmt_messages) {
+        send_json_response(500, ['error' => 'Server error preparing message fetch: ' . $conn->error]);
+    }
+    $stmt_messages->bind_param($types, ...$params);
+
+    if (!$stmt_messages->execute()) {
+        send_json_response(500, ['error' => 'Server error executing message fetch: ' . $stmt_messages->error]);
+    }
+    $result_messages = $stmt_messages->get_result();
+
+    $messages_list = [];
+    while ($row = $result_messages->fetch_assoc()) {
+        $messages_list[] = [
+            'id' => (int)$row['message_id'], // message_id aliased as id for frontend typically
+            'conversation_id' => (int)$row['conversation_id'],
+            'sender_id' => (int)$row['sender_id'],
+            'sender_username' => $row['sender_username'],
+            'content' => $row['content'],
+            'created_at' => $row['created_at'], // ISO8601 format from DB
+            'read_at' => $row['read_at'] // ISO8601 format from DB or null
+        ];
+    }
+    $stmt_messages->close();
+
+    // Messages are fetched newest first, client might want to reverse for display
+    send_json_response(200, array_reverse($messages_list)); // Reverse to get oldest of the batch first for typical chat UI
+
+} // END NEW: Get Messages for a Conversation
+
+// NEW: Send Message to a Conversation
+elseif ($action === 'send_message' && $method === 'POST') {
+    $authenticated_user = require_authentication($conn);
+    $sender_id = (int)$authenticated_user['id'];
+    $sender_username = $authenticated_user['username']; // For response
+
+    $data = json_decode(file_get_contents('php://input'), true);
+    $conversation_id = isset($data['conversation_id']) ? (int)$data['conversation_id'] : null;
     $content = $data['content'] ?? null;
-    $target_user_ids = isset($data['target_user_ids']) && is_array($data['target_user_ids']) ? array_map('intval', $data['target_user_ids']) : []; // For creating new direct/group threads
-    $thread_type_hint = $data['thread_type_hint'] ?? null; // e.g., 'project_admin_client', 'project_admin_freelancer', 'direct'
-    $admin_client_message_freelancer_visibility = isset($data['admin_client_message_freelancer_visibility']) ? $data['admin_client_message_freelancer_visibility'] : 'all'; // 'all', 'non_sensitive_only', 'none'
 
-
-    if (empty($content)) {
-        send_json_response(400, ['error' => 'Message content is required.']);
-    }
-    if (!$thread_id && !$project_id && empty($target_user_ids)) {
-        send_json_response(400, ['error' => 'Thread ID, Project ID, or Target User IDs must be provided.']);
+    if (!$conversation_id || $content === null || trim($content) === '') { // Content can be "0", so check for null or empty string explicitly
+        send_json_response(400, ['error' => 'Conversation ID and message content are required.']);
     }
 
+    $content = trim($content); // Trim content before length check and storage
+    if (mb_strlen($content) > 10000) { // Basic content length validation (e.g. 10k chars)
+        send_json_response(400, ['error' => 'Message content is too long.']);
+    }
+
+    // Start transaction
     $conn->begin_transaction();
+
     try {
-        if (!$thread_id) {
-            // Create a new thread
-            if ($project_id && $thread_type_hint) {
-                // Creating a project-specific thread
-                // Determine participants based on project roles and thread_type_hint
-                $stmt_proj_details = $conn->prepare("SELECT client_id, freelancer_id FROM projects WHERE id = ?");
-                if(!$stmt_proj_details) throw new Exception("DB error: project details prep. ".$conn->error);
-                $stmt_proj_details->bind_param("i", $project_id);
-                $stmt_proj_details->execute();
-                $proj_res = $stmt_proj_details->get_result();
-                if($proj_res->num_rows === 0) throw new Exception("Project not found for new thread.", 404);
-                $project_data = $proj_res->fetch_assoc();
-                $stmt_proj_details->close();
-
-                $project_client_id = (int)$project_data['client_id'];
-                $project_freelancer_id = $project_data['freelancer_id'] ? (int)$project_data['freelancer_id'] : null;
-
-                $thread_participants_to_add = [];
-                $thread_title_parts = [];
-
-                if ($thread_type_hint === 'project_admin_client') {
-                    if ($sender_id !== $project_client_id && $sender_role !== 'admin') throw new Exception("Forbidden to create admin-client thread.", 403);
-                    $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
-                    if ($sender_id !== $project_client_id) $thread_participants_to_add[$project_client_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
-                    // Admin is always a participant or observer
-                     if (!isset($thread_participants_to_add[$sender_id]) && $sender_role === 'admin') $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
-
-                    // Add freelancer as observer if project has one and admin chooses visibility
-                    if($project_freelancer_id && $admin_client_message_freelancer_visibility !== 'none'){
-                         $thread_participants_to_add[$project_freelancer_id] = ['role_in_thread' => 'admin_observer', 'visibility_level' => $admin_client_message_freelancer_visibility, 'can_message_directly' => false];
-                    }
-                    $thread_title_parts[] = "Project Client";
-
-                } elseif ($thread_type_hint === 'project_admin_freelancer') {
-                     if (!$project_freelancer_id) throw new Exception("Project has no assigned freelancer for this thread type.", 400);
-                     if ($sender_id !== $project_freelancer_id && $sender_role !== 'admin') throw new Exception("Forbidden to create admin-freelancer thread.", 403);
-                     $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
-                     if ($sender_id !== $project_freelancer_id) $thread_participants_to_add[$project_freelancer_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
-                     if (!isset($thread_participants_to_add[$sender_id]) && $sender_role === 'admin') $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
-                     $thread_title_parts[] = "Project Freelancer";
-
-                } elseif ($thread_type_hint === 'project_freelancer_client') {
-                    if (!$project_freelancer_id) throw new Exception("Project has no assigned freelancer for this thread type.", 400);
-                    if (($sender_id !== $project_client_id) && ($sender_id !== $project_freelancer_id)) throw new Exception("Forbidden to create freelancer-client thread.", 403);
-                    $thread_participants_to_add[$project_client_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
-                    $thread_participants_to_add[$project_freelancer_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true];
-                    // Admin as observer
-                    // Find an admin to add as observer - for simplicity, can be the sender if admin, or first active admin.
-                    // This part needs careful selection of which admin if multiple.
-                    $thread_participants_to_add[$sender_id] = ['role_in_thread' => 'participant', 'visibility_level' => 'all', 'can_message_directly' => true]; // ensure sender is there
-                    // Add an admin as observer. For now, if sender is not admin, pick first active admin.
-                    if($sender_role !== 'admin'){
-                        $admin_observer_stmt = $conn->prepare("SELECT id FROM users WHERE role='admin' AND is_active=1 LIMIT 1");
-                        $admin_observer_stmt->execute();
-                        $admin_obs_res = $admin_observer_stmt->get_result();
-                        if($admin_obs_data = $admin_obs_res->fetch_assoc()){
-                            $thread_participants_to_add[(int)$admin_obs_data['id']] = ['role_in_thread' => 'admin_observer', 'visibility_level' => 'all', 'can_message_directly' => false];
-                        }
-                        $admin_observer_stmt->close();
-                    }
-                     $thread_title_parts[] = "Freelancer/Client";
-                } else {
-                    throw new Exception("Invalid project thread type hint.", 400);
-                }
-
-                $final_thread_title = "Project {$project_id}: " . implode(" & ", $thread_title_parts);
-                $stmt_create_thread = $conn->prepare("INSERT INTO message_threads (project_id, title, type, created_by_id, last_message_at) VALUES (?, ?, ?, ?, NOW())");
-                if(!$stmt_create_thread) throw new Exception("DB error: create thread prep. ".$conn->error);
-                $stmt_create_thread->bind_param("issi", $project_id, $final_thread_title, $thread_type_hint, $sender_id);
-                if(!$stmt_create_thread->execute()) throw new Exception("DB error: create thread exec. ".$stmt_create_thread->error);
-                $thread_id = $conn->insert_id;
-                $stmt_create_thread->close();
-
-                $stmt_add_p = $conn->prepare("INSERT INTO thread_participants (thread_id, user_id, role_in_thread, visibility_level, can_message_directly) VALUES (?, ?, ?, ?, ?) ON DUPLICATE KEY UPDATE role_in_thread=VALUES(role_in_thread), visibility_level=VALUES(visibility_level), can_message_directly=VALUES(can_message_directly)");
-                if(!$stmt_add_p) throw new Exception("DB error: add participant prep. ".$conn->error);
-                foreach($thread_participants_to_add as $user_id_to_add => $p_data){
-                    $stmt_add_p->bind_param("iisss", $thread_id, $user_id_to_add, $p_data['role_in_thread'], $p_data['visibility_level'], $p_data['can_message_directly']);
-                    if(!$stmt_add_p->execute())  throw new Exception("DB error: add participant exec for user $user_id_to_add. ".$stmt_add_p->error);
-                }
-                $stmt_add_p->close();
-
-            } elseif (!empty($target_user_ids) && $thread_type_hint === 'direct') {
-                // Creating a direct message (1-on-1 or small group)
-                if (count($target_user_ids) === 1 && $target_user_ids[0] === $sender_id) throw new Exception("Cannot create a direct message thread with only yourself.", 400);
-                $all_participants_for_dm = array_unique(array_merge($target_user_ids, [$sender_id]));
-                sort($all_participants_for_dm); // Sort to create a consistent title/identifier if needed
-
-                // Check if a similar DM thread already exists (same participants, type 'direct')
-                 $sql_find_dm = "SELECT t.id
-                                FROM message_threads t
-                                WHERE t.type = 'direct' AND
-                                      (SELECT COUNT(DISTINCT tp.user_id) FROM thread_participants tp WHERE tp.thread_id = t.id) = ? AND
-                                      NOT EXISTS (
-                                        SELECT u_id FROM (SELECT ? AS u_id ".str_repeat("UNION ALL SELECT ?", count($all_participants_for_dm)-1).") AS expected_users
-                                        WHERE u_id NOT IN (SELECT tp_check.user_id FROM thread_participants tp_check WHERE tp_check.thread_id = t.id)
-                                      ) AND
-                                       NOT EXISTS (
-                                        SELECT tp_check.user_id FROM thread_participants tp_check WHERE tp_check.thread_id = t.id
-                                        AND tp_check.user_id NOT IN (".implode(',', array_fill(0, count($all_participants_for_dm), '?')).")
-                                      )
-                                LIMIT 1";
-
-                $find_params = array_merge([count($all_participants_for_dm)], $all_participants_for_dm, $all_participants_for_dm);
-                $find_types = "i" . str_repeat('i', count($all_participants_for_dm) * 2);
-
-                $stmt_find_dm_thread = $conn->prepare($sql_find_dm);
-                 if (!$stmt_find_dm_thread) throw new Exception("DB error: find DM prep. " . $conn->error);
-                $stmt_find_dm_thread->bind_param($find_types, ...$find_params);
-                $stmt_find_dm_thread->execute();
-                $res_find_dm = $stmt_find_dm_thread->get_result();
-                if($existing_dm = $res_find_dm->fetch_assoc()){
-                    $thread_id = (int)$existing_dm['id'];
-                } else {
-                    // Create new direct thread
-                    $dm_title_users = []; // Fetch usernames for title
-                    $stmt_get_usernames = $conn->prepare("SELECT username FROM users WHERE id = ?");
-                    foreach($all_participants_for_dm as $uid) {
-                        $stmt_get_usernames->bind_param("i", $uid); $stmt_get_usernames->execute();
-                        $dm_title_users[] = $stmt_get_usernames->get_result()->fetch_assoc()['username'];
-                    }
-                    $stmt_get_usernames->close();
-                    $dm_thread_title = implode(', ', $dm_title_users);
-
-                    $stmt_create_thread = $conn->prepare("INSERT INTO message_threads (title, type, created_by_id, last_message_at) VALUES (?, 'direct', ?, NOW())");
-                    if(!$stmt_create_thread) throw new Exception("DB error: create DM thread prep. ".$conn->error);
-                    $stmt_create_thread->bind_param("si", $dm_thread_title, $sender_id);
-                    if(!$stmt_create_thread->execute()) throw new Exception("DB error: create DM thread exec. ".$stmt_create_thread->error);
-                    $thread_id = $conn->insert_id;
-                    $stmt_create_thread->close();
-
-                    $stmt_add_p = $conn->prepare("INSERT INTO thread_participants (thread_id, user_id, role_in_thread, visibility_level, can_message_directly) VALUES (?, ?, 'participant', 'all', 1)");
-                    if(!$stmt_add_p) throw new Exception("DB error: add DM participant prep. ".$conn->error);
-                    foreach($all_participants_for_dm as $user_id_to_add){
-                        $stmt_add_p->bind_param("ii", $thread_id, $user_id_to_add);
-                        if(!$stmt_add_p->execute())  throw new Exception("DB error: add DM participant exec for $user_id_to_add. ".$stmt_add_p->error);
-                    }
-                    $stmt_add_p->close();
-                }
-                $stmt_find_dm_thread->close();
-            } else {
-                 throw new Exception("Insufficient data to determine or create a thread.");
-            }
-        }
-
-        // Authorization: Check if sender is a participant of the thread and can send messages
-        $stmt_auth_participant = $conn->prepare("SELECT tp.can_message_directly, mt.type as current_thread_type, mt.project_id as current_project_id
-                                                 FROM thread_participants tp
-                                                 JOIN message_threads mt ON tp.thread_id = mt.id
-                                                 WHERE tp.thread_id = ? AND tp.user_id = ?");
-        if (!$stmt_auth_participant) throw new Exception("Auth participant prep failed: " . $conn->error);
-        $stmt_auth_participant->bind_param("ii", $thread_id, $sender_id);
-        if (!$stmt_auth_participant->execute()) throw new Exception("Auth participant exec failed: " . $stmt_auth_participant->error);
-        $result_auth_participant = $stmt_auth_participant->get_result();
-        if ($result_auth_participant->num_rows === 0) {
-            throw new Exception("Forbidden: You are not a participant in this thread or thread does not exist.", 403);
-        }
-        $participant_details = $result_auth_participant->fetch_assoc();
-        if (!$participant_details['can_message_directly']) {
-            throw new Exception("Forbidden: You do not have permission to send messages in this thread.", 403);
-        }
-        $current_thread_type = $participant_details['current_thread_type'];
-        // $current_project_id = $participant_details['current_project_id']; // Already have $project_id if creating new
-        $stmt_auth_participant->close();
-
-        $requires_approval = false;
-        $approval_status = null; // Default for messages not requiring approval
-
-        if ($sender_role === 'freelancer' && $current_thread_type === 'project_freelancer_client') {
-            $requires_approval = true;
-            $approval_status = 'pending';
-        }
-
-        $current_timestamp_mysql = date('Y-m-d H:i:s');
-        $stmt_insert_message = $conn->prepare(
-            "INSERT INTO messages (thread_id, sender_id, content, sent_at, requires_approval, approval_status)
-             VALUES (?, ?, ?, ?, ?, ?)"
+        // 1. Authorization: Check if current user is part of this conversation AND conversation exists
+        $stmt_auth_convo = $conn->prepare(
+            "SELECT c.id AS conversation_exists, cp.user_id AS participant_exists
+             FROM conversations c
+             LEFT JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = ?
+             WHERE c.id = ?"
         );
-        if (!$stmt_insert_message) throw new Exception("Msg insert prep failed: " . $conn->error);
-        $stmt_insert_message->bind_param("iissis", $thread_id, $sender_id, $content, $current_timestamp_mysql, $requires_approval, $approval_status);
-        if (!$stmt_insert_message->execute()) throw new Exception("Msg insert exec failed: " . $stmt_insert_message->error . " Thread: $thread_id, Sender: $sender_id");
+        if (!$stmt_auth_convo) { throw new Exception('Server error preparing conversation participation check. ' . $conn->error); }
+        $stmt_auth_convo->bind_param("ii", $sender_id, $conversation_id);
+        if (!$stmt_auth_convo->execute()) { throw new Exception('Server error executing conversation participation check. ' . $stmt_auth_convo->error); }
+        $result_auth_convo = $stmt_auth_convo->get_result()->fetch_assoc();
+        $stmt_auth_convo->close();
+
+        if (!$result_auth_convo || !$result_auth_convo['conversation_exists']) {
+            throw new Exception('Conversation not found.', 404);
+        }
+        if (!$result_auth_convo['participant_exists']) {
+            throw new Exception('Forbidden: You are not a participant in this conversation.', 403);
+        }
+
+        // 2. Insert the new message
+        $current_timestamp_mysql = date('Y-m-d H:i:s'); // For consistent timestamp
+        $stmt_insert_message = $conn->prepare(
+            "INSERT INTO messages (conversation_id, sender_id, content, created_at)
+             VALUES (?, ?, ?, ?)"
+        );
+        if (!$stmt_insert_message) { throw new Exception('Server error preparing message insertion. ' . $conn->error); }
+        $stmt_insert_message->bind_param("iiss", $conversation_id, $sender_id, $content, $current_timestamp_mysql);
+        if (!$stmt_insert_message->execute()) { throw new Exception('Server error executing message insertion. ' . $stmt_insert_message->error); }
         $new_message_id = $conn->insert_id;
         $stmt_insert_message->close();
 
-        $stmt_update_thread = $conn->prepare("UPDATE message_threads SET last_message_at = ? WHERE id = ?");
-        if (!$stmt_update_thread) throw new Exception("Thread update prep failed: " . $conn->error);
-        $stmt_update_thread->bind_param("si", $current_timestamp_mysql, $thread_id);
-        $stmt_update_thread->execute();
-        $stmt_update_thread->close();
-
-        $stmt_update_unread = $conn->prepare("UPDATE thread_participants SET unread_count = unread_count + 1 WHERE thread_id = ? AND user_id != ?");
-        if ($stmt_update_unread) {
-            $stmt_update_unread->bind_param("ii", $thread_id, $sender_id);
-            $stmt_update_unread->execute();
-            $stmt_update_unread->close();
-        } else { error_log("Unread update prep failed: " . $conn->error); }
-
-        // Handle admin sending to client and freelancer visibility adjustment
-        if ($sender_role === 'admin' && $current_thread_type === 'project_admin_client' && $project_id) {
-            $stmt_get_proj_freelancer = $conn->prepare("SELECT freelancer_id FROM projects WHERE id = ?");
-            if($stmt_get_proj_freelancer){
-                $stmt_get_proj_freelancer->bind_param("i", $project_id); // Use $project_id from input or fetched if thread existed
-                $stmt_get_proj_freelancer->execute();
-                $res_proj_freelancer = $stmt_get_proj_freelancer->get_result();
-                if($proj_f_data = $res_proj_freelancer->fetch_assoc()){
-                    $project_freelancer_id_for_visibility = $proj_f_data['freelancer_id'] ? (int)$proj_f_data['freelancer_id'] : null;
-                    if($project_freelancer_id_for_visibility){
-                        $stmt_update_f_visibility = $conn->prepare("UPDATE thread_participants SET visibility_level = ? WHERE thread_id = ? AND user_id = ? AND role_in_thread = 'admin_observer'");
-                        if($stmt_update_f_visibility){
-                            $stmt_update_f_visibility->bind_param("sii", $admin_client_message_freelancer_visibility, $thread_id, $project_freelancer_id_for_visibility);
-                            $stmt_update_f_visibility->execute();
-                            $stmt_update_f_visibility->close();
-                        } else { error_log("Update freelancer visibility prep failed: ".$conn->error); }
-                    }
-                }
-                $stmt_get_proj_freelancer->close();
-            } else { error_log("Get project freelancer prep failed: ".$conn->error); }
+        if (!$new_message_id) {
+            throw new Exception('Failed to create message or get new message ID.');
         }
 
+        // 3. Update last_message_at in conversations table
+        $stmt_update_convo = $conn->prepare("UPDATE conversations SET last_message_at = ? WHERE id = ?");
+        if (!$stmt_update_convo) { throw new Exception('Server error preparing conversation update. ' . $conn->error); }
+        $stmt_update_convo->bind_param("si", $current_timestamp_mysql, $conversation_id);
+        if (!$stmt_update_convo->execute()) { throw new Exception('Server error executing conversation update. ' . $stmt_update_convo->error); }
+        $stmt_update_convo->close();
+
+        // Commit transaction
         $conn->commit();
-        send_json_response(201, [
-            'message' => 'Message sent successfully.', 'message_id' => $new_message_id, 'thread_id' => $thread_id,
-            'requires_approval' => $requires_approval, 'approval_status' => $approval_status
-        ]);
+
+        // Prepare and send response
+        $new_message_data = [
+            'id' => $new_message_id,
+            'conversation_id' => $conversation_id,
+            'sender_id' => $sender_id,
+            'sender_username' => $sender_username, // Added for immediate use by frontend
+            'content' => $content,
+            'created_at' => $current_timestamp_mysql,
+            'read_at' => null // New messages are unread by default for others
+        ];
+        send_json_response(201, $new_message_data);
 
     } catch (Exception $e) {
         $conn->rollback();
-        $error_code = $e->getCode() === 403 || $e->getCode() === 404 || $e->getCode() === 400 ? $e->getCode() : 500;
-        send_json_response($error_code, ['error' => "Send message failed: " . $e->getMessage()]);
-    }
-}
-
-
-// Admin approves or rejects a message
-elseif ($action === 'moderate_project_message' && $method === 'POST') {
-    $authenticated_user = require_authentication($conn);
-    if ($authenticated_user['role'] !== 'admin') {
-        send_json_response(403, ['error' => 'Forbidden: Only admins can moderate messages.']);
-    }
-    $admin_id = (int)$authenticated_user['id'];
-
-    $data = json_decode(file_get_contents('php://input'), true);
-    $message_id = isset($data['message_id']) ? (int)$data['message_id'] : null;
-    $new_approval_status = $data['approval_status'] ?? null; // 'approved' or 'rejected'
-
-    if (!$message_id || !in_array($new_approval_status, ['approved', 'rejected'])) {
-        send_json_response(400, ['error' => 'Message ID and valid approval status (approved/rejected) are required.']);
-    }
-
-    $stmt_check_msg = $conn->prepare("SELECT requires_approval, approval_status, thread_id, sender_id FROM messages WHERE id = ?");
-    if(!$stmt_check_msg) { send_json_response(500, ['error' => 'DB error checking message: ' . $conn->error]); }
-    $stmt_check_msg->bind_param("i", $message_id);
-    $stmt_check_msg->execute();
-    $result_msg_check = $stmt_check_msg->get_result();
-    if($result_msg_check->num_rows === 0) {
-        send_json_response(404, ['error' => 'Message not found.']);
-    }
-    $msg_data = $result_msg_check->fetch_assoc();
-    $message_thread_id = (int)$msg_data['thread_id'];
-    // $message_sender_id = (int)$msg_data['sender_id'];
-
-    if(!$msg_data['requires_approval']) {
-        send_json_response(400, ['error' => 'This message does not require approval.']);
-    }
-    $stmt_check_msg->close();
-
-    $stmt_update = $conn->prepare("UPDATE messages SET approval_status = ?, approved_by_id = ?, approved_at = NOW() WHERE id = ? AND requires_approval = 1");
-    if (!$stmt_update) {
-        send_json_response(500, ['error' => 'Failed to prepare message moderation statement: ' . $conn->error]);
-    }
-    $stmt_update->bind_param("sii", $new_approval_status, $admin_id, $message_id);
-
-    if ($stmt_update->execute()) {
-        if ($stmt_update->affected_rows > 0) {
-            if ($new_approval_status === 'approved') {
-                // If approved, increment unread count for participants of this thread (except sender and admin who just approved)
-                // This requires knowing the thread_id and who the participants are.
-                $stmt_notify_participants = $conn->prepare("UPDATE thread_participants SET unread_count = unread_count + 1 WHERE thread_id = ? AND user_id != ? AND user_id != ?");
-                if($stmt_notify_participants){
-                    $stmt_notify_participants->bind_param("iii", $message_thread_id, $msg_data['sender_id'], $admin_id);
-                    $stmt_notify_participants->execute();
-                    $stmt_notify_participants->close();
-                } else {
-                    error_log("Failed to prepare unread increment on approval: " . $conn->error);
-                }
-            }
-            send_json_response(200, ['message' => "Message {$new_approval_status} successfully."]);
+        $error_code = $e->getCode() >= 400 && $e->getCode() < 500 ? $e->getCode() : 500; // Use specific client error codes if set
+        if ($error_code === 403) {
+            send_json_response(403, ['error' => $e->getMessage()]);
+        } elseif ($error_code === 404) {
+            send_json_response(404, ['error' => $e->getMessage()]);
         } else {
-            send_json_response(400, ['message' => 'Message not updated. It might not require approval, not found, or status already set.']);
+            send_json_response($error_code, ['error' => 'Failed to send message: ' . $e->getMessage()]);
         }
-    } else {
-        send_json_response(500, ['error' => 'Failed to moderate message: ' . $stmt_update->error]);
     }
-    $stmt_update->close();
-}
-
-// --- END NEW ADVANCED MESSAGING API ENDPOINTS ---
+} // END NEW: Send Message to a Conversation
 
 // --- Projects API ---
 // MODIFIED: get_projects to handle single project fetch and join user tables

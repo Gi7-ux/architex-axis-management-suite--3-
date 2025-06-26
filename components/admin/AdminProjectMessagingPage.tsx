@@ -1,25 +1,25 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAuth } from '../AuthContext'; // Adjusted path
-import { getProjectsAPI, Project } from '../../apiService'; // Adjusted path
-import LoadingSpinner from '../shared/LoadingSpinner'; // Adjusted path
-import Button from '../shared/Button'; // Adjusted path
-import { ChatBubbleLeftRightIcon, ChevronDownIcon, ChevronUpIcon, PaperAirplaneIcon, HandThumbUpIcon, HandThumbDownIcon, EyeIcon, EyeSlashIcon } from '../shared/IconComponents'; // Adjusted path
-
+import { useAuth } from '../../contexts/AuthContext';
 import {
-    Project,
-    MessageThread as ApiMessageThread, // Rename to avoid conflict with local interface if any
-    ThreadMessage as ApiThreadMessage, // Rename
-    fetchUserMessageThreadsAPI, // Will be used to find existing threads for a project
+    ProjectPHPResponse as Project,
+    MessageThread as ApiMessageThread,
+    ThreadMessage as ApiThreadMessage,
+    fetchUserMessageThreadsAPI,
     fetchThreadMessagesAPI,
     sendThreadMessageAPI,
     SendThreadMessagePayload,
     moderateMessageAPI,
     ModerateMessagePayload,
-    getProjectsAPI, // Already imported
-} from '../../apiService'; // Adjusted path
-import LoadingSpinner from '../shared/LoadingSpinner'; // Adjusted path
-import Button from '../shared/Button'; // Adjusted path
-import { ChatBubbleLeftRightIcon, PaperAirplaneIcon, HandThumbUpIcon, HandThumbDownIcon, UsersIcon, BuildingStorefrontIcon, UserGroupIcon } from '../shared/IconComponents'; // Adjusted path
+    fetchProjectsAPI,
+} from '../../apiService';
+import LoadingSpinner from '../shared/LoadingSpinner';
+import Button from '../shared/Button';
+import { 
+    ChatBubbleLeftRightIcon, 
+    PaperAirplaneIcon, 
+    CheckCircleIcon,
+    TrashIcon
+} from '../shared/IconComponents';
 
 // Use ApiMessageThread and ApiThreadMessage directly or create local versions if transformation is needed
 type LocalMessageThread = ApiMessageThread; // Alias for clarity
@@ -49,7 +49,7 @@ const AdminProjectMessagingPage: React.FC = () => {
     setIsLoadingProjects(true);
     setError(null);
     try {
-      const fetchedProjects = await getProjectsAPI({ status: 'all' }); // Fetch all projects for admin
+      const fetchedProjects = await fetchProjectsAPI({ status: 'all' }); // Fetch all projects for admin
       setProjects(fetchedProjects);
     } catch (err: any) {
       setError(err.message || 'Failed to fetch projects.');
@@ -83,8 +83,7 @@ const AdminProjectMessagingPage: React.FC = () => {
       // For now, we simulate finding/initializing them.
       const allUserThreads = await fetchUserMessageThreadsAPI();
 
-      const cafThread = allUserThreads.find(t => t.project_id === projectId && t.type === 'project_client_admin_freelancer');
-      setClientAdminFreelancerThread(cafThread || null); // Or a placeholder to initiate creation
+      setClientAdminFreelancerThread(null); // This thread type doesn't exist in the API
 
       const acThread = allUserThreads.find(t => t.project_id === projectId && t.type === 'project_admin_client');
       setAdminClientThread(acThread || null);
@@ -208,7 +207,7 @@ const AdminProjectMessagingPage: React.FC = () => {
     } catch (err: any) {
       setError(err.message || "Failed to reject message.");
       console.error("Reject message error:", err);
-    }));
+    }
   };
 
   const renderChatInterface = (
@@ -255,7 +254,7 @@ const AdminProjectMessagingPage: React.FC = () => {
           {selectedProject && thread.project_id && (
             <Button
               variant="outline"
-              size="xs"
+              size="sm"
               onClick={() => window.open(`/#/dashboard/projects/${selectedProject.id}/files`, '_blank')} // Assuming a conventional path
               title="Open project files in new tab"
             >
@@ -277,8 +276,8 @@ const AdminProjectMessagingPage: React.FC = () => {
                   <div className="mt-2 pt-2 border-t border-slate-200">
                     <p className="text-xs text-amber-600 italic">This message requires your approval.</p>
                     <div className="flex space-x-2 mt-1">
-                      <Button size="xs" variant="success" onClick={() => handleApproveMessage(msg.id, currentThreadId)} leftIcon={<HandThumbUpIcon />}>Approve</Button>
-                      <Button size="xs" variant="danger" onClick={() => handleRejectMessage(msg.id, currentThreadId)} leftIcon={<HandThumbDownIcon />}>Reject</Button>
+                      <Button size="sm" variant="primary" onClick={() => handleApproveMessage(msg.id, currentThreadId)} leftIcon={<CheckCircleIcon />}>Approve</Button>
+                      <Button size="sm" variant="danger" onClick={() => handleRejectMessage(msg.id, currentThreadId)} leftIcon={<TrashIcon />}>Reject</Button>
                     </div>
                   </div>
                 )}
@@ -309,16 +308,6 @@ const AdminProjectMessagingPage: React.FC = () => {
         </div>
       </div>
     );
-  };
-
-  // Helper to get an icon for each thread type
-  const getThreadIcon = (type: LocalMessageThread['type']) => {
-    switch(type) {
-        case 'project_client_admin_freelancer': return <UserGroupIcon className="w-5 h-5 mr-2 text-slate-500" />;
-        case 'project_admin_client': return <BuildingStorefrontIcon className="w-5 h-5 mr-2 text-slate-500" />;
-        case 'project_admin_freelancer': return <UsersIcon className="w-5 h-5 mr-2 text-slate-500" />;
-        default: return <ChatBubbleLeftRightIcon className="w-5 h-5 mr-2 text-slate-500" />;
-    }
   };
 
   return (
@@ -355,10 +344,10 @@ const AdminProjectMessagingPage: React.FC = () => {
           ) : (
             <>
               <div className="bg-white p-1 rounded-lg shadow">
-                {renderChatInterface(adminFreelancerThread, "Admin-Freelancer")}
+                {renderChatInterface(adminFreelancerThread, "Admin-Freelancer", 'project_admin_freelancer')}
               </div>
               <div className="bg-white p-1 rounded-lg shadow">
-                {renderChatInterface(adminClientThread, "Admin-Client")}
+                {renderChatInterface(adminClientThread, "Admin-Client", 'project_admin_client')}
               </div>
               {/* Placeholder for Freelancer-Client pending approval messages view */}
               <div className="bg-white p-4 rounded-lg shadow">
@@ -367,19 +356,6 @@ const AdminProjectMessagingPage: React.FC = () => {
                   {/* TODO: List messages from 'project_freelancer_client' threads that have requires_approval=true and approval_status='pending' */}
                   Feature to view and moderate these messages will be here.
                 </p>
-              </div>
-            <>
-              <div className="bg-white p-1 rounded-lg shadow">
-                <h4 className="text-md font-medium text-slate-600 p-3 flex items-center"><UserGroupIcon className="w-5 h-5 mr-2 text-slate-500" /> Client / Admin / Freelancer Chat</h4>
-                {renderChatInterface(clientAdminFreelancerThread, "Client/Admin/Freelancer", 'project_client_admin_freelancer')}
-              </div>
-              <div className="bg-white p-1 rounded-lg shadow">
-                 <h4 className="text-md font-medium text-slate-600 p-3 flex items-center"><BuildingStorefrontIcon className="w-5 h-5 mr-2 text-slate-500" /> Admin / Client Only Chat</h4>
-                {renderChatInterface(adminClientThread, "Admin-Client", 'project_admin_client')}
-              </div>
-              <div className="bg-white p-1 rounded-lg shadow">
-                <h4 className="text-md font-medium text-slate-600 p-3 flex items-center"><UsersIcon className="w-5 h-5 mr-2 text-slate-500" /> Admin / Freelancer Only Chat</h4>
-                {renderChatInterface(adminFreelancerThread, "Admin-Freelancer", 'project_admin_freelancer')}
               </div>
             </>
           )}

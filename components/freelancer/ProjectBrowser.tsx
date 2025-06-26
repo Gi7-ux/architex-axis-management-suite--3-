@@ -13,7 +13,7 @@ import ProjectCard from '../shared/ProjectCard';
 import Modal from '../shared/Modal';
 import Button from '../shared/Button';
 import LoadingSpinner from '../shared/LoadingSpinner';
-import { useAuth } from '../AuthContext';
+import { useAuth } from '../../contexts/AuthContext';
 
 const ProjectBrowser: React.FC = () => {
   const { user } = useAuth();
@@ -56,15 +56,20 @@ useEffect(() => {
           clientId: String(rawProject.client_id), // ProjectPHPResponse has client_id as number
           assignedFreelancerId: rawProject.freelancer_id ? String(rawProject.freelancer_id) : undefined, // ProjectPHPResponse has freelancer_id as number | null
           status: rawProject.status as ProjectStatus, // ProjectPHPResponse has status as string
-          createdAt: rawProject.createdAt, // Corrected to camelCase
-          deadline: rawProject.deadline, // ProjectPHPResponse should have this from Project base
+          createdAt: rawProject.created_at, // Use snake_case from PHP response
+          updatedAt: rawProject.updated_at, // Use snake_case from PHP response
+          deadline: rawProject.deadline || '', // ProjectPHPResponse should have this from Project base
           clientName: rawProject.client_username || `Client ${rawProject.client_id}`, // Use client_username if available
-          budget: rawProject.budget, // ProjectPHPResponse should have this from Project base
+          budget: rawProject.budget || 0, // ProjectPHPResponse should have this from Project base
+          currency: rawProject.currency || 'ZAR', // Default currency
           skillsRequired: rawProject.skills_required ? rawProject.skills_required.map(s => s.name) : [], // Map skills if present
           jobCards: [], // Placeholder, or fetch separately
           adminCreatorId: rawProject.adminCreatorId, // If ProjectPHPResponse includes it
           isArchived: rawProject.isArchived || false, // If ProjectPHPResponse includes it
           assignedFreelancerName: rawProject.freelancer_username || (rawProject.freelancer_id ? `Freelancer ${rawProject.freelancer_id}` : undefined), // Use freelancer_username
+          paymentType: rawProject.paymentType || 'fixed', // Default payment type
+          experienceLevel: rawProject.experienceLevel || 'beginner', // Default experience level
+          duration: rawProject.duration || 'short', // Default duration
         }));
         setProjects(mappedProjects);
       } catch (projError: any) {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import '@testing-library/jest-dom';
-import { UserRole, AuthUser, Project, TimeLog, ProjectStatus } from '../../types';
+import { UserRole, AuthUser, User, Project, TimeLog, ProjectStatus } from '../../types';
 import ClientProjectTimeLogPage from './ClientProjectTimeLogPage';
 import { AuthContext } from '../../contexts/AuthContext';
 import * as apiService from '../../apiService';
@@ -18,9 +18,9 @@ const mockClientProjects: Project[] = [
   { id: 'proj2', title: 'Project Beta', clientId: 'client1', description: '', budget: 0, currency: 'ZAR', deadline: '', skillsRequired: [], status: ProjectStatus.OPEN, clientName: 'Client Alpha', assignedFreelancerName: null, jobCards: [], createdAt: '', updatedAt: '', paymentType: 'fixed', experienceLevel: 'beginner', duration: 'short' },
 ];
 
-const mockFreelancerUsers: AuthUser[] = [
-  { id: 1, username: 'freelancer1', email: 'freelancer1@example.com', name: 'John Doe', role: UserRole.FREELANCER },
-  { id: 2, username: 'freelancer2', email: 'freelancer2@example.com', name: 'Jane Smith', role: UserRole.FREELANCER },
+const mockFreelancerUsers: User[] = [
+  { id: 'freelancer1', email: 'freelancer1@example.com', name: 'John Doe', role: UserRole.FREELANCER },
+  { id: 'freelancer2', email: 'freelancer2@example.com', name: 'Jane Smith', role: UserRole.FREELANCER },
 ];
 
 const mockTimeLogsForProj1: TimeLog[] = [

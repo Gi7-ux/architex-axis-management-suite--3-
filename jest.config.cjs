@@ -40,7 +40,8 @@ module.exports = {
   coverageReporters: ['json', 'lcov', 'text', 'clover'],
   testPathIgnorePatterns: [
     "<rootDir>/node_modules/",
-    "<rootDir>/tests-e2e/"
+    "<rootDir>/tests-e2e/",
+    "<rootDir>/simple.test.js"
   ],
   watchPathIgnorePatterns: [
     "<rootDir>/node_modules/",

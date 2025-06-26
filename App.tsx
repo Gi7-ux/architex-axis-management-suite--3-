@@ -5,7 +5,7 @@ import LoginPage from './components/LoginPage';
 import AdminLoginPage from './components/admin/AdminLoginPage'; // Import AdminLoginPage
 import Dashboard from './components/Dashboard';
 import ProtectedView from './components/shared/ProtectedView';
-import { useAuth } from './components/AuthContext';
+import { useAuth } from './contexts/AuthContext'; // Corrected path
 // HomePage is no longer used directly
 import ProjectBrowser from './components/freelancer/ProjectBrowser'; // For public browsing
 import ProjectDetailsPage from './components/ProjectDetailsPage';
