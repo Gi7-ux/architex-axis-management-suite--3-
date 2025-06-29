@@ -23,6 +23,16 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * Performs an HTTP request to the backend API with automatic JSON handling and authorization.
+ *
+ * Adds the stored authentication token to the request if present, sets appropriate headers, and parses the JSON response. On HTTP errors, attempts to parse error details, removes the auth token from storage on 401/403 responses, and throws an `ApiError`.
+ *
+ * @param endpoint - The API endpoint path (relative to the base URL)
+ * @param options - Optional fetch configuration
+ * @returns The parsed JSON response, or `null` for 204 No Content responses
+ * @throws ApiError if the response status is not OK
+ */
 async function apiFetch<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const { headers, ...restOptions } = options;
   const token = localStorage.getItem('authToken'); // Token used for the request
